@@ -27,6 +27,7 @@ from collections.abc import Awaitable
 
 from core.config import PROJECT_ROOT, Settings, load_settings
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
+from core.facts import FactsStore
 from core.memory import NoteStore, ReminderStore
 from core.metrics import LatencyLog, TurnTimings
 from core.router import Router
@@ -38,12 +39,27 @@ from remote.server import RemoteServer
 from skills.apps import AppsSkill
 from skills.base import SkillRegistry
 from skills.datetime_skill import DateTimeSkill
+from skills.desktop import (
+    BrightnessSkill,
+    ClipboardSkill,
+    PressKeysSkill,
+    TypeTextSkill,
+    WindowActionSkill,
+)
 from skills.files import FilesSkill
 from skills.media import MediaSkill
+from skills.memory_skill import ForgetFactSkill, RecallFactsSkill, RememberFactSkill
 from skills.news import NewsSkill
 from skills.notes import NotesSkill
-from skills.system import PowerSkill, ScreenshotSkill, SystemInfoSkill, VolumeSkill
+from skills.system import (
+    PointerControlSkill,
+    PowerSkill,
+    ScreenshotSkill,
+    SystemInfoSkill,
+    VolumeSkill,
+)
 from skills.timers import TimerSkill
+from skills.vision_skill import SeeCameraSkill, SeeScreenSkill
 from skills.weather import WeatherSkill
 from skills.websearch import WebSearchSkill
 
@@ -101,17 +117,32 @@ def build_registry(
     apps_table = settings.skills.get("apps", {})
     whitelist = PathWhitelist(settings.safety.whitelist_dirs)
     notes = NoteStore(settings.memory.db_path)
+    facts = FactsStore(settings.memory.db_path)
     shots = PROJECT_ROOT / "screenshots"
 
     registry.register(DateTimeSkill())
     registry.register(TimerSkill(announcer, reminder_store))
     registry.register(NotesSkill(notes))
+    # Long-term facts. Recall/forget register before remember so "what do you
+    # remember" is answered, never stored.
+    registry.register(RecallFactsSkill(facts, settings.memory.max_facts))
+    registry.register(ForgetFactSkill(facts))
+    registry.register(RememberFactSkill(facts))
+    # Window actions before apps: "close the window" is not "close <app>".
+    registry.register(WindowActionSkill())
     registry.register(AppsSkill(apps_table))
+    registry.register(SeeCameraSkill(settings))
+    registry.register(SeeScreenSkill(settings))
     registry.register(FilesSkill(whitelist))
     registry.register(VolumeSkill())
     registry.register(MediaSkill())
+    registry.register(TypeTextSkill())
+    registry.register(PressKeysSkill())
+    registry.register(ClipboardSkill())
+    registry.register(BrightnessSkill())
     registry.register(SystemInfoSkill())
     registry.register(ScreenshotSkill(shots))
+    registry.register(PointerControlSkill(settings.vision.stream_port))
     registry.register(PowerSkill())
     # Web skills (network; degrade gracefully offline).
     registry.register(WeatherSkill(settings.weather))

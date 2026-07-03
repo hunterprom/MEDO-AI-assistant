@@ -18,6 +18,7 @@ piper-tts>=1.2       # local neural TTS; pulls onnxruntime
 # --- M2: PC skills ---
 psutil>=5.9          # battery / CPU / RAM
 pyautogui>=0.9       # screenshots + volume keys on Windows/Linux
+pyperclip>=1.8       # clipboard skills + Cyrillic-safe typing (paste path)
 pycaw>=20230407; sys_platform == "win32"   # precise Windows volume (get/set/mute); media-key fallback if absent
 comtypes>=1.2; sys_platform == "win32"     # COM backend pycaw talks to Core Audio through
 

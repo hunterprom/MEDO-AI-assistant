@@ -391,3 +391,72 @@ class PowerSkill(Skill):
                 },
             },
         }
+
+
+# --------------------------------------------------------------------------- #
+# Pointer mode (gesture mouse control) — toggles the vision sidecar
+# --------------------------------------------------------------------------- #
+class PointerControlSkill(Skill):
+    name = "pointer_control"
+    description = "Turn gesture mouse control (pointer mode) on or off."
+
+    patterns = [
+        re.compile(
+            r"\b(?:pointer|mouse|cursor)(?:\s+(?:control|mode))?\s+(?P<state>on|off)\b",
+            re.IGNORECASE,
+        ),
+        re.compile(r"\b(?:control|take)\s+(?:the\s+|my\s+)?(?:mouse|cursor)\b", re.IGNORECASE),
+        re.compile(r"\bstop\s+controlling\s+(?:the\s+|my\s+)?(?:mouse|cursor)\b", re.IGNORECASE),
+    ]
+
+    def __init__(self, stream_port: int) -> None:
+        self._port = stream_port
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        text = request.text.lower()
+        state = request.args.get("state")
+        if state is None and request.match:
+            state = request.match.groupdict().get("state")
+        if state is None:
+            state = "off" if "stop" in text else "on"
+        want = str(state).lower() != "off"
+
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                resp = await client.post(
+                    f"http://127.0.0.1:{self._port}/pointer", json={"on": want}
+                )
+                data = resp.json()
+        except Exception:
+            return SkillResult(
+                "The vision sidecar isn't running, so I can't control the mouse.",
+                success=False,
+            )
+        if want and not data.get("on"):
+            return SkillResult(
+                data.get("error") or "Pointer mode is unavailable.", success=False
+            )
+        if want:
+            return SkillResult(
+                "Pointer mode on — point with your index finger; pinch to click, "
+                "three fingers for right-click, make a fist to stop."
+            )
+        return SkillResult("Pointer mode off.")
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "state": {"type": "string", "enum": ["on", "off"]}
+                    },
+                    "required": ["state"],
+                },
+            },
+        }
