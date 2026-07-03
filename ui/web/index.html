@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>M.E.D.O.</title>
+<style>
+  :root {
+    --accent: #3fd0ff;
+    --accent-dim: rgba(63, 208, 255, .28);
+    --accent-faint: rgba(63, 208, 255, .10);
+    --accent-glow: rgba(63, 208, 255, .15);
+    --amber: #ffb020; --green: #35e08a; --red: #ff5f56;
+    --bg: #04070d; --panel: rgba(10, 26, 40, 0.55); --text: #bfe6ff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: radial-gradient(circle at 50% 45%, #0a1826 0%, var(--bg) 70%); color: var(--text); font-family: "SF Mono", "Consolas", ui-monospace, monospace; overflow: hidden; }
+
+  /* ---- ambient FX: animated grid + static scanlines (transform-only, cheap) ---- */
+  #fx { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  #fx .gridlayer {
+    position: absolute; inset: -60px;
+    background-image:
+      linear-gradient(var(--accent-faint) 1px, transparent 1px),
+      linear-gradient(90deg, var(--accent-faint) 1px, transparent 1px);
+    background-size: 60px 60px;
+    animation: griddrift 24s linear infinite;
+    opacity: .5;
+  }
+  @keyframes griddrift { from { transform: translate(0, 0); } to { transform: translate(60px, 60px); } }
+  #fx .scanlines {
+    position: absolute; inset: 0;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.16) 0 1px, transparent 1px 3px);
+    opacity: .5;
+  }
+  #fx .vignette { position: absolute; inset: 0; background: radial-gradient(circle at 50% 50%, transparent 55%, rgba(0,0,0,.5) 100%); }
+
+  #grid { position: relative; z-index: 1; display: grid; grid-template-columns: 260px 1fr 320px; grid-template-rows: 56px 1fr 150px; height: 100vh; gap: 14px; padding: 14px; }
+  .bar { grid-column: 1 / 4; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--accent-dim); letter-spacing: 6px; }
+  .bar h1 { font-size: 20px; margin: 0; color: var(--accent); text-shadow: 0 0 12px var(--accent); font-weight: 600; transition: color .5s, text-shadow .5s; }
+  .bar .bar-right { display: flex; align-items: center; gap: 16px; }
+  .bar .status { letter-spacing: 3px; font-size: 12px; opacity: .8; }
+  #gear { background: none; border: 1px solid var(--accent-dim); border-radius: 6px; color: var(--accent); width: 34px; height: 34px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: box-shadow .2s, transform .4s ease, color .5s; }
+  #gear:hover { box-shadow: 0 0 12px var(--accent-glow), inset 0 0 8px var(--accent-glow); transform: rotate(60deg); }
+  #gear svg { display: block; }
+
+  .panel { background: var(--panel); border: 1px solid var(--accent-dim); border-radius: 10px; padding: 14px; backdrop-filter: blur(2px); box-shadow: inset 0 0 24px var(--accent-glow), 0 0 18px rgba(0,0,0,.35); overflow: hidden; transition: border-color .5s, box-shadow .5s; }
+  .panel h2 { margin: 0 0 10px; font-size: 11px; letter-spacing: 3px; color: var(--accent); opacity: .75; text-transform: uppercase; transition: color .5s; }
+  #reactor-wrap { grid-row: 2 / 3; display: flex; align-items: center; justify-content: center; }
+  canvas { max-width: 100%; max-height: 100%; }
+  #left { grid-column: 1; grid-row: 2 / 4; }
+  #right { grid-column: 3; grid-row: 2 / 4; display: flex; flex-direction: column; }
+  #cam { grid-column: 2; grid-row: 3; display: flex; align-items: center; justify-content: center; }
+  #cam img { height: 100%; border-radius: 8px; border: 1px solid var(--accent-dim); box-shadow: 0 0 18px var(--accent-glow); }
+  #cam .off { opacity: .4; font-size: 12px; letter-spacing: 2px; }
+  .state-name { font-size: 26px; letter-spacing: 4px; color: var(--accent); text-shadow: 0 0 14px var(--accent); margin: 4px 0 18px; text-transform: uppercase; transition: color .5s, text-shadow .5s; }
+  .gesture-list div { display: flex; justify-content: space-between; font-size: 12px; padding: 5px 0; border-bottom: 1px dashed var(--accent-faint); }
+  .gesture-list .g { color: var(--amber); }
+  #transcript { font-size: 15px; min-height: 40px; color: #eaf6ff; }
+  #reply { font-size: 15px; margin-top: 6px; line-height: 1.4; color: var(--text); flex: 1; overflow-y: auto; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 11px; letter-spacing: 2px; font-weight: 700; }
+  .badge.FAST { background: var(--accent-faint); color: var(--accent); border: 1px solid var(--accent); }
+  .badge.LLM { background: rgba(255,176,32,.15); color: var(--amber); border: 1px solid var(--amber); }
+  .meta { font-size: 11px; opacity: .6; margin-top: 8px; letter-spacing: 1px; }
+  .link-dim { opacity: .5; font-size: 11px; }
+
+  /* ---- typed command box ---- */
+  #cmdwrap { margin-top: 10px; }
+  #cmd { width: 100%; background: rgba(0,0,0,.35); border: 1px solid var(--accent-dim); border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; padding: 9px 11px; outline: none; transition: border-color .2s, box-shadow .2s; }
+  #cmd:focus { border-color: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+  #cmd::placeholder { color: var(--text); opacity: .35; }
+  #cmd:disabled { opacity: .5; }
+
+  /* ---- settings drawer ---- */
+  #shade { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .3s; }
+  #shade.open { opacity: 1; pointer-events: auto; }
+  #drawer { position: fixed; top: 0; right: 0; z-index: 50; height: 100vh; width: 350px; max-width: 92vw; padding: 18px 18px 30px; overflow-y: auto; background: rgba(6, 15, 24, .94); border-left: 1px solid var(--accent-dim); box-shadow: -12px 0 32px rgba(0,0,0,.55); backdrop-filter: blur(6px); transform: translateX(105%); transition: transform .35s cubic-bezier(.2, .9, .25, 1); }
+  #drawer.open { transform: translateX(0); }
+  #drawer h2 { margin: 0; font-size: 13px; letter-spacing: 4px; color: var(--accent); text-transform: uppercase; }
+  #drawer .drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  #drawer-close { background: none; border: none; color: var(--text); font-size: 18px; cursor: pointer; opacity: .6; padding: 4px 8px; }
+  #drawer-close:hover { opacity: 1; }
+  #drawer section { border-top: 1px solid var(--accent-faint); padding: 14px 0; }
+  #drawer h3 { margin: 0 0 10px; font-size: 10px; letter-spacing: 3px; color: var(--accent); opacity: .7; text-transform: uppercase; }
+  #drawer label { display: block; font-size: 10px; letter-spacing: 2px; opacity: .65; margin: 10px 0 4px; text-transform: uppercase; }
+  #drawer input[type="text"], #drawer input[type="password"], #drawer select {
+    width: 100%; background: rgba(0,0,0,.35); border: 1px solid var(--accent-dim); border-radius: 6px;
+    color: var(--text); font-family: inherit; font-size: 12px; padding: 8px 10px; outline: none;
+  }
+  #drawer input:focus, #drawer select:focus { border-color: var(--accent); }
+  #drawer select option { background: #071019; }
+  .swatches { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .swatch { width: 30px; height: 30px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; transition: transform .15s, border-color .15s, box-shadow .15s; }
+  .swatch:hover { transform: scale(1.15); }
+  .swatch.active { border-color: #fff; box-shadow: 0 0 10px var(--accent-glow); }
+  #theme-custom { width: 30px; height: 30px; padding: 0; border: 2px dashed var(--accent-dim); border-radius: 50%; background: none; cursor: pointer; }
+  #theme-custom::-webkit-color-swatch-wrapper { padding: 2px; }
+  #theme-custom::-webkit-color-swatch { border: none; border-radius: 50%; }
+  .kv { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
+  .kv .k { opacity: .55; letter-spacing: 1px; }
+  .kv .v { color: var(--accent); }
+  .msg { font-size: 11px; letter-spacing: 1px; margin-top: 8px; min-height: 14px; }
+  .msg.ok { color: var(--green); }
+  .msg.err { color: var(--red); }
+  .btn { margin-top: 12px; width: 100%; background: var(--accent-faint); border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); font-family: inherit; font-size: 11px; letter-spacing: 3px; text-transform: uppercase; padding: 9px 0; cursor: pointer; transition: box-shadow .2s; }
+  .btn:hover { box-shadow: 0 0 12px var(--accent-glow); }
+  .btn:disabled { opacity: .4; cursor: default; box-shadow: none; }
+  #prov-models { font-size: 11px; margin-top: 8px; max-height: 110px; overflow-y: auto; }
+  #prov-models div { padding: 2px 0; border-bottom: 1px dashed var(--accent-faint); opacity: .8; }
+</style>
+</head>
+<body>
+<div id="fx"><div class="gridlayer"></div><div class="scanlines"></div><div class="vignette"></div></div>
+
+<div id="grid">
+  <div class="bar">
+    <h1 id="title">M.E.D.O.</h1>
+    <div class="bar-right">
+      <div class="status">LOCAL · OFFLINE-CAPABLE · <span id="conn">CONNECTING…</span></div>
+      <button id="gear" title="Settings" aria-label="Open settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.08A1.7 1.7 0 0 0 10.1 3.1V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56h.08a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03z"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="panel" id="left">
+    <h2>System State</h2>
+    <div class="state-name" id="state">idle</div>
+    <h2>Gesture Control</h2>
+    <div class="gesture-list">
+      <div><span>👍 thumbs up</span><span class="g">yes / confirm</span></div>
+      <div><span>✋ open palm</span><span class="g">no / cancel</span></div>
+      <div><span>✌ victory</span><span class="g">screenshot</span></div>
+      <div><span>☝ point up</span><span class="g">volume up</span></div>
+      <div><span>✊ fist</span><span class="g">mute</span></div>
+    </div>
+    <div class="meta">Gestures route through the same Intent Router as voice.</div>
+  </div>
+
+  <div id="reactor-wrap"><canvas id="reactor" width="520" height="520"></canvas></div>
+
+  <div class="panel" id="right">
+    <h2>Last Interaction</h2>
+    <div id="transcript" class="link-dim">…awaiting input</div>
+    <div style="margin:10px 0"><span id="path" class="badge FAST" style="display:none"></span>
+      <span id="skill" class="link-dim"></span></div>
+    <div id="reply"></div>
+    <div class="meta" id="latency"></div>
+    <div id="cmdwrap">
+      <input id="cmd" type="text" placeholder="⌨ type a command — Enter to send" autocomplete="off" spellcheck="false" />
+    </div>
+  </div>
+
+  <div id="cam"><span class="off" id="cam-off">CAMERA OFFLINE — start the vision sidecar</span></div>
+</div>
+
+<!-- ---- settings drawer ---- -->
+<div id="shade"></div>
+<div id="drawer" role="dialog" aria-label="Settings">
+  <div class="drawer-head">
+    <h2>Settings</h2>
+    <button id="drawer-close" aria-label="Close settings">✕</button>
+  </div>
+
+  <section id="sec-theme">
+    <h3>Theme</h3>
+    <div class="swatches" id="swatches">
+      <button class="swatch" data-name="cyan"   data-color="#3fd0ff" style="background:#3fd0ff" title="Arc Cyan"></button>
+      <button class="swatch" data-name="red"    data-color="#ff4b4b" style="background:#ff4b4b" title="Mark III Red"></button>
+      <button class="swatch" data-name="emerald" data-color="#35e08a" style="background:#35e08a" title="Emerald"></button>
+      <button class="swatch" data-name="purple" data-color="#a06bff" style="background:#a06bff" title="Royal Purple"></button>
+      <button class="swatch" data-name="amber"  data-color="#ffb020" style="background:#ffb020" title="Amber"></button>
+      <input type="color" id="theme-custom" value="#3fd0ff" title="Custom color" />
+    </div>
+    <div class="msg" id="theme-msg"></div>
+  </section>
+
+  <section id="sec-model">
+    <h3>Model</h3>
+    <div class="kv"><span class="k">API</span><span class="v" id="api-state">…</span></div>
+    <div class="kv"><span class="k">PROVIDER</span><span class="v" id="cur-provider">—</span></div>
+    <div class="kv"><span class="k">MODEL</span><span class="v" id="cur-model">—</span></div>
+    <label for="model-select">Switch model</label>
+    <select id="model-select" disabled><option>— API offline —</option></select>
+    <div class="msg" id="model-msg"></div>
+  </section>
+
+  <section id="sec-provider">
+    <h3>Provider / API Key</h3>
+    <label for="prov-select">Provider</label>
+    <select id="prov-select">
+      <option value="ollama">Local Ollama</option>
+      <option value="openai">OpenAI-compatible cloud</option>
+    </select>
+    <label for="prov-url">Base URL</label>
+    <input type="text" id="prov-url" value="https://api.openai.com/v1" spellcheck="false" />
+    <label for="prov-key">API key</label>
+    <input type="password" id="prov-key" placeholder="never stored in this page" autocomplete="off" />
+    <label for="prov-model">Model (optional)</label>
+    <input type="text" id="prov-model" placeholder="e.g. gpt-4o-mini" spellcheck="false" />
+    <button class="btn" id="prov-submit">Apply provider</button>
+    <div class="msg" id="prov-msg"></div>
+    <div id="prov-models"></div>
+  </section>
+</div>
+
+<script>
+"use strict";
+const CFG = __MEDO_CONFIG__;
+document.getElementById("title").textContent =
+  (CFG.name || "MEDO").toUpperCase().split("").join(".") + ".";
+
+const API = `http://${location.hostname}:${CFG.apiPort || 8710}`;
+const $ = (id) => document.getElementById(id);
+
+/* ---- tiny fetch helper against the companion API (degrades to a throw) ---- */
+async function api(path, body) {
+  const opts = body === undefined
+    ? {}
+    : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(API + path, opts);
+  let data = {};
+  try { data = await r.json(); } catch (_) { /* non-JSON error body */ }
+  if (!r.ok || data.ok === false) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+/* ================================ THEME ================================ */
+const THEME_KEY = "medo-theme";
+const hexToRgb = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+};
+const lighten = (c, f) => Math.round(c + (255 - c) * f);
+let themeAccent = hexToRgb("#3fd0ff");   // consumed by the reactor palette
+
+function applyTheme(hex, name, persist = true) {
+  const { r, g, b } = hexToRgb(hex);
+  themeAccent = { r, g, b };
+  const rs = document.documentElement.style;
+  rs.setProperty("--accent", hex);
+  rs.setProperty("--accent-dim", `rgba(${r},${g},${b},.28)`);
+  rs.setProperty("--accent-faint", `rgba(${r},${g},${b},.10)`);
+  rs.setProperty("--accent-glow", `rgba(${r},${g},${b},.15)`);
+  rs.setProperty("--text", `rgb(${lighten(r, .72)},${lighten(g, .72)},${lighten(b, .72)})`);
+  document.querySelectorAll(".swatch").forEach((s) =>
+    s.classList.toggle("active", s.dataset.name === name));
+  if (persist) localStorage.setItem(THEME_KEY, JSON.stringify({ name, color: hex }));
+}
+
+document.querySelectorAll(".swatch").forEach((s) =>
+  s.addEventListener("click", () => applyTheme(s.dataset.color, s.dataset.name)));
+$("theme-custom").addEventListener("input", (e) => applyTheme(e.target.value, "custom"));
+
+(function restoreTheme() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(THEME_KEY) || "null");
+    if (saved && /^#[0-9a-fA-F]{6}$/.test(saved.color)) {
+      applyTheme(saved.color, saved.name, false);
+      if (saved.name === "custom") $("theme-custom").value = saved.color;
+      return;
+    }
+  } catch (_) { /* corrupt storage — fall through */ }
+  applyTheme("#3fd0ff", "cyan", false);
+})();
+
+/* ---- camera stream (from the vision sidecar) ----
+   Always attempt to connect; if the sidecar isn't running the image errors and
+   we keep the "camera offline" note, retrying every few seconds so the feed
+   appears automatically once the sidecar comes up. */
+(function connectCamera() {
+  const cam = $("cam");
+  const url = `http://${location.hostname}:${CFG.streamPort}/video`;
+  function attempt() {
+    const img = new Image();
+    img.onload = () => { cam.innerHTML = ""; img.style.height = "100%"; cam.appendChild(img); };
+    img.onerror = () => { setTimeout(attempt, 4000); };  // sidecar not up yet — retry
+    img.src = url + "?t=" + Date.now();
+  }
+  attempt();
+})();
+
+/* ---- arc-reactor canvas ----
+   Per-state spin/pulse; the idle/listening color follows the active theme and
+   every color change eases in over a few frames (simple RGB lerp — no filters). */
+const cvs = $("reactor"), ctx = cvs.getContext("2d");
+const CX = cvs.width / 2, CY = cvs.height / 2;
+const STATE_FX = {
+  idle:      { rgb: null,                        spin: 0.15, pulse: 0.6 },  // null → theme accent
+  listening: { rgb: null,                        spin: 0.5,  pulse: 1.6 },
+  thinking:  { rgb: { r: 255, g: 176, b: 32 },   spin: 1.4,  pulse: 1.0 },
+  speaking:  { rgb: { r: 53,  g: 224, b: 138 },  spin: 0.8,  pulse: 2.2 },
+};
+let state = "idle", angle = 0, t = 0;
+const cur = { ...themeAccent };  // currently-drawn color, eased toward the target
+
+function ring(r, w, color, alpha) {
+  ctx.beginPath(); ctx.arc(CX, CY, r, 0, Math.PI * 2);
+  ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = w;
+  ctx.shadowColor = color; ctx.shadowBlur = 18; ctx.stroke(); ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+}
+function dashedRing(r, color, a0, count, len) {
+  ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.shadowColor = color; ctx.shadowBlur = 10;
+  for (let i = 0; i < count; i++) {
+    const a = a0 + (i / count) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.arc(CX, CY, r, a, a + len); ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+}
+function ticks(r, color, count) {
+  ctx.strokeStyle = color; ctx.globalAlpha = 0.5; ctx.lineWidth = 2;
+  for (let i = 0; i < count; i++) {
+    const a = (i / count) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(CX + Math.cos(a) * r, CY + Math.sin(a) * r);
+    ctx.moveTo(CX + Math.cos(a) * (r - 8), CY + Math.sin(a) * (r - 8));
+    ctx.lineTo(CX + Math.cos(a) * r, CY + Math.sin(a) * r);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+function draw() {
+  const fx = STATE_FX[state] || STATE_FX.idle;
+  const target = fx.rgb || themeAccent;
+  cur.r += (target.r - cur.r) * 0.08;
+  cur.g += (target.g - cur.g) * 0.08;
+  cur.b += (target.b - cur.b) * 0.08;
+  const c = `rgb(${cur.r | 0},${cur.g | 0},${cur.b | 0})`;
+
+  angle += fx.spin * 0.02; t += 0.03;
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  ring(230, 1.5, c, 0.25);
+  ticks(215, c, 60);
+  dashedRing(190, c, angle, 3, 1.4);
+  dashedRing(165, c, -angle * 1.5, 24, 0.12);
+  ring(135, 2, c, 0.5);
+  dashedRing(120, c, angle * 0.7, 6, 0.5);
+
+  // pulsing core
+  const pulse = 0.5 + 0.5 * Math.sin(t * fx.pulse);
+  const coreR = 70 + pulse * 10;
+  const grad = ctx.createRadialGradient(CX, CY, 4, CX, CY, coreR);
+  grad.addColorStop(0, "#ffffff");
+  grad.addColorStop(0.3, c);
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = grad; ctx.globalAlpha = 0.35 + 0.4 * pulse;
+  ctx.beginPath(); ctx.arc(CX, CY, coreR, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+  ring(58, 3, c, 0.9);
+
+  requestAnimationFrame(draw);
+}
+draw();
+
+/* ---- live events over SSE ---- */
+function setState(s) {
+  state = s;
+  const el = $("state");
+  el.textContent = s;
+  const fx = STATE_FX[s] || STATE_FX.idle;
+  const rgb = fx.rgb || themeAccent;
+  const col = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+  el.style.color = col;
+  el.style.textShadow = `0 0 14px ${col}`;
+}
+function renderRouted(d) {
+  const badge = $("path");
+  badge.style.display = "inline-block";
+  badge.className = "badge " + d.path; badge.textContent = d.path;
+  $("skill").textContent = d.skill ? " · " + d.skill : " · conversation";
+  $("reply").textContent = d.speech;
+  $("latency").textContent = "route " + Math.round(d.latency_ms) + " ms";
+}
+const es = new EventSource("/events");
+es.onopen = () => $("conn").textContent = "ONLINE";
+es.onerror = () => $("conn").textContent = "RECONNECTING…";
+es.onmessage = (e) => {
+  const d = JSON.parse(e.data);
+  if (d.type === "state") setState(d.state.toLowerCase());
+  else if (d.type === "transcript") {
+    const el = $("transcript");
+    el.textContent = "“" + d.text + "”"; el.classList.remove("link-dim");
+  } else if (d.type === "routed") renderRouted(d);
+};
+
+/* ============================ COMMAND BOX ============================ */
+/* Enter → POST /ask on the companion API. The routed SSE event renders the
+   reply too; renderRouted is idempotent so the double render is harmless. */
+$("cmd").addEventListener("keydown", async (e) => {
+  if (e.key !== "Enter") return;
+  const input = e.target;
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  input.disabled = true;
+  // optimistic UI: show the utterance + a thinking reactor immediately
+  const tEl = $("transcript");
+  tEl.textContent = "“" + text + "”"; tEl.classList.remove("link-dim");
+  $("reply").textContent = "…";
+  $("latency").textContent = "";
+  setState("thinking");
+  try {
+    const d = await api("/ask", { text });
+    renderRouted(d);
+  } catch (_) {
+    $("reply").textContent = "API offline — the companion API is not reachable on port " + (CFG.apiPort || 8710) + ".";
+    setState("idle");
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+});
+
+/* ========================== SETTINGS DRAWER ========================== */
+const drawer = $("drawer"), shade = $("shade");
+function openDrawer() { drawer.classList.add("open"); shade.classList.add("open"); refreshStatus(); }
+function closeDrawer() { drawer.classList.remove("open"); shade.classList.remove("open"); }
+$("gear").addEventListener("click", openDrawer);
+$("drawer-close").addEventListener("click", closeDrawer);
+shade.addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+function flash(id, text, ok) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = "msg " + (ok ? "ok" : "err");
+}
+function fillModelSelect(models, current) {
+  const sel = $("model-select");
+  sel.innerHTML = "";
+  const list = models || [];
+  if (!list.length) {
+    sel.appendChild(new Option("— no models —", ""));
+    sel.disabled = true;
+    return;
+  }
+  list.forEach((m) => sel.appendChild(new Option(m, m)));
+  if (current && list.includes(current)) sel.value = current;
+  sel.disabled = false;
+}
+
+/* MODEL section — status + live switching against the companion API */
+async function refreshStatus() {
+  $("api-state").textContent = "…";
+  try {
+    const d = await api("/status");
+    $("api-state").textContent = "ONLINE";
+    $("cur-provider").textContent = d.provider || "—";
+    $("cur-model").textContent = d.model || "—";
+    fillModelSelect(d.models, d.model);
+    flash("model-msg", "", true);
+  } catch (_) {
+    $("api-state").textContent = "API OFFLINE";
+    $("cur-provider").textContent = "—";
+    $("cur-model").textContent = "—";
+    fillModelSelect([], null);
+    $("model-select").innerHTML = "<option>— API offline —</option>";
+  }
+}
+
+$("model-select").addEventListener("change", async (e) => {
+  const name = e.target.value;
+  if (!name) return;
+  flash("model-msg", "switching…", true);
+  try {
+    const d = await api("/model", { name });
+    const applied = d.model || name;
+    $("cur-model").textContent = applied;
+    flash("model-msg", "model set to " + applied, true);
+  } catch (err) {
+    flash("model-msg", "failed: " + (err.message || "API offline"), false);
+  }
+});
+
+/* PROVIDER section — never renders a stored key; clears the field on submit */
+$("prov-select").addEventListener("change", (e) => {
+  const cloud = e.target.value === "openai";
+  $("prov-url").value = cloud ? "https://api.openai.com/v1" : "http://localhost:11434";
+});
+$("prov-submit").addEventListener("click", async () => {
+  const btn = $("prov-submit");
+  const keyEl = $("prov-key");
+  const body = {
+    provider: $("prov-select").value,
+    api_key: keyEl.value,
+    base_url: $("prov-url").value.trim(),
+    model: $("prov-model").value.trim(),
+  };
+  keyEl.value = "";  // the key never lingers in the DOM
+  btn.disabled = true;
+  flash("prov-msg", "applying…", true);
+  try {
+    const d = await api("/provider", body);
+    flash("prov-msg", "provider updated", true);
+    const box = $("prov-models");
+    box.innerHTML = "";
+    (d.models || []).forEach((m) => {
+      const row = document.createElement("div");
+      row.textContent = m;
+      box.appendChild(row);
+    });
+    await refreshStatus();
+  } catch (err) {
+    flash("prov-msg", "failed: " + (err.message || "API offline"), false);
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

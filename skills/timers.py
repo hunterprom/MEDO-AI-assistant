@@ -1,0 +1,175 @@
+"""Timers, reminders, and alarms.
+
+Timers are scheduled as asyncio tasks on the main loop. When one fires it calls
+the ``announce`` callback the app provides — which prints in text mode and speaks
+in voice mode — so reminders reach you without blocking anything.
+
+    "set a timer for 5 minutes"
+    "remind me in 10 seconds to stretch"
+    "list timers" / "cancel timers"
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from core.memory import ReminderStore
+from skills.base import Skill, SkillRequest, SkillResult
+
+Announce = Callable[[str], Awaitable[None] | None]
+
+_UNIT_SECONDS = {"second": 1, "sec": 1, "minute": 60, "min": 60, "hour": 3600, "hr": 3600}
+_DURATION_RE = re.compile(
+    r"(\d+)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)", re.IGNORECASE
+)
+
+
+def parse_duration(text: str) -> int:
+    """Sum every '<n> <unit>' in ``text`` into total seconds (0 if none)."""
+    total = 0
+    for value, unit in _DURATION_RE.findall(text):
+        base = unit.lower().rstrip("s")
+        base = {"hr": "hour", "hrs": "hour", "min": "minute", "sec": "second"}.get(base, base)
+        total += int(value) * _UNIT_SECONDS.get(base, 0)
+    return total
+
+
+@dataclass
+class _Timer:
+    id: int
+    seconds: int
+    label: str
+    task: asyncio.Task = field(repr=False)
+    reminder_id: int | None = None   # row id when persisted (labelled reminders)
+
+
+class TimerSkill(Skill):
+    name = "timers"
+    description = "Set countdown timers and reminders."
+
+    patterns = [
+        re.compile(r"\bcancel\s+(?:all\s+)?(?:timers?|reminders?|alarms?)\b", re.IGNORECASE),
+        re.compile(r"\b(?:list|show)\s+(?:my\s+)?(?:timers?|reminders?|alarms?)\b", re.IGNORECASE),
+        re.compile(r"\b(?:set|start)\s+(?:a\s+)?(?:timer|alarm)\b.*", re.IGNORECASE),
+        re.compile(r"\bremind\s+me\b.*", re.IGNORECASE),
+        re.compile(r"\btimer\s+for\b.*", re.IGNORECASE),
+    ]
+
+    def __init__(self, announce: Announce, store: ReminderStore | None = None) -> None:
+        self._announce = announce
+        self._store = store
+        self._timers: dict[int, _Timer] = {}
+        self._next_id = 1
+        if store is not None:
+            self._reschedule_persisted()
+
+    def _reschedule_persisted(self) -> None:
+        """Re-arm reminders saved from a previous run (skipped without a loop)."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return  # constructed outside an event loop (e.g. some tests)
+        now = datetime.now(timezone.utc).astimezone()
+        for rem in self._store.all():  # type: ignore[union-attr]
+            try:
+                remaining = max(0, int((datetime.fromisoformat(rem.due_at) - now).total_seconds()))
+            except ValueError:
+                continue
+            self._arm(remaining, rem.label, reminder_id=rem.id)
+
+    def _arm(self, seconds: int, label: str, reminder_id: int | None) -> int:
+        """Schedule one timer/reminder and track it. Returns its local id."""
+        timer_id = self._next_id
+        self._next_id += 1
+        task = asyncio.create_task(self._fire(timer_id, seconds, label, reminder_id))
+        self._timers[timer_id] = _Timer(timer_id, seconds, label, task, reminder_id)
+        return timer_id
+
+    async def _fire(
+        self, timer_id: int, seconds: int, label: str, reminder_id: int | None = None
+    ) -> None:
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            return
+        self._timers.pop(timer_id, None)
+        if reminder_id is not None and self._store is not None:
+            self._store.delete(reminder_id)
+        message = f"Reminder: {label}." if label else "Timer's up."
+        result = self._announce(message)
+        if isinstance(result, Awaitable):
+            await result
+
+    def _extract_label(self, text: str) -> str:
+        m = re.search(r"\bto\s+(.*)", text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip().strip(".!?")
+        return ""
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        text = request.text
+
+        if re.search(r"\bcancel\b", text, re.IGNORECASE):
+            count = len(self._timers)
+            for timer in list(self._timers.values()):
+                timer.task.cancel()
+                if timer.reminder_id is not None and self._store is not None:
+                    self._store.delete(timer.reminder_id)
+            self._timers.clear()
+            return SkillResult(f"Cancelled {count} timer{'s' if count != 1 else ''}.")
+
+        if re.search(r"\b(list|show)\b", text, re.IGNORECASE):
+            if not self._timers:
+                return SkillResult("You have no active timers.")
+            desc = "; ".join(
+                f"{t.id}: {t.label or 'timer'} ({t.seconds}s)" for t in self._timers.values()
+            )
+            return SkillResult(f"{len(self._timers)} active: {desc}.")
+
+        seconds = parse_duration(text)
+        if seconds <= 0:
+            return SkillResult("How long should the timer be?", success=False)
+
+        label = self._extract_label(text)
+        # Labelled reminders persist across restarts; bare timers are ephemeral.
+        reminder_id: int | None = None
+        if label and self._store is not None:
+            due = (datetime.now(timezone.utc).astimezone() + timedelta(seconds=seconds))
+            reminder_id = self._store.add(due.isoformat(timespec="seconds"), label).id
+
+        timer_id = self._arm(seconds, label, reminder_id)
+        pretty = self._pretty(seconds)
+        suffix = f" to {label}" if label else ""
+        return SkillResult(f"Timer set for {pretty}{suffix}.", data={"id": timer_id, "seconds": seconds})
+
+    @staticmethod
+    def _pretty(seconds: int) -> str:
+        parts = []
+        for label, size in (("hour", 3600), ("minute", 60), ("second", 1)):
+            n, seconds = divmod(seconds, size)
+            if n:
+                parts.append(f"{n} {label}{'s' if n != 1 else ''}")
+        return " and ".join(parts) or "0 seconds"
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["set", "list", "cancel"]},
+                        "seconds": {"type": "integer", "description": "duration for set"},
+                        "label": {"type": "string", "description": "what to remind about"},
+                    },
+                    "required": ["action"],
+                },
+            },
+        }

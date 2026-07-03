@@ -1,0 +1,142 @@
+# =============================================================================
+# MEDO v2 — configuration
+# Every subsystem is swappable from here without touching code.
+# Paths starting with ~ are expanded to your home directory.
+# =============================================================================
+
+llm:
+  provider: "ollama"               # "ollama" (local) | "openai" (any OpenAI-compatible API)
+  host: "http://localhost:11434"   # Ollama server
+  # api_key: leave empty for local Ollama; set to use any OpenAI-compatible cloud model
+  api_key: ""
+  openai_base_url: "https://api.openai.com/v1"   # base URL of the OpenAI-compatible API
+  # default_model: leave null to be prompted to pick from installed models at
+  # startup (runtime model selection). Set a name to skip the prompt.
+  default_model: null
+  fallback_model: "llama3.2:3b"
+  temperature: 0.6
+  num_ctx: 4096
+  request_timeout_s: 120
+
+router:
+  fast_path_enabled: true           # deterministic skills before touching the LLM
+
+personality:
+  name: "MEDO"
+  address_user_as: "sir"            # used sparingly by the system prompt (M4)
+
+remote:
+  # Companion API for the watch app (remote/server.py). LAN-only; no auth —
+  # never forward this port beyond your local network.
+  enabled: false                    # true = always serve; --serve flag also works
+  host: "0.0.0.0"                   # bind address (0.0.0.0 = every interface)
+  port: 8710
+
+vision:                             # camera hand-gesture control (sidecar process)
+  enabled: true                     # auto-serve the API so the gesture sidecar connects
+  camera_index: 0
+  stream_port: 8731                 # MJPEG stream the HUD embeds
+  flip: true                        # mirror the selfie view
+  max_fps: 15                       # throttle inference on CPU
+  min_detection_confidence: 0.6
+  min_tracking_confidence: 0.5
+  stability_frames: 6               # consecutive frames to confirm a gesture
+  cooldown_s: 2.0                   # min gap before re-firing a gesture
+  gestures:                         # recognized gesture -> routed utterance
+    thumbs_up: "yes"                # confirm a pending action (safety gate)
+    open_palm: "no"                 # cancel
+    victory:   "take a screenshot"
+    point_up:  "volume up"
+    three:     "volume down"        # index+middle+ring extended
+    fist:      "mute"
+    pinch:     "lock the screen"    # thumb tip touches index tip
+    rock:      "play music"         # index+pinky extended (play/pause)
+
+hud:                                # M.E.D.O. web HUD arc-reactor UI (--hud)
+  enabled: false
+  host: "127.0.0.1"
+  port: 8730
+
+# --- Subsystems below are configured now but wired in later milestones ---
+
+stt:                                # M1
+  engine: "faster-whisper"
+  model: "small"                    # tiny | base | small | medium (accuracy↑, speed↓)
+  device: "auto"                    # auto | cuda | cpu
+  compute_type: "auto"
+  language: "en"
+  beam_size: 5                      # beam search — more accurate than greedy (1)
+  vad_filter: true                  # drop non-speech frames before decoding
+  condition_on_previous_text: false # avoids runaway repeats on short clips
+  filter_hallucinations: true       # drop low-confidence/junk Whisper segments
+  no_speech_threshold: 0.6          # whisper non-speech gate
+  initial_prompt: >-                # bias the decoder toward likely command words
+    Commands for a voice assistant: what time is it, open chrome, volume up,
+    take a note, set a timer, take a screenshot, weather, the news, shut down.
+
+tts:                                # M1
+  engine: "piper"
+  voice_model: "models/piper/en_US-lessac-medium.onnx"   # relative to project root
+  speed: 1.0
+
+wakeword:                           # M1
+  engine: "openwakeword"
+  phrase: "hey_jarvis"              # built-in model name
+  threshold: 0.5
+
+audio:                              # M1
+  input_device: null                # null = system default
+  output_device: null
+  sample_rate: 16000
+  silence_threshold: 0.015          # RMS below this counts as silence
+  silence_duration_s: 1.0           # stop recording after this much silence
+
+safety:                             # M2
+  confirm_destructive: true
+  whitelist_dirs:                   # files.py may only touch these trees
+    - "~/Documents"
+    - "~/Downloads"
+    - "~/Desktop"
+
+skills:
+  # apps.py — logical name -> per-platform launch command.
+  # Cross-platform defaults; edit for your machine.
+  apps:
+    chrome:
+      darwin:  "open -a 'Google Chrome'"
+      windows: "start chrome"
+      linux:   "google-chrome"
+    browser:
+      darwin:  "open -a Safari"
+      windows: "start msedge"
+      linux:   "xdg-open https://"
+    editor:
+      darwin:  "open -a 'Visual Studio Code'"
+      windows: "code"
+      linux:   "code"
+    terminal:
+      darwin:  "open -a Terminal"
+      windows: "start cmd"
+      linux:   "x-terminal-emulator"
+    spotify:
+      darwin:  "open -a Spotify"
+      windows: "start spotify"
+      linux:   "spotify"
+
+weather:                            # M3
+  default_city: "Skopje"
+  latitude: 41.9973
+  longitude: 21.4280
+
+news:                               # M3
+  feeds:
+    - "https://feeds.bbci.co.uk/news/rss.xml"
+    - "https://hnrss.org/frontpage"
+
+memory:                             # M4
+  db_path: "jarvis.db"
+  max_turns: 10                     # rolling conversation window sent to the LLM
+
+logging:
+  level: "INFO"                     # DEBUG for state transitions + routing detail
+  routing_stats: true               # tally fast-path vs LLM-path for the README

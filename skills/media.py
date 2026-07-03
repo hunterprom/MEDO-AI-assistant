@@ -1,0 +1,103 @@
+"""Media playback control: play/pause and track skipping.
+
+macOS drives the running player through AppleScript — Spotify when it's open,
+Apple Music otherwise (both understand ``playpause`` / ``next track`` /
+``previous track``). Windows/Linux fall back to the keyboard media keys via
+pyautogui. Every path degrades to a clear spoken message instead of raising:
+a missing player must never take the router down. No confirmation gate — the
+worst case is a song you didn't ask for.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+from typing import Any
+
+from core.platform import IS_MACOS
+from skills.base import Skill, SkillRequest, SkillResult
+
+# Canonical action -> what each backend runs / presses.
+_MAC_COMMANDS = {"playpause": "playpause", "next": "next track", "previous": "previous track"}
+_MEDIA_KEYS = {"playpause": "playpause", "next": "nexttrack", "previous": "prevtrack"}
+_SPOKEN = {
+    "playpause": "Toggled playback.",
+    "next": "Skipping to the next track.",
+    "previous": "Going back a track.",
+}
+
+
+def _mac_player() -> str:
+    """Prefer Spotify when it's running; otherwise fall back to Apple Music."""
+    try:
+        out = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to (name of processes) contains "Spotify"'],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if out == "true":
+            return "Spotify"
+    except Exception:
+        pass  # System Events unreachable -> Music is the safe default
+    return "Music"
+
+
+class MediaSkill(Skill):
+    name = "media"
+    description = "Control music playback: play, pause, resume, next or previous track."
+
+    patterns = [
+        re.compile(r"\b(?:play|pause|resume|stop)\s+(?:the\s+)?(?:music|song|track|playback)\b",
+                   re.IGNORECASE),
+        re.compile(r"\b(?:next|skip(?:\s+(?:this|the))?)\s+(?:track|song)\b", re.IGNORECASE),
+        re.compile(r"\b(?:previous|last)\s+(?:track|song)\b", re.IGNORECASE),
+    ]
+
+    def _action(self, text: str) -> str:
+        """Map the utterance to a canonical action name."""
+        if re.search(r"\b(?:next|skip)\b", text):
+            return "next"
+        if re.search(r"\b(?:previous|last|back)\b", text):
+            return "previous"
+        return "playpause"  # play / pause / resume / stop all toggle
+
+    def _run(self, action: str) -> str:
+        """Perform ``action`` on the current OS; always returns speech."""
+        if IS_MACOS:
+            player = _mac_player()
+            try:
+                subprocess.run(
+                    ["osascript", "-e", f'tell application "{player}" to {_MAC_COMMANDS[action]}'],
+                    capture_output=True, text=True, check=True,
+                )
+            except Exception:
+                return f"I couldn't control {player}."
+            return _SPOKEN[action].replace("playback.", f"playback in {player}.")
+        # Windows/Linux: media-key fallback (same idiom as VolumeSkill).
+        try:
+            import pyautogui
+
+            pyautogui.press(_MEDIA_KEYS[action])
+        except Exception:
+            return "I couldn't reach the media keys on this system."
+        return _SPOKEN[action]
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        action = self._action(request.text.lower())
+        return SkillResult(self._run(action), data={"action": action})
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["playpause", "next", "previous"]}
+                    },
+                    "required": ["action"],
+                },
+            },
+        }

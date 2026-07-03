@@ -1,0 +1,31 @@
+name: jarvis_watch
+description: "Wear OS companion for Jarvis v2 — speak to your watch, Jarvis answers."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.4 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # On-watch speech recognition (Android SpeechRecognizer under the hood).
+  speech_to_text: ^6.6.2
+  # Speak Jarvis's reply through the watch speaker.
+  flutter_tts: ^4.0.2
+  # Talk to the Jarvis companion API (remote/server.py).
+  http: ^1.2.1
+  # Persist the Jarvis server address between launches.
+  shared_preferences: ^2.2.3
+  # Accelerometer access for the hands-free double wrist-flick trigger.
+  sensors_plus: ^4.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

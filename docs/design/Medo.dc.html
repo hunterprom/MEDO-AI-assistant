@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;padding:0;background:#04070d;overflow:hidden}
+@keyframes medo-spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes medo-spin-r{from{transform:rotate(360deg)}to{transform:rotate(0deg)}}
+@keyframes medo-pulse{0%,100%{opacity:.5}50%{opacity:1}}
+@keyframes medo-wave{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
+@keyframes medo-blink{0%,49%{opacity:1}50%,100%{opacity:.15}}
+</style>
+</helmet>
+<div style="position:fixed;inset:0;background:radial-gradient(ellipse 80% 70% at 50% 45%, #071224 0%, #04070d 60%, #02040a 100%);color:#c9e6ff;font-family:'Rajdhani',sans-serif;overflow:hidden" data-screen-label="Medo">
+
+  <!-- grid backdrop -->
+  <div style="position:absolute;inset:0;background-image:linear-gradient(rgba(56,168,255,.05) 1px, transparent 1px),linear-gradient(90deg, rgba(56,168,255,.05) 1px, transparent 1px);background-size:64px 64px;pointer-events:none;mask-image:radial-gradient(ellipse 70% 60% at 50% 50%, black 30%, transparent 100%)"></div>
+  <sc-if value="{{ scanlines }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;background:repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0px, rgba(0,0,0,.22) 1px, transparent 1px, transparent 4px);pointer-events:none;z-index:60"></div>
+  </sc-if>
+
+  <!-- ══ TOP BAR ══ -->
+  <div style="position:relative;z-index:10;display:flex;align-items:center;gap:28px;padding:20px 36px;border-bottom:1px solid rgba(56,168,255,.14)">
+    <div style="display:flex;align-items:baseline;gap:10px">
+      <span style="font-weight:700;font-size:26px;letter-spacing:.28em;color:#7fd0ff;text-shadow:0 0 18px rgba(56,168,255,.8)">MEDO</span>
+      <span style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#4a6d94;letter-spacing:.14em">v2.0 · ONLINE</span>
+    </div>
+    <div style="display:flex;gap:6px">
+      <button onClick="{{ goMain }}" style="background:{{ mainTabBg }};border:1px solid rgba(56,168,255,.25);color:#c9e6ff;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:14px;letter-spacing:.2em;padding:8px 22px;cursor:pointer" style-hover="border-color:#38a8ff;color:#fff">CORE</button>
+      <button onClick="{{ goChat }}" style="background:{{ chatTabBg }};border:1px solid rgba(56,168,255,.25);color:#c9e6ff;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:14px;letter-spacing:.2em;padding:8px 22px;cursor:pointer" style-hover="border-color:#38a8ff;color:#fff">COMMS</button>
+      <button onClick="{{ goSettings }}" style="background:{{ settingsTabBg }};border:1px solid rgba(56,168,255,.25);color:#c9e6ff;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:14px;letter-spacing:.2em;padding:8px 22px;cursor:pointer" style-hover="border-color:#38a8ff;color:#fff">CONFIG</button>
+    </div>
+    <div style="flex:1;display:flex;justify-content:center">
+      <div style="display:flex;align-items:center;gap:10px;width:min(420px,100%);border:1px solid rgba(56,168,255,.2);background:rgba(8,18,34,.6);padding:9px 16px">
+        <span style="width:8px;height:8px;border:1px solid #38a8ff;border-radius:50%;box-shadow:0 0 8px rgba(56,168,255,.7)"></span>
+        <input value="{{ query }}" onChange="{{ onQuery }}" placeholder="SEARCH SYSTEMS, FILES, WEB…" style="flex:1;background:transparent;border:none;outline:none;color:#c9e6ff;font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:.12em"></input>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;line-height:1.1">
+      <span style="font-family:'Share Tech Mono',monospace;font-size:22px;color:#7fd0ff;text-shadow:0 0 12px rgba(56,168,255,.6)">{{ clock }}</span>
+      <span style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#4a6d94;letter-spacing:.14em">{{ dateStr }}</span>
+    </div>
+  </div>
+
+  <!-- ══ MAIN / CORE SCREEN ══ -->
+  <sc-if value="{{ isMain }}" hint-placeholder-val="{{ true }}">
+    <div style="position:relative;z-index:5;display:grid;grid-template-columns:300px 1fr 300px;gap:24px;padding:24px 36px;height:calc(100vh - 82px);box-sizing:border-box" data-screen-label="Core">
+
+      <!-- LEFT: system stats -->
+      <div style="display:flex;flex-direction:column;gap:18px;min-height:0">
+        <div style="border:1px solid rgba(56,168,255,.16);background:rgba(8,18,34,.45);padding:18px 20px">
+          <div style="font-size:12px;font-weight:600;letter-spacing:.3em;color:#4a6d94;margin-bottom:14px">SYSTEM DIAGNOSTICS</div>
+          <sc-for list="{{ stats }}" as="s" hint-placeholder-count="3">
+            <div style="margin-bottom:14px">
+              <div style="display:flex;justify-content:space-between;font-family:'Share Tech Mono',monospace;font-size:11px;color:#7fa8cf;margin-bottom:5px">
+                <span>{{ s.label }}</span><span style="color:#7fd0ff">{{ s.display }}</span>
+              </div>
+              <div style="height:4px;background:rgba(56,168,255,.12)">
+                <div style="height:100%;width:{{ s.pct }};background:linear-gradient(90deg,#1c5f9e,#38a8ff);box-shadow:0 0 8px rgba(56,168,255,.7)"></div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="border:1px solid rgba(56,168,255,.16);background:rgba(8,18,34,.45);padding:18px 20px">
+          <div style="font-size:12px;font-weight:600;letter-spacing:.3em;color:#4a6d94;margin-bottom:12px">ENVIRONMENT</div>
+          <div style="display:flex;align-items:baseline;gap:10px">
+            <span style="font-size:44px;font-weight:600;color:#7fd0ff;text-shadow:0 0 16px rgba(56,168,255,.5)">21°</span>
+            <div style="display:flex;flex-direction:column;font-family:'Share Tech Mono',monospace;font-size:11px;color:#7fa8cf;line-height:1.5">
+              <span>CLEAR NIGHT</span><span style="color:#4a6d94">HUM 42% · WIND 6KM/H</span>
+            </div>
+          </div>
+        </div>
+        <div style="flex:1;border:1px solid rgba(56,168,255,.16);background:rgba(8,18,34,.45);padding:18px 20px;overflow:hidden">
+          <div style="font-size:12px;font-weight:600;letter-spacing:.3em;color:#4a6d94;margin-bottom:12px">ACTIVITY LOG</div>
+          <sc-for list="{{ logs }}" as="l" hint-placeholder-count="4">
+            <div style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#5a82ab;margin-bottom:8px;line-height:1.4"><span style="color:#38a8ff">▸</span> {{ l }}</div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- CENTER: orb -->
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:0">
+        <div style="position:relative;width:920px;height:920px;flex:none;display:flex;align-items:center;justify-content:center;margin:-160px 0 -130px">
+          <div style="position:absolute;inset:0;border:1px dashed rgba(56,168,255,.22);border-radius:50%;animation:medo-spin 80s linear infinite"></div>
+          <div style="position:absolute;inset:44px;border:1px solid transparent;border-top-color:rgba(127,208,255,.5);border-right-color:rgba(56,168,255,.18);border-radius:50%;animation:medo-spin 16s linear infinite"></div>
+          <div style="position:absolute;inset:78px;border:1px solid transparent;border-bottom-color:rgba(56,168,255,.45);border-left-color:rgba(56,168,255,.1);border-radius:50%;animation:medo-spin-r 11s linear infinite"></div>
+          <canvas ref="{{ orbRef }}" data-medo-orb="1" width="1760" height="1760" style="width:880px;height:880px"></canvas>
+          <div style="position:absolute;top:6px;left:50%;transform:translateX(-50%);font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.3em">CORE·0.94</div>
+        </div>
+        <div style="font-size:15px;font-weight:600;letter-spacing:.4em;color:#7fd0ff;text-shadow:0 0 14px rgba(56,168,255,.6);animation:medo-pulse 3s ease-in-out infinite">{{ orbStatus }}</div>
+        <div style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#4a6d94;letter-spacing:.16em">{{ orbSub }}</div>
+
+        <!-- listening waveform -->
+        <sc-if value="{{ listening }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:4px;height:36px;margin-top:4px" data-screen-label="Listening">
+            <sc-for list="{{ waveBars }}" as="b" hint-placeholder-count="8">
+              <div style="width:4px;height:32px;background:#38a8ff;box-shadow:0 0 8px rgba(56,168,255,.8);animation:medo-wave {{ b.dur }} ease-in-out infinite;animation-delay:{{ b.delay }}"></div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <button onClick="{{ toggleListening }}" style="margin-top:10px;display:flex;align-items:center;gap:12px;background:{{ micBg }};border:1px solid rgba(56,168,255,.45);color:#c9e6ff;font-family:'Rajdhani',sans-serif;font-weight:600;font-size:14px;letter-spacing:.26em;padding:13px 34px;cursor:pointer;box-shadow:0 0 24px rgba(56,168,255,.25)" style-hover="border-color:#7fd0ff;box-shadow:0 0 34px rgba(56,168,255,.5)">
+          <span style="width:10px;height:10px;border-radius:50%;background:{{ micDot }};box-shadow:0 0 10px rgba(56,168,255,.9)"></span>
+          {{ micLabel }}
+        </button>
+      </div>
+
+      <!-- RIGHT: agenda + smart home -->
+      <div style="display:flex;flex-direction:column;gap:18px;min-height:0">
+        <div style="border:1px solid rgba(56,168,255,.16);background:rgba(8,18,34,.45);padding:18px 20px">
+          <div style="font-size:12px;font-weight:600;letter-spacing:.3em;color:#4a6d94;margin-bottom:14px">AGENDA · TODAY</div>
+          <sc-for list="{{ agenda }}" as="a" hint-placeholder-count="3">
+            <div style="display:flex;gap:14px;margin-bottom:14px">
+              <span style="font-family:'Share Tech Mono',monospace;font-size:13px;color:#7fd0ff;min-width:48px">{{ a.time }}</span>
+              <div style="display:flex;flex-direction:column;line-height:1.3">
+                <span style="font-weight:600;font-size:15px;color:#c9e6ff">{{ a.title }}</span>
+                <span style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.1em">{{ a.meta }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex:1;border:1px solid rgba(56,168,255,.16);background:rgba(8,18,34,.45);padding:18px 20px">
+          <div style="font-size:12px;font-weight:600;letter-spacing:.3em;color:#4a6d94;margin-bottom:14px">HABITAT CONTROL</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <sc-for list="{{ devices }}" as="d" hint-placeholder-count="4">
+              <button onClick="{{ d.toggle }}" style="display:flex;flex-direction:column;gap:6px;align-items:flex-start;background:{{ d.bg }};border:1px solid {{ d.border }};padding:12px 14px;cursor:pointer;text-align:left" style-hover="border-color:#38a8ff">
+                <span style="width:8px;height:8px;border-radius:50%;background:{{ d.dot }}"></span>
+                <span style="font-weight:600;font-size:13px;letter-spacing:.08em;color:#c9e6ff">{{ d.name }}</span>
+                <span style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94">{{ d.state }}</span>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ══ CHAT SCREEN ══ -->
+  <sc-if value="{{ isChat }}" hint-placeholder-val="{{ false }}">
+    <div style="position:relative;z-index:5;display:flex;flex-direction:column;align-items:center;height:calc(100vh - 82px);box-sizing:border-box;padding:24px 36px" data-screen-label="Comms">
+      <div style="display:flex;flex-direction:column;width:min(860px,100%);flex:1;min-height:0;border:1px solid rgba(56,168,255,.16);background:rgba(8,18,34,.45)">
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 22px;border-bottom:1px solid rgba(56,168,255,.14)">
+          <span style="width:9px;height:9px;border-radius:50%;background:#38a8ff;box-shadow:0 0 10px rgba(56,168,255,.9);animation:medo-pulse 2s ease-in-out infinite"></span>
+          <span style="font-weight:600;font-size:14px;letter-spacing:.3em;color:#7fd0ff">SECURE CHANNEL · MEDO</span>
+        </div>
+        <div ref="{{ chatScrollRef }}" style="flex:1;overflow-y:auto;padding:24px 22px;display:flex;flex-direction:column;gap:16px">
+          <sc-for list="{{ messages }}" as="m" hint-placeholder-count="3">
+            <div style="display:flex;flex-direction:column;gap:4px;align-self:{{ m.align }};max-width:70%">
+              <span style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.2em">{{ m.who }}</span>
+              <div style="border:1px solid {{ m.border }};background:{{ m.bg }};padding:12px 16px;font-size:16px;font-weight:500;line-height:1.5;color:#d8ecff">{{ m.text }}</div>
+            </div>
+          </sc-for>
+          <sc-if value="{{ thinking }}" hint-placeholder-val="{{ false }}">
+            <div style="font-family:'Share Tech Mono',monospace;font-size:12px;color:#38a8ff;animation:medo-blink 1s step-end infinite">MEDO IS PROCESSING ▊</div>
+          </sc-if>
+        </div>
+        <div style="display:flex;gap:10px;padding:16px 22px;border-top:1px solid rgba(56,168,255,.14)">
+          <input value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onDraftKey }}" placeholder="TYPE A COMMAND OR QUESTION…" style="flex:1;background:rgba(4,10,20,.6);border:1px solid rgba(56,168,255,.25);outline:none;color:#c9e6ff;font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:.08em;padding:12px 16px"></input>
+          <button onClick="{{ sendMessage }}" style="background:rgba(56,168,255,.16);border:1px solid rgba(56,168,255,.5);color:#7fd0ff;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:14px;letter-spacing:.24em;padding:12px 28px;cursor:pointer" style-hover="background:rgba(56,168,255,.3)">SEND</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ══ SETTINGS SCREEN ══ -->
+  <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+    <div style="position:relative;z-index:5;display:flex;justify-content:center;height:calc(100vh - 82px);box-sizing:border-box;padding:24px 36px;overflow-y:auto" data-screen-label="Config">
+      <div style="width:min(720px,100%);display:flex;flex-direction:column;gap:14px">
+        <div style="font-size:13px;font-weight:600;letter-spacing:.34em;color:#4a6d94;padding:10px 4px 2px">SYSTEM CONFIGURATION</div>
+        <sc-for list="{{ settings }}" as="st" hint-placeholder-count="5">
+          <div style="display:flex;align-items:center;justify-content:space-between;border:1px solid rgba(56,168,255,.16);background:rgba(8,18,34,.45);padding:18px 22px">
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <span style="font-weight:600;font-size:16px;letter-spacing:.06em;color:#c9e6ff">{{ st.name }}</span>
+              <span style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#4a6d94">{{ st.desc }}</span>
+            </div>
+            <button onClick="{{ st.toggle }}" style="position:relative;width:56px;height:26px;background:{{ st.bg }};border:1px solid {{ st.border }};cursor:pointer;padding:0">
+              <span style="position:absolute;top:3px;left:{{ st.knobLeft }};width:18px;height:18px;background:{{ st.knob }};box-shadow:0 0 8px rgba(56,168,255,.7);transition:left .18s ease"></span>
+            </button>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;orbSpeed&quot;: { &quot;editor&quot;: &quot;range&quot;, &quot;default&quot;: 1, &quot;min&quot;: 0.2, &quot;max&quot;: 3, &quot;step&quot;: 0.1, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Orb&quot; },
+  &quot;glowIntensity&quot;: { &quot;editor&quot;: &quot;range&quot;, &quot;default&quot;: 1, &quot;min&quot;: 0.4, &quot;max&quot;: 2, &quot;step&quot;: 0.1, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Orb&quot; },
+  &quot;scanlines&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Atmosphere&quot; }
+}">
+class Component extends DCLogic {
+  state = {
+    screen: 'main',
+    listening: false,
+    query: '',
+    draft: '',
+    thinking: false,
+    clock: '',
+    dateStr: '',
+    cpu: 34, mem: 61, net: 22, pwr: 87,
+    messages: [
+      { role: 'ai', text: 'Good evening. All systems nominal. How can I assist?' },
+      { role: 'user', text: 'Summarize my day.' },
+      { role: 'ai', text: 'Three engagements on the agenda. Weather is clear at 21°C. Power reserves at 87%. Nothing requires your immediate attention.' },
+    ],
+    devices: [
+      { name: 'LIGHTS', on: true,  offState: 'OFF', onState: 'ON · 80%' },
+      { name: 'CLIMATE', on: true, offState: 'STANDBY', onState: '21.5°C' },
+      { name: 'SECURITY', on: true, offState: 'DISARMED', onState: 'ARMED' },
+      { name: 'MEDIA', on: false, offState: 'IDLE', onState: 'PLAYING' },
+    ],
+    settings: [
+      { name: 'Voice activation', desc: 'WAKE WORD: "MEDO"', on: true },
+      { name: 'Proactive alerts', desc: 'NOTIFY BEFORE MEETINGS AND ANOMALIES', on: true },
+      { name: 'Ambient listening', desc: 'CONTEXT AWARENESS WHILE IDLE', on: false },
+      { name: 'Data sync', desc: 'CALENDAR · MAIL · HOME MESH', on: true },
+      { name: 'Privacy mode', desc: 'SUSPEND ALL SENSORS', on: false },
+    ],
+  };
+
+  componentDidMount() {
+    this.tick();
+    this.clockTimer = setInterval(() => this.tick(), 1000);
+    this.statTimer = setInterval(() => {
+      const walk = (v, lo, hi) => Math.max(lo, Math.min(hi, v + (Math.random() - 0.5) * 8));
+      this.setState(s => ({ cpu: walk(s.cpu, 8, 92), mem: walk(s.mem, 30, 88), net: walk(s.net, 4, 70) }));
+    }, 1600);
+    this.initOrb();
+  }
+  componentWillUnmount() {
+    clearInterval(this.clockTimer); clearInterval(this.statTimer);
+    cancelAnimationFrame(this.raf);
+  }
+  tick() {
+    const n = new Date();
+    const p = x => String(x).padStart(2, '0');
+    const days = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+    const mons = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+    this.setState({
+      clock: p(n.getHours()) + ':' + p(n.getMinutes()) + ':' + p(n.getSeconds()),
+      dateStr: days[n.getDay()] + ' · ' + p(n.getDate()) + ' ' + mons[n.getMonth()] + ' ' + n.getFullYear(),
+    });
+  }
+
+  // ── orb ──
+  initOrb() {
+    const cv = (this.orbRef && this.orbRef.current) || document.querySelector('canvas[data-medo-orb]');
+    if (!cv) { setTimeout(() => this.initOrb(), 120); return; }
+    if (this.orbCanvas === cv) return;
+    this.orbCanvas = cv;
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height, cx = W / 2, cy = H / 2, R = W * 0.40;
+    // ── cosmic web: cluster nodes + filament roots + dust halo ──
+    const rnd = () => Math.random() * 2 - 1;
+    const inSphere = (rad) => {
+      let x, y, z;
+      do { x = rnd(); y = rnd(); z = rnd(); } while (x * x + y * y + z * z > 1);
+      return { x: x * rad, y: y * rad, z: z * rad };
+    };
+    // nodes: galaxy clusters, denser toward the center (root)
+    const nodes = [{ x: 0, y: 0, z: 0, sz: 26, br: 1 }];
+    for (let i = 0; i < 44; i++) {
+      const shell = Math.pow(Math.random(), 0.6); // bias inward
+      const p = inSphere(0.25 + shell * 0.75);
+      nodes.push({ x: p.x, y: p.y, z: p.z, sz: 7 + Math.random() * 15, br: 0.5 + Math.random() * 0.5 });
+    }
+    // filaments: each node roots toward 2 nearest neighbors + some toward core
+    const fil = [];
+    const addFilament = (a, b) => {
+      const steps = 16 + Math.floor(Math.random() * 8);
+      const bend = { x: rnd() * 0.22, y: rnd() * 0.22, z: rnd() * 0.22 };
+      for (let s = 1; s < steps; s++) {
+        const u = s / steps, w = Math.sin(u * Math.PI);
+        fil.push({
+          x: a.x + (b.x - a.x) * u + bend.x * w + rnd() * 0.02,
+          y: a.y + (b.y - a.y) * u + bend.y * w + rnd() * 0.02,
+          z: a.z + (b.z - a.z) * u + bend.z * w + rnd() * 0.02,
+          tw: Math.random() * Math.PI * 2, sz: 1.4 + Math.random() * 2.2,
+        });
+      }
+    };
+    for (let i = 1; i < nodes.length; i++) {
+      const a = nodes[i];
+      const near = nodes.map((n, j) => ({ j, d: j === i ? 9 : (n.x - a.x) ** 2 + (n.y - a.y) ** 2 + (n.z - a.z) ** 2 }))
+        .sort((p, q) => p.d - q.d).slice(0, 2);
+      for (const n of near) addFilament(a, nodes[n.j]);
+      if (Math.random() < 0.35) addFilament(a, nodes[0]); // root to core
+    }
+    // dust halo
+    const dust = [];
+    for (let i = 0; i < 900; i++) {
+      const p = inSphere(1.05);
+      dust.push({ ...p, tw: Math.random() * Math.PI * 2, sz: 0.7 + Math.random() * 1.2 });
+    }
+    const rot = (p, cosY, sinY, cosX, sinX) => {
+      const x = p.x * cosY + p.z * sinY;
+      let z = -p.x * sinY + p.z * cosY;
+      const y = p.y * cosX - z * sinX;
+      z = p.y * sinX + z * cosX;
+      return { x, y, z };
+    };
+    let t = 0, last = performance.now();
+    const loop = (now) => {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      const speed = (this.props.orbSpeed ?? 1) * (this.state.listening ? 2.2 : 1);
+      const glow = (this.props.glowIntensity ?? 1) * (this.state.listening ? 1.4 : 1);
+      t += dt * speed;
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalCompositeOperation = 'lighter';
+      // ambient nebula glow
+      let g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.22);
+      g.addColorStop(0, 'rgba(120,200,255,' + (0.28 * glow) + ')');
+      g.addColorStop(0.4, 'rgba(40,120,230,' + (0.1 * glow) + ')');
+      g.addColorStop(1, 'rgba(10,40,120,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(cx, cy, R * 1.22, 0, Math.PI * 2); ctx.fill();
+      const ry = t * 0.32, rx = 0.42 + Math.sin(t * 0.09) * 0.22;
+      const cosY = Math.cos(ry), sinY = Math.sin(ry), cosX = Math.cos(rx), sinX = Math.sin(rx);
+      // dust
+      for (const p of dust) {
+        const q = rot(p, cosY, sinY, cosX, sinX);
+        const depth = (q.z + 1.05) / 2.1;
+        const a = (0.03 + depth * 0.16) * (0.6 + 0.4 * Math.sin(t * 2 + p.tw)) * glow;
+        ctx.fillStyle = 'rgba(90,180,255,' + a.toFixed(3) + ')';
+        ctx.fillRect(cx + q.x * R, cy + q.y * R, p.sz, p.sz);
+      }
+      // filament particles (the roots)
+      for (const p of fil) {
+        const q = rot(p, cosY, sinY, cosX, sinX);
+        const depth = (q.z + 1.05) / 2.1;
+        const flick = 0.6 + 0.4 * Math.sin(t * 2.6 + p.tw);
+        const a = (0.1 + depth * 0.6) * flick * glow;
+        const sz = p.sz * (0.5 + depth * 0.9);
+        ctx.fillStyle = 'rgba(' + (depth > 0.7 ? '190,235,255,' : '70,170,255,') + a.toFixed(3) + ')';
+        ctx.fillRect(cx + q.x * R, cy + q.y * R, sz, sz);
+      }
+      // cluster cores
+      for (let i = 0; i < nodes.length; i++) {
+        const p = nodes[i];
+        const q = rot(p, cosY, sinY, cosX, sinX);
+        const depth = (q.z + 1.05) / 2.1;
+        const px = cx + q.x * R, py = cy + q.y * R;
+        const rad = p.sz * (0.55 + depth * 0.75) * (i === 0 ? 2.6 : 1);
+        const pulse = i === 0 ? 0.85 + 0.15 * Math.sin(t * 1.6) : 0.7 + 0.3 * Math.sin(t * 2 + p.sz);
+        const hg = ctx.createRadialGradient(px, py, 0, px, py, rad);
+        hg.addColorStop(0, 'rgba(220,245,255,' + (p.br * pulse * (0.25 + depth * 0.65) * glow).toFixed(3) + ')');
+        hg.addColorStop(0.35, 'rgba(90,185,255,' + (p.br * pulse * (0.12 + depth * 0.35) * glow).toFixed(3) + ')');
+        hg.addColorStop(1, 'rgba(30,90,200,0)');
+        ctx.fillStyle = hg;
+        ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      this.raf = requestAnimationFrame(loop);
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+
+  reply(userText) {
+    this.setState({ thinking: true });
+    setTimeout(() => {
+      const canned = [
+        'Understood. Executing now.',
+        'Done. Anything else?',
+        'I have flagged that and adjusted your schedule accordingly.',
+        'Cross-referencing… complete. Results routed to your workspace.',
+      ];
+      const text = canned[Math.floor(Math.random() * canned.length)];
+      this.setState(s => ({ thinking: false, messages: [...s.messages, { role: 'ai', text }] }), () => this.scrollChat());
+    }, 900);
+  }
+  scrollChat() {
+    const el = this.chatScrollRef && this.chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  renderVals() {
+    const s = this.state;
+    this.orbRef = this.orbRef || React.createRef();
+    this.chatScrollRef = this.chatScrollRef || React.createRef();
+    const tabBg = k => s.screen === k ? 'rgba(56,168,255,.18)' : 'rgba(8,18,34,.4)';
+    const send = () => {
+      const txt = s.draft.trim();
+      if (!txt) return;
+      this.setState(st => ({ draft: '', messages: [...st.messages, { role: 'user', text: txt }] }), () => { this.scrollChat(); this.reply(txt); });
+    };
+    return {
+      scanlines: this.props.scanlines ?? true,
+      clock: s.clock, dateStr: s.dateStr,
+      isMain: s.screen === 'main', isChat: s.screen === 'chat', isSettings: s.screen === 'settings',
+      goMain: () => this.setState({ screen: 'main' }, () => {
+        const cv = document.querySelector('canvas[data-medo-orb]');
+        if (cv && cv !== this.orbCanvas) { cancelAnimationFrame(this.raf); this.orbCanvas = null; this.initOrb(); }
+      }),
+      goChat: () => this.setState({ screen: 'chat' }, () => this.scrollChat()),
+      goSettings: () => this.setState({ screen: 'settings' }),
+      mainTabBg: tabBg('main'), chatTabBg: tabBg('chat'), settingsTabBg: tabBg('settings'),
+      query: s.query, onQuery: e => this.setState({ query: e.target.value }),
+
+      stats: [
+        { label: 'CPU LOAD', pct: Math.round(s.cpu) + '%', display: Math.round(s.cpu) + '%' },
+        { label: 'MEMORY', pct: Math.round(s.mem) + '%', display: Math.round(s.mem * 0.32) + ' GB' },
+        { label: 'NETWORK', pct: Math.round(s.net) + '%', display: Math.round(s.net * 12) + ' MB/S' },
+        { label: 'POWER CELL', pct: s.pwr + '%', display: s.pwr + '%' },
+      ],
+      logs: [
+        '06:00 · MORNING BRIEF COMPILED',
+        '08:12 · 3 MESSAGES TRIAGED',
+        '09:41 · HOME MESH SYNC OK',
+        '11:05 · ANOMALY SCAN — CLEAR',
+        '12:30 · CALENDAR OPTIMIZED',
+      ],
+      agenda: [
+        { time: '14:00', title: 'Design review', meta: 'CONF ROOM B · 45 MIN' },
+        { time: '16:30', title: 'Call with Nadia', meta: 'VIDEO · 30 MIN' },
+        { time: '19:00', title: 'Gym — push day', meta: 'REMINDER · PACKED BAG' },
+      ],
+
+      listening: s.listening,
+      toggleListening: () => this.setState(st => ({ listening: !st.listening })),
+      micLabel: s.listening ? 'LISTENING — TAP TO STOP' : 'TAP TO SPEAK',
+      micBg: s.listening ? 'rgba(56,168,255,.22)' : 'rgba(8,18,34,.55)',
+      micDot: s.listening ? '#7fd0ff' : '#1c5f9e',
+      orbStatus: s.listening ? 'LISTENING' : 'STANDING BY',
+      orbSub: s.listening ? 'VOICE CHANNEL OPEN · SPEAK NOW' : 'ALL SYSTEMS NOMINAL · AWAITING INPUT',
+      waveBars: Array.from({ length: 24 }, (_, i) => ({ dur: (0.6 + (i % 5) * 0.13).toFixed(2) + 's', delay: (i * 0.045).toFixed(2) + 's' })),
+
+      devices: s.devices.map((d, i) => ({
+        name: d.name,
+        state: d.on ? d.onState : d.offState,
+        bg: d.on ? 'rgba(56,168,255,.1)' : 'rgba(8,18,34,.4)',
+        border: d.on ? 'rgba(56,168,255,.4)' : 'rgba(56,168,255,.14)',
+        dot: d.on ? '#38a8ff' : '#28405c',
+        toggle: () => this.setState(st => ({ devices: st.devices.map((x, j) => j === i ? { ...x, on: !x.on } : x) })),
+      })),
+
+      messages: s.messages.map(m => ({
+        who: m.role === 'ai' ? 'MEDO' : 'YOU',
+        text: m.text,
+        align: m.role === 'ai' ? 'flex-start' : 'flex-end',
+        border: m.role === 'ai' ? 'rgba(56,168,255,.35)' : 'rgba(56,168,255,.16)',
+        bg: m.role === 'ai' ? 'rgba(56,168,255,.08)' : 'rgba(8,18,34,.6)',
+      })),
+      thinking: s.thinking,
+      draft: s.draft,
+      onDraft: e => this.setState({ draft: e.target.value }),
+      onDraftKey: e => { if (e.key === 'Enter') send(); },
+      sendMessage: send,
+
+      settings: s.settings.map((st, i) => ({
+        name: st.name, desc: st.desc,
+        bg: st.on ? 'rgba(56,168,255,.2)' : 'rgba(8,18,34,.5)',
+        border: st.on ? 'rgba(56,168,255,.55)' : 'rgba(56,168,255,.18)',
+        knob: st.on ? '#7fd0ff' : '#28405c',
+        knobLeft: st.on ? '33px' : '3px',
+        toggle: () => this.setState(x => ({ settings: x.settings.map((y, j) => j === i ? { ...y, on: !y.on } : y) })),
+      })),
+    };
+  }
+}
+</script>
+</body>
+</html>

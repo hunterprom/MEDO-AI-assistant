@@ -1,0 +1,13 @@
+# Vision sidecar deps — install into a SEPARATE venv (.venv-vision).
+#
+# MediaPipe's macOS/Windows x86_64 wheels pin numpy<2, which conflicts with the
+# main app's numpy 2 voice stack. Keeping vision in its own venv/process avoids
+# the conflict entirely; the sidecar talks to the app over the companion API.
+#
+#   python3.12 -m venv .venv-vision
+#   .venv-vision/bin/pip install --only-binary=:all: -r requirements-vision.txt
+#
+mediapipe>=0.10.18,<0.10.30   # hand landmarks; pins numpy<2
+opencv-python>=4.9            # camera capture + drawing
+numpy<2                       # required by mediapipe
+PyYAML>=6.0                   # read config.yaml (vision + remote sections)

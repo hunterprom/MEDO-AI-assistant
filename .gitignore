@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-vision/
+venv/
+*.egg-info/
+.pytest_cache/
+jarvis.db
+# Downloaded STT/TTS/wake-word models (fetched by setup, never committed)
+models/
+*.onnx
+*.onnx.json
+.DS_Store
+screenshots/
