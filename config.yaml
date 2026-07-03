@@ -1,5 +1,5 @@
 # =============================================================================
-# MEDO v2 — configuration
+# MEDO — configuration (super project: v1 jarvis-web + v2 merged)
 # Every subsystem is swappable from here without touching code.
 # Paths starting with ~ are expanded to your home directory.
 # =============================================================================
@@ -10,12 +10,13 @@ llm:
   # api_key: leave empty for local Ollama; set to use any OpenAI-compatible cloud model
   api_key: ""
   openai_base_url: "https://api.openai.com/v1"   # base URL of the OpenAI-compatible API
-  # default_model: leave null to be prompted to pick from installed models at
-  # startup (runtime model selection). Set a name to skip the prompt.
-  default_model: null
+  # The brain. qwen3:30b is a thinking model — its </think> reasoning is
+  # stripped in llm/client.py. Falls back to the first installed model if absent.
+  default_model: "qwen3:30b"
   fallback_model: "llama3.2:3b"
   temperature: 0.6
-  num_ctx: 4096
+  num_ctx: 4096                    # 8192 OOMs a 12 GB GPU with the 30B — keep 4096
+  keep_alive: "30m"                # keep the model loaded between turns (no reload stalls)
   request_timeout_s: 120
 
 router:
@@ -42,6 +43,12 @@ vision:                             # camera hand-gesture control (sidecar proce
   min_tracking_confidence: 0.5
   stability_frames: 6               # consecutive frames to confirm a gesture
   cooldown_s: 2.0                   # min gap before re-firing a gesture
+  pointer:                          # gesture mouse control ("pointer on|off", HUD toggle)
+    enabled: true                   # feature available (runtime toggle always starts OFF)
+    sensitivity: 2.5                # hand movement -> cursor movement amplification
+    ema_alpha: 0.4                  # smoothing (0..1; higher = snappier, lower = steadier)
+    click_debounce_ms: 600          # min gap between gesture clicks
+    hold_frames: 3                  # frames a click pose must hold before it fires
   gestures:                         # recognized gesture -> routed utterance
     thumbs_up: "yes"                # confirm a pending action (safety gate)
     open_palm: "no"                 # cancel
@@ -64,15 +71,16 @@ stt:                                # M1
   model: "small"                    # tiny | base | small | medium (accuracy↑, speed↓)
   device: "auto"                    # auto | cuda | cpu
   compute_type: "auto"
-  language: "en"
+  language: null                    # null = auto-detect per utterance (Macedonian + English)
   beam_size: 5                      # beam search — more accurate than greedy (1)
   vad_filter: true                  # drop non-speech frames before decoding
   condition_on_previous_text: false # avoids runaway repeats on short clips
   filter_hallucinations: true       # drop low-confidence/junk Whisper segments
   no_speech_threshold: 0.6          # whisper non-speech gate
-  initial_prompt: >-                # bias the decoder toward likely command words
-    Commands for a voice assistant: what time is it, open chrome, volume up,
-    take a note, set a timer, take a screenshot, weather, the news, shut down.
+  # initial_prompt biases decoding toward command words but skews non-English
+  # transcripts — keep it null while language auto-detect is on. If you pin
+  # language: "en", restore the example prompt from the README.
+  initial_prompt: null
 
 tts:                                # M1
   engine: "piper"
@@ -133,9 +141,14 @@ news:                               # M3
     - "https://feeds.bbci.co.uk/news/rss.xml"
     - "https://hnrss.org/frontpage"
 
+vision_llm:                         # "what do you see" / "read my screen"
+  model: "moondream"                # local Ollama vision model
+  timeout_s: 60                     # describe calls are slow on first load
+
 memory:                             # M4
   db_path: "jarvis.db"
   max_turns: 10                     # rolling conversation window sent to the LLM
+  max_facts: 20                     # newest remembered facts injected into the system prompt
 
 logging:
   level: "INFO"                     # DEBUG for state transitions + routing detail

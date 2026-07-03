@@ -15,11 +15,36 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from core.config import LLMConfig
 
 logger = logging.getLogger(__name__)
+
+#: A complete <think>…</think> block anywhere in a reply.
+_THINK_PAIR = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_think(text: str) -> str:
+    """Remove a thinking model's chain-of-thought from a reply.
+
+    qwen3-style models emit reasoning that ends in ``</think>`` — the opening
+    tag is usually template-injected, so it never appears in the output. Keep
+    only what follows the LAST ``</think>``, then drop any stray complete
+    pairs and an unterminated trailing ``<think>`` block (mid-reasoning
+    truncation). The result is safe for TTS, conversation memory, and the
+    yes/no confirmation gate.
+    """
+    t = text or ""
+    close = t.rfind("</think>")
+    if close != -1:
+        t = t[close + len("</think>"):]
+    t = _THINK_PAIR.sub("", t)
+    open_idx = t.find("<think>")
+    if open_idx != -1:
+        t = t[:open_idx]
+    return t.strip()
 
 
 class LLMUnavailableError(RuntimeError):
@@ -175,8 +200,14 @@ class LLMClient:
             raise LLMUnavailableError("httpx is not installed") from exc
 
         if self._provider == "openai":
-            return await self._chat_openai(httpx, model, messages, tools, temperature)
-        return await self._chat_ollama(httpx, model, messages, tools, temperature)
+            message = await self._chat_openai(httpx, model, messages, tools, temperature)
+        else:
+            message = await self._chat_ollama(httpx, model, messages, tools, temperature)
+        # One choke point for reasoning removal: everything downstream (router,
+        # conversation memory, HUD, TTS, confirmation gate) sees clean text.
+        if isinstance(message.get("content"), str):
+            message["content"] = strip_think(message["content"])
+        return message
 
     async def _chat_ollama(
         self,
@@ -191,6 +222,9 @@ class LLMClient:
             "model": model,
             "messages": messages,
             "stream": False,
+            # Keep the model warm between turns; the default 5m unload costs a
+            # 15–30s reload for a partially-offloaded 30B on this GPU.
+            "keep_alive": self._config.keep_alive,
             "options": {
                 "temperature": (
                     self._config.temperature if temperature is None else temperature

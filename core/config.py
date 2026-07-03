@@ -40,6 +40,8 @@ class LLMConfig(BaseModel):
     temperature: float = 0.6
     num_ctx: int = 4096
     request_timeout_s: float = 120.0
+    # Ollama keep-alive: how long the model stays loaded after a request.
+    keep_alive: str = "30m"
 
 
 class RouterConfig(BaseModel):
@@ -59,6 +61,20 @@ class RemoteConfig(BaseModel):
     port: int = 8710
 
 
+class PointerConfig(BaseModel):
+    """Gesture mouse control (pointer mode) — see vision/engine.py.
+
+    ``enabled`` gates the feature; the runtime toggle always starts OFF and is
+    flipped by voice ("pointer on"), the HUD switch, or POST :8731/pointer.
+    """
+
+    enabled: bool = True
+    sensitivity: float = 2.5            # hand range → screen range amplification
+    ema_alpha: float = 0.4              # 0..1 smoothing (higher = snappier)
+    click_debounce_ms: int = 600        # min gap between gesture clicks
+    hold_frames: int = 3                # frames a click pose must hold to fire
+
+
 class VisionConfig(BaseModel):
     """Camera hand-gesture control — see vision/gestures.py."""
 
@@ -71,6 +87,7 @@ class VisionConfig(BaseModel):
     min_tracking_confidence: float = 0.5
     stability_frames: int = 6               # consecutive frames to confirm a gesture
     cooldown_s: float = 2.0                 # min gap before re-firing a gesture
+    pointer: PointerConfig = Field(default_factory=PointerConfig)
     # Recognized gesture -> the utterance routed through the Intent Router.
     gestures: dict[str, str] = Field(
         default_factory=lambda: {
@@ -99,14 +116,17 @@ class STTConfig(BaseModel):
     model: str = "small"                 # small is noticeably more accurate than base
     device: str = "auto"
     compute_type: str = "auto"
-    language: str = "en"
+    # null/None = per-utterance auto-detect (enables Macedonian + English).
+    language: str | None = "en"
     beam_size: int = 5                   # >1 = beam search; more accurate than greedy
     vad_filter: bool = True              # drop non-speech the recorder let through
     condition_on_previous_text: bool = False  # avoids runaway repeats on short clips
     filter_hallucinations: bool = True   # drop low-confidence/junk Whisper segments
     no_speech_threshold: float = 0.6     # passed through to faster-whisper transcribe()
     # Biases the decoder toward the words this assistant actually hears.
-    initial_prompt: str = (
+    # Leave null when language auto-detect is on — an English prompt skews
+    # Macedonian decodes.
+    initial_prompt: str | None = (
         "Commands for a voice assistant: what time is it, open chrome, volume up, "
         "take a note, set a timer, take a screenshot, weather, the news, shut down."
     )
@@ -151,9 +171,17 @@ class NewsConfig(BaseModel):
     feeds: list[str] = Field(default_factory=list)
 
 
+class VisionLLMConfig(BaseModel):
+    """Local vision model for 'what do you see' / 'read my screen'."""
+
+    model: str = "moondream"
+    timeout_s: float = 60.0
+
+
 class MemoryConfig(BaseModel):
     db_path: str = "jarvis.db"
     max_turns: int = 10
+    max_facts: int = 20                 # newest facts injected into the system prompt
 
 
 class LoggingConfig(BaseModel):
@@ -185,6 +213,7 @@ class Settings(BaseSettings):
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
+    vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).

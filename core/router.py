@@ -10,6 +10,7 @@ Routing stats are tallied for the README.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from typing import Any
 
 from core.config import Settings
 from core.events import Event, EventBus, EventType, RoutePath
+from core.facts import FactsStore
 from core.memory import ConversationMemory
 from core.safety import is_affirmative, is_negative
 from llm.client import LLMUnavailableError, OllamaClient
@@ -42,6 +44,8 @@ OFFLINE_CLOUD_REPLY = (
     "internet connection — or switch back to the local provider."
 )
 CANCELLED_REPLY = "Okay, cancelled."
+#: Spoken when the model returns nothing usable (e.g. reasoning truncated mid-think).
+EMPTY_REPLY = "Sorry — I lost my train of thought. Ask me that again?"
 
 
 def _looks_like_tool_json(text: str) -> bool:
@@ -85,6 +89,8 @@ class Router:
         self._pending: tuple[Skill, SkillRequest] | None = None
         #: Rolling context so follow-ups ("and tomorrow?") resolve.
         self.conversation = ConversationMemory(settings.memory.max_turns)
+        #: Long-term user facts, injected into the system prompt each LLM turn.
+        self.facts = FactsStore(settings.memory.db_path)
 
     @property
     def llm(self) -> OllamaClient:
@@ -184,8 +190,18 @@ class Router:
             return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
         tools = build_tools(self._registry)
+        try:
+            facts = await asyncio.to_thread(
+                self.facts.recent, self._settings.memory.max_facts
+            )
+        except Exception:  # a broken facts DB must never take down the LLM path
+            logger.exception("could not load remembered facts")
+            facts = []
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt(self._settings.personality)},
+            {
+                "role": "system",
+                "content": system_prompt(self._settings.personality, facts),
+            },
             *self.conversation.recent_messages(),   # rolling context for follow-ups
             {"role": "user", "content": text},
         ]
@@ -201,7 +217,7 @@ class Router:
                         # retry (no tools) gets a clean spoken answer.
                         retry = await self._llm.chat(self.model, messages)
                         reply = (retry.get("content") or "").strip()
-                    return RouteResult(path=RoutePath.LLM, speech=reply or self._offline_reply)
+                    return RouteResult(path=RoutePath.LLM, speech=reply or EMPTY_REPLY)
 
                 messages.append(message)  # the assistant turn that requested tools
                 pending = await self._run_tool_calls(tool_calls, text, context, messages)
@@ -211,7 +227,8 @@ class Router:
             # Ran out of rounds: ask once more for a plain answer.
             message = await self._llm.chat(self.model, messages)
             return RouteResult(
-                path=RoutePath.LLM, speech=(message.get("content") or self._offline_reply).strip()
+                path=RoutePath.LLM,
+                speech=(message.get("content") or "").strip() or EMPTY_REPLY,
             )
         except LLMUnavailableError as exc:
             logger.warning("LLM path unavailable: %s", exc)

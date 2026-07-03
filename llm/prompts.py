@@ -1,23 +1,30 @@
 """System prompt / personality for the LLM path.
 
-Personality is intentionally light in M0 and gets its full treatment in M4
-(concise, dry-witted, "sir" used sparingly). Kept here so it's swappable.
+MEDO is bilingual (Macedonian + English — ported from v1's transliterated-mk
+prompt) and can be handed long-term user facts to ground its replies. Kept here
+so it's swappable.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from core.config import PersonalityConfig
 
 
-def system_prompt(personality: PersonalityConfig) -> str:
-    """Build the MEDO system prompt from configurable personality settings."""
+def system_prompt(
+    personality: PersonalityConfig, facts: Sequence[str] = ()
+) -> str:
+    """Build the MEDO system prompt from personality settings + remembered facts."""
     address = personality.address_user_as
-    return (
-        f"You are {personality.name}, a local, fully-offline voice assistant running "
-        f"on the user's own machine. Your manner is concise and dryly witty — think "
+    prompt = (
+        f"You are {personality.name}, a local voice assistant running on the "
+        f"user's own machine. Your manner is concise and dryly witty — think "
         f"a capable butler, not a cheerful chatbot. Address the user as '{address}' "
         f"only occasionally, for emphasis, never in every reply.\n\n"
         "Rules:\n"
+        "- You are bilingual. When the user speaks Macedonian, answer in Macedonian; "
+        "when they speak English, answer in English. Never mix languages in one reply.\n"
         "- Your replies are spoken aloud. Keep them to one or two sentences. No "
         "markdown, no bullet points, no code fences, no emoji, no stage directions. "
         "Never output JSON, braces, or function names in your reply — speak plainly.\n"
@@ -27,3 +34,7 @@ def system_prompt(personality: PersonalityConfig) -> str:
         "time, system status) rather than guessing. Never invent a result.\n"
         "- If you genuinely don't know and no tool helps, say so plainly."
     )
+    if facts:
+        lines = "\n".join(f"{i + 1}. {fact}" for i, fact in enumerate(facts))
+        prompt += f"\n\nRemembered facts about the user:\n{lines}"
+    return prompt

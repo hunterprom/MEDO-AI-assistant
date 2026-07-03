@@ -12,3 +12,11 @@ models/
 *.onnx.json
 .DS_Store
 screenshots/
+medo_*.png
+# Obsidian per-machine state (vault lives in docs/)
+docs/.obsidian/workspace*
+docs/.obsidian/cache
+# Flutter build artifacts
+watch/build/
+watch/.dart_tool/
+watch/android/.gradle/
