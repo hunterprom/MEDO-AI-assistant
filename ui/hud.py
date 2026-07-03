@@ -63,6 +63,12 @@ class HudServer:
             "visionEnabled": self._settings.vision.enabled,
             "streamPort": self._settings.vision.stream_port,
             "apiPort": self._settings.remote.port,
+            "wakePhrase": self._settings.wakeword.phrase.replace("_", " "),
+            "weather": {
+                "city": self._settings.weather.default_city,
+                "lat": self._settings.weather.latitude,
+                "lon": self._settings.weather.longitude,
+            },
         }
         html = html.replace("__MEDO_CONFIG__", json.dumps(page_config))
         return web.Response(text=html, content_type="text/html")

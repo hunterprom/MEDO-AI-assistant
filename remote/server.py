@@ -8,6 +8,7 @@ Model/provider endpoints let clients switch the LLM at runtime.
     POST /ask {"text": …} -> {"speech": …, "path": "FAST"|"LLM",
                               "skill": str|null, "latency_ms": float}
     GET  /status          -> {"ok", "name", "provider", "model", "models", "state"}
+    GET  /sys             -> cached CPU/RAM/GPU telemetry (2 s refresh, HUD poll)
     GET  /models          -> {"models": [...]}
     POST /model {"name": …}          -> {"ok", "model"}
     POST /provider {"provider": "ollama"|"openai", "api_key"?, "base_url"?,
@@ -24,8 +25,10 @@ local network. Do not expose this port beyond your LAN.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
+import psutil
 from aiohttp import web
 
 from core.config import Settings
@@ -68,6 +71,11 @@ class RemoteServer:
         self._router = router
         self._sm = sm
         self._runner: web.AppRunner | None = None
+        # /sys cache — refreshed by a background task so a 2 s HUD poll costs
+        # a dict lookup, not a psutil/nvidia-smi round-trip per request.
+        self._sys: dict = {"cpu": None, "ram": None, "gpu": None}
+        self._sys_task: asyncio.Task | None = None
+        self._no_nvidia = False
 
     def build_app(self) -> web.Application:
         """Create the aiohttp application (separated out for tests)."""
@@ -75,6 +83,7 @@ class RemoteServer:
         app.router.add_get("/ping", self._handle_ping)
         app.router.add_post("/ask", self._handle_ask)
         app.router.add_get("/status", self._handle_status)
+        app.router.add_get("/sys", self._handle_sys)
         app.router.add_get("/models", self._handle_models)
         app.router.add_post("/model", self._handle_set_model)
         app.router.add_post("/provider", self._handle_set_provider)
@@ -89,13 +98,85 @@ class RemoteServer:
         self._runner = web.AppRunner(self.build_app())
         await self._runner.setup()
         await web.TCPSite(self._runner, host, port).start()
+        self._sys_task = asyncio.create_task(self._collect_sys_forever())
         logger.info("remote API listening on http://%s:%d", host, port)
 
     async def stop(self) -> None:
         """Shut the server down cleanly (no-op if never started)."""
+        if self._sys_task is not None:
+            self._sys_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._sys_task
+            self._sys_task = None
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
+
+    # --- system telemetry (HUD SYSTEM DIAGNOSTICS panel) ---
+
+    async def _collect_sys_forever(self) -> None:
+        """Refresh the cached /sys payload every 2 s.
+
+        ``psutil.cpu_percent(None)`` returns 0.0 on its very first call; the
+        second tick self-heals. nvidia-smi is skipped permanently after a
+        FileNotFoundError so non-NVIDIA machines don't fork a missing binary
+        every 2 s.
+        """
+        while True:
+            try:
+                cpu = psutil.cpu_percent(interval=None)
+                mem = psutil.virtual_memory()
+                gpu = None if self._no_nvidia else await self._read_gpu()
+                self._sys = {
+                    "cpu": round(cpu, 1),
+                    "ram": {
+                        "percent": round(mem.percent, 1),
+                        "used_gb": round(mem.used / 1024**3, 1),
+                        "total_gb": round(mem.total / 1024**3, 1),
+                    },
+                    "gpu": gpu,
+                }
+            except Exception:  # telemetry must never take the server down
+                logger.exception("sys telemetry collection failed")
+            await asyncio.sleep(2.0)
+
+    async def _read_gpu(self) -> dict | None:
+        """One nvidia-smi sample, or None when there's no usable NVIDIA GPU."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            self._no_nvidia = True
+            return None
+        except OSError:
+            return None
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=1.5)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            return None
+        parts = [p.strip() for p in out.decode(errors="replace").split(",")]
+        if proc.returncode != 0 or len(parts) < 4:
+            return None
+        try:
+            return {
+                "util": float(parts[0]),
+                "vram_used_mb": float(parts[1]),
+                "vram_total_mb": float(parts[2]),
+                "temp_c": float(parts[3]),
+            }
+        except ValueError:
+            return None
+
+    async def _handle_sys(self, request: web.Request) -> web.Response:
+        """Cached system telemetry — cheap enough for a 2 s HUD poll."""
+        return web.json_response({"ok": True, **self._sys})
 
     # --- handlers ---
 
