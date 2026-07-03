@@ -217,10 +217,11 @@ def main() -> None:
 
     server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port), _make_video_handler(engine))
     Thread(target=server.serve_forever, daemon=True).start()
-    logger.info("gestures → %s/ask  |  camera stream → http://127.0.0.1:%d/video  |  "
-                "pointer toggle → POST http://127.0.0.1:%d/pointer",
-                api_url, cfg.stream_port, cfg.stream_port)
-    logger.info("gesture map: %s (suspended while pointer mode is on)", cfg.gestures)
+    logger.info("pointer-only build | camera stream → http://127.0.0.1:%d/video | "
+                "pointer toggle → POST http://127.0.0.1:%d/pointer | companion API %s",
+                cfg.stream_port, cfg.stream_port, api_url)
+    logger.info("controls: index tip = cursor, thumb+index pinch = left click, "
+                "three fingers = right click, fist = exit pointer (boots OFF)")
 
     try:
         engine._thread.join()  # type: ignore[union-attr]

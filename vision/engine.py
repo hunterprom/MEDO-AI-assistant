@@ -1,16 +1,17 @@
 """The gesture engine: a blocking camera/inference loop with a plain callback.
 
 Runs in the vision sidecar process (its own venv, so MediaPipe's numpy<2 pin never
-touches the voice stack). Two modes share the camera:
+touches the voice stack). This build is **pointer-only** — discrete command
+gestures are disabled:
 
-* **Discrete** (default): on a confirmed gesture, call ``on_gesture(gesture,
-  utterance)``; the sidecar's callback POSTs that utterance to the companion API,
-  so gestures flow through the same Intent Router as voice and text.
 * **Pointer** (ported from v1 jarvis-web): the index fingertip drives the OS
-  cursor — pinch left-clicks, three-fingers right-clicks, a stabilized fist
-  exits. Discrete utterances are suspended while it's on, so cursor poses don't
-  fire their mapped commands. Toggled by voice ("pointer on"), the HUD switch,
-  or ``POST :stream_port/pointer`` — and it always boots OFF.
+  cursor — a thumb-to-index pinch left-clicks, three-fingers right-clicks, a
+  stabilized fist exits. Toggled by voice ("pointer on"), the HUD switch, or
+  ``POST :stream_port/pointer`` — and it always boots OFF.
+
+When pointer mode is OFF the camera simply streams the annotated feed; no gesture
+is routed as an utterance. (``on_gesture`` is retained for API compatibility but
+no longer invoked.)
 
 The latest annotated frame is exposed as JPEG for the HUD video stream.
 """
@@ -25,11 +26,11 @@ from collections.abc import Callable
 from vision.camera import Camera
 from vision.gestures import (
     FIST,
-    PINCH,
     THREE,
     UNKNOWN,
     GestureRecognizer,
     GestureStabilizer,
+    index_thumb_pinch,
 )
 from vision.pointer import ClickDebouncer, Ema, PoseHold, to_screen
 
@@ -201,9 +202,12 @@ class GestureEngine:
                         try:
                             winmouse.move(int(sx), int(sy))
                             now = time.monotonic()
-                            if pinch_hold.update(gesture == PINCH) and click_gate.ready(now):
+                            # Left click = thumb tip touches index tip, decoupled
+                            # from the other fingers so it fires from the natural
+                            # pointing pose (see gestures.index_thumb_pinch).
+                            if pinch_hold.update(index_thumb_pinch(landmarks)) and click_gate.ready(now):
                                 winmouse.click_left()
-                                last_fired, last_utterance = PINCH, "left click"
+                                last_fired, last_utterance = "pinch", "left click"
                             if three_hold.update(gesture == THREE) and click_gate.ready(now):
                                 winmouse.click_right()
                                 last_fired, last_utterance = THREE, "right click"
@@ -216,15 +220,9 @@ class GestureEngine:
                         ema.reset()  # hand lost: don't lerp across the gap
                     if confirmed == FIST:
                         self.set_pointer(False)
-                elif confirmed and confirmed != UNKNOWN:
-                    utterance = c.gestures.get(confirmed)
-                    if utterance:
-                        last_fired, last_utterance = confirmed, utterance
-                        logger.info("gesture %s -> %r", confirmed, utterance)
-                        try:
-                            self._on_gesture(confirmed, utterance)
-                        except Exception:
-                            logger.exception("gesture handler failed")
+                # Command gestures are intentionally disabled: this build is
+                # pointer-only. When pointer mode is OFF the camera just streams
+                # the annotated feed; no gesture is routed as an utterance.
 
                 # Debug HUD text goes on after firing so "last fired" is current.
                 _draw_debug_overlay(annotated, gesture, last_fired, last_utterance, pointer_now)

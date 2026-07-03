@@ -96,6 +96,23 @@ def classify_landmarks(landmarks: Sequence[object]) -> str:
     return UNKNOWN
 
 
+def index_thumb_pinch(landmarks: Sequence[object], ratio: float = PINCH_RATIO) -> bool:
+    """True when the thumb tip touches the index tip — regardless of other fingers.
+
+    Pointer-mode click detector. Unlike :func:`classify_landmarks`' ``PINCH`` (which
+    also requires middle/ring/pinky extended), this only measures the thumb→index
+    tip gap against palm length, so it fires from the natural pointing pose where
+    the other fingers are curled. Distance-invariant: works near or far from camera.
+    """
+    if landmarks is None or len(landmarks) < 21:
+        return False
+    p = [_xy(lm) for lm in landmarks]
+    palm = _dist(p[0], p[9])
+    if palm <= 0:
+        return False
+    return _dist(p[4], p[8]) < ratio * palm
+
+
 class GestureStabilizer:
     """Emit a gesture only after it holds for ``stability_frames`` frames, then
     wait ``cooldown_frames`` before the same gesture can fire again."""

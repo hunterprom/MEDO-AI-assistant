@@ -6,6 +6,8 @@ venv/
 *.egg-info/
 .pytest_cache/
 jarvis.db
+# Online API key(s), written by the HUD "connect online model" flow — never commit
+secrets.local.yaml
 # Downloaded STT/TTS/wake-word models (fetched by setup, never committed)
 models/
 *.onnx

@@ -25,7 +25,7 @@ from rich.console import Console
 
 from collections.abc import Awaitable
 
-from core.config import PROJECT_ROOT, Settings, load_settings
+from core.config import PROJECT_ROOT, Settings, apply_local_secrets, load_settings
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
 from core.facts import FactsStore
 from core.memory import NoteStore, ReminderStore
@@ -369,6 +369,9 @@ async def run_voice(
 
 async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> None:
     settings = load_settings()
+    # Overlay any online API key / model saved via the HUD (git-ignored file), so
+    # an online provider chosen last session is restored without touching config.yaml.
+    apply_local_secrets(settings)
     setup_logging(settings.logging.level)
 
     announcer = Announcer()
@@ -409,7 +412,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     # The vision sidecar POSTs gestures to the companion API, so enabling vision
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
-        remote = RemoteServer(settings, router, sm)
+        remote = RemoteServer(settings, router, sm, persist_secrets=True)
         await remote.start()
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "

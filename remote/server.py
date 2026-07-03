@@ -13,6 +13,8 @@ Model/provider endpoints let clients switch the LLM at runtime.
     POST /model {"name": …}          -> {"ok", "model"}
     POST /provider {"provider": "ollama"|"openai", "api_key"?, "base_url"?,
                     "model"?}        -> {"ok", "provider", "model", "models"}
+    GET  /dirs            -> {"dirs": [{"key", "label", "path", "center"}, …]}
+    POST /open {"key": …} -> {"ok", "path"}   (opens a folder in the file explorer)
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -31,7 +33,8 @@ import logging
 import psutil
 from aiohttp import web
 
-from core.config import Settings
+from core import dirs
+from core.config import Settings, save_llm_secrets
 from core.events import AssistantState, StateMachine
 from core.router import Router
 
@@ -66,10 +69,20 @@ async def cors_middleware(request: web.Request, handler) -> web.StreamResponse:
 class RemoteServer:
     """Serves the companion API on top of an existing :class:`Router`."""
 
-    def __init__(self, settings: Settings, router: Router, sm: StateMachine) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        router: Router,
+        sm: StateMachine,
+        *,
+        persist_secrets: bool = False,
+    ) -> None:
         self._settings = settings
         self._router = router
         self._sm = sm
+        # When True, a /provider switch writes the key/model to the git-ignored
+        # secrets file so it survives a restart. Off by default (and in tests).
+        self._persist_secrets = persist_secrets
         self._runner: web.AppRunner | None = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
@@ -87,6 +100,8 @@ class RemoteServer:
         app.router.add_get("/models", self._handle_models)
         app.router.add_post("/model", self._handle_set_model)
         app.router.add_post("/provider", self._handle_set_provider)
+        app.router.add_get("/dirs", self._handle_dirs)
+        app.router.add_post("/open", self._handle_open)
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
@@ -259,9 +274,46 @@ class RemoteServer:
         model = str(payload.get("model") or "").strip() or (models[0] if models else None)
         self._router.model = model
         logger.info("provider switched to %r (model %r) via companion API", provider, model)
+
+        if self._persist_secrets:
+            # Remember the choice across restarts (git-ignored file). Only write
+            # the key when one was supplied this request; leave any stored key
+            # untouched otherwise. Merges, so switching to ollama keeps the key.
+            save_llm_secrets(
+                provider=provider,
+                api_key=llm_cfg.api_key if api_key is not None else None,
+                openai_base_url=(llm_cfg.openai_base_url if base_url and provider == "openai" else None),
+                default_model=model,
+            )
+
         return web.json_response(
             {"ok": True, "provider": provider, "model": model, "models": models}
         )
+
+    async def _handle_dirs(self, request: web.Request) -> web.Response:
+        """Folder shortcuts for the HUD sphere dots (labels + resolved paths)."""
+        return web.json_response({"dirs": dirs.user_dirs()})
+
+    async def _handle_open(self, request: web.Request) -> web.Response:
+        """Open a whitelisted folder shortcut in the OS file explorer.
+
+        ``key`` must name an entry from :func:`core.dirs.user_dirs` — arbitrary
+        paths are never opened, so a stray request can't launch anything else.
+        """
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error(400, "body must be JSON like {\"key\": \"downloads\"}")
+
+        key = str(payload.get("key") or "").strip()
+        path = dirs.resolve(key)
+        if path is None:
+            return _error(404, f"unknown folder shortcut {key!r}")
+        opened = await asyncio.to_thread(dirs.open_path, path)
+        if not opened:
+            return _error(500, f"could not open {path}")
+        logger.info("opened folder %s via companion API", path)
+        return web.json_response({"ok": True, "path": str(path)})
 
     async def _handle_ask(self, request: web.Request) -> web.Response:
         """Route one utterance and return the reply as JSON."""

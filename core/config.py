@@ -8,6 +8,7 @@ tests and CI without editing the file.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,14 @@ from pydantic_settings import (
 # Resolved once so every module agrees on where the project root is.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+
+# Online API keys live here, NOT in config.yaml (which is committed to git). This
+# file is git-ignored; it is written by the HUD's "connect online model" flow and
+# read at startup by apply_local_secrets(). Fields mirror LLMConfig.
+SECRETS_PATH = PROJECT_ROOT / "secrets.local.yaml"
+
+# Only these LLM fields may be persisted to / loaded from the secrets file.
+_SECRET_LLM_FIELDS = ("provider", "api_key", "openai_base_url", "default_model")
 
 
 def expand_path(path: str | Path) -> Path:
@@ -253,3 +262,60 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
         )
 
     return _FileSettings()
+
+
+# --- local secrets (online API key) -----------------------------------------
+#
+# Deliberately kept out of load_settings() so tests that call load_settings()
+# stay fully isolated from the developer's machine. main.py opts in by calling
+# apply_local_secrets() at startup, and the companion API opts in to writes.
+
+
+def load_llm_secrets(path: Path = SECRETS_PATH) -> dict:
+    """Return the persisted llm secrets ``{field: value}`` (``{}`` if none)."""
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        llm = data.get("llm", {}) or {}
+        return {k: llm[k] for k in _SECRET_LLM_FIELDS if k in llm}
+    except Exception:  # a corrupt secrets file must never crash startup
+        return {}
+
+
+def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settings:
+    """Overlay any locally-saved llm secrets onto ``settings.llm`` in place.
+
+    Lets an online API key + model survive a restart without ever being written
+    to the git-tracked config.yaml. Returns the same settings for convenience.
+    """
+    for field, value in load_llm_secrets(path).items():
+        if value not in (None, ""):
+            setattr(settings.llm, field, value)
+    return settings
+
+
+def save_llm_secrets(path: Path = SECRETS_PATH, **fields: object) -> None:
+    """Merge the given llm fields into the git-ignored secrets file.
+
+    Merging (not overwriting) means switching provider to "ollama" keeps the
+    stored key so the next switch back to online needs no re-entry. Only
+    whitelisted fields are written; unknown kwargs are ignored. Best-effort.
+    """
+    payload = {k: v for k, v in fields.items() if k in _SECRET_LLM_FIELDS and v is not None}
+    if not payload:
+        return
+    try:
+        import yaml
+
+        existing = load_llm_secrets(path)
+        existing.update(payload)
+        path.write_text(
+            "# MEDO local secrets — git-ignored, do not commit.\n"
+            + yaml.safe_dump({"llm": existing}, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist llm secrets")
