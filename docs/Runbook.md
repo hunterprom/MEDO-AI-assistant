@@ -38,6 +38,23 @@ Leftovers: `taskkill /IM python.exe /F` (careful) or by PID from
 | "volume"/"mute" does nothing | pycaw/comtypes missing from `.venv` → `pip install -r requirements.txt` |
 | Whisper mishears Macedonian | it's auto-detect; pin `stt.language: mk` (or `en`) if you speak one language |
 
+## Network TLS quirk (this machine)
+
+Something on this network intercepts TLS: python `requests` fails with
+`CERTIFICATE_VERIFY_FAILED` (breaks openwakeword's model download on a fresh
+venv) and schannel curl needs `--ssl-no-revoke` (run.bat already passes it).
+If the wake-word download fails, copy the models from any previous install:
+
+    robocopy <old-venv>\Lib\site-packages\openwakeword\resources ^
+             .venv\Lib\site-packages\openwakeword\resources /E
+
+## Ollama with the wrong model store
+
+If Ollama was auto-started (tray icon) without `OLLAMA_MODELS=D:\OllamaModels`
+it sees zero models — `/status` shows `"models": []` and vision replies claim
+moondream is missing. `run.bat` detects this (API up, qwen3 invisible, D:
+store present) and restarts the daemon with the right environment.
+
 ## Changing things
 
 - **Model**: HUD → CONFIG → Language model, or `POST /model`, or `config.yaml`.
