@@ -37,12 +37,28 @@ KEY_MAP: dict[str, str] = {
 
 
 def resolve_keys(raw: str | list[str]) -> list[str]:
-    """'control shift a' or ['ctrl','a'] -> pyautogui names; unknowns dropped."""
+    """'control shift a' or ['ctrl','a'] -> pyautogui names; unknowns dropped.
+
+    Two-word aliases ("page down", "volume up") are matched greedily before
+    single tokens, so "press page down" means PageDown, not the down arrow.
+    """
     if isinstance(raw, str):
         parts = re.split(r"[\s+,]+", raw.strip().lower())
     else:
         parts = [str(p).strip().lower() for p in raw]
-    return [KEY_MAP[p] for p in parts if p in KEY_MAP]
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        pair = " ".join(parts[i : i + 2])
+        if i + 1 < len(parts) and pair in KEY_MAP:
+            out.append(KEY_MAP[pair])
+            i += 2
+        elif parts[i] in KEY_MAP:
+            out.append(KEY_MAP[parts[i]])
+            i += 1
+        else:
+            i += 1
+    return out
 
 
 def _pyautogui():

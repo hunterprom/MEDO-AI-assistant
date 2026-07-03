@@ -41,7 +41,11 @@ if not exist ".venv\" (
   echo [medo] creating main venv + installing deps ^(one-time^)...
   py -3.12 -m venv .venv
   call .venv\Scripts\pip install -q -r requirements.txt
-  call .venv\Scripts\python -c "import openwakeword.utils as u; u.download_models()"
+  call .venv\Scripts\python -c "import openwakeword.utils as u; u.download_models()" || (
+    echo [medo] WARNING: wake-word model download failed ^(this network's TLS
+    echo [medo]          interception breaks python requests^). Voice wake won't
+    echo [medo]          work until openwakeword's models are in the venv.
+  )
 )
 
 REM 2b. Piper voice model ^(spoken replies; --voice needs it^) --------------------

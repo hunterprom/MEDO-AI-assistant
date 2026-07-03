@@ -237,9 +237,19 @@ class Settings(BaseSettings):
 
 
 def load_settings(config_path: str | Path | None = None) -> Settings:
-    """Load settings, optionally from a non-default YAML path (used by tests)."""
+    """Load settings, optionally from a non-default YAML path (used by tests).
+
+    ``yaml_file`` lives in ``model_config`` — a class-level value that the
+    ``_yaml_file`` init kwarg silently fails to override on the installed
+    pydantic-settings, so the alternate file was never actually read. A
+    throwaway subclass with its own ``model_config`` is version-proof.
+    """
     if config_path is None:
         return Settings()
-    return Settings(
-        _yaml_file=str(config_path),  # type: ignore[call-arg]
-    )
+
+    class _FileSettings(Settings):
+        model_config = SettingsConfigDict(
+            **{**Settings.model_config, "yaml_file": str(config_path)}
+        )
+
+    return _FileSettings()
