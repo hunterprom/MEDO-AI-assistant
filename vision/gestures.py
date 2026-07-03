@@ -132,7 +132,7 @@ class GestureStabilizer:
 
 
 class GestureRecognizer:
-    """MediaPipe Hands wrapper: a BGR frame -> (gesture, annotated frame)."""
+    """MediaPipe Hands wrapper: a BGR frame -> (gesture, annotated, landmarks)."""
 
     def __init__(self, min_detection_confidence: float, min_tracking_confidence: float) -> None:
         import mediapipe as mp
@@ -148,7 +148,12 @@ class GestureRecognizer:
         self._styles = mp.solutions.drawing_styles
 
     def process(self, frame_bgr):
-        """Return (gesture_name, annotated_bgr_frame) for one frame."""
+        """Return (gesture_name, annotated_bgr_frame, landmarks) for one frame.
+
+        ``landmarks`` is MediaPipe's 21-point list (objects with .x/.y) when a
+        hand is visible, else None — pointer mode maps the index tip [8] to
+        the cursor from it.
+        """
         import cv2
 
         rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -157,9 +162,11 @@ class GestureRecognizer:
 
         gesture = UNKNOWN
         annotated = frame_bgr
+        landmarks = None
         if result.multi_hand_landmarks:
             hand = result.multi_hand_landmarks[0]
-            gesture = classify_landmarks(hand.landmark)
+            landmarks = hand.landmark
+            gesture = classify_landmarks(landmarks)
             self._draw.draw_landmarks(
                 annotated,
                 hand,
@@ -167,7 +174,7 @@ class GestureRecognizer:
                 self._styles.get_default_hand_landmarks_style(),
                 self._styles.get_default_hand_connections_style(),
             )
-        return gesture, annotated
+        return gesture, annotated, landmarks
 
     def close(self) -> None:
         self._hands.close()
