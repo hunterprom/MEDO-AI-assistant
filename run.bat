@@ -17,24 +17,31 @@ set "OLLAMA_MODELS=D:\OllamaModels"
 set "GGML_CUDA_NO_PINNED=1"
 
 REM 1. Ollama server + model checks ---------------------------------------------
+REM Flat goto flow: %errorlevel% inside parenthesized blocks expands at parse
+REM time in batch, which silently breaks nested checks.
 where ollama >nul 2>&1
-if %errorlevel%==0 (
-  curl -s --max-time 2 http://127.0.0.1:11434/api/tags >nul 2>&1 || (
-    echo [medo] starting Ollama...
-    start "" /b ollama serve
-    timeout /t 3 >nul
-  )
-  ollama list 2>nul | findstr /i /c:"qwen3:30b" >nul || (
-    echo [medo] WARNING: qwen3:30b not in the model store - the LLM path will fall
-    echo [medo]          back to whatever is installed. Not auto-pulled: 18 GB.
-  )
-  ollama list 2>nul | findstr /i /c:"moondream" >nul || (
-    echo [medo] WARNING: moondream missing - "what do you see" will be offline.
-    echo [medo]          Install with: ollama pull moondream
-  )
-) else (
+if not %errorlevel%==0 (
   echo [medo] Ollama not installed - LLM path offline; fast-path skills still work.
+  goto ollama_done
 )
+curl -s --max-time 2 http://127.0.0.1:11434/api/tags >nul 2>&1
+if not %errorlevel%==0 goto ollama_start
+REM A daemon is up. If it can't see qwen3 while the D: store exists, it was
+REM started without OLLAMA_MODELS (e.g. tray autostart) - restart it with env.
+ollama list 2>nul | findstr /i /c:"qwen3" >nul
+if %errorlevel%==0 goto ollama_ready
+if not exist "D:\OllamaModels\manifests" goto ollama_ready
+echo [medo] Ollama is running without the D: model store - restarting it...
+taskkill /im ollama.exe /f >nul 2>&1
+timeout /t 2 >nul
+:ollama_start
+echo [medo] starting Ollama...
+start "" /b ollama serve
+timeout /t 3 >nul
+:ollama_ready
+ollama list 2>nul | findstr /i /c:"qwen3:30b" >nul || echo [medo] WARNING: qwen3:30b not found - LLM path uses whatever is installed ^(never auto-pulled: 18 GB^).
+ollama list 2>nul | findstr /i /c:"moondream" >nul || echo [medo] WARNING: moondream missing - "what do you see" is offline. Install: ollama pull moondream
+:ollama_done
 
 REM 2. Main venv -----------------------------------------------------------------
 if not exist ".venv\" (

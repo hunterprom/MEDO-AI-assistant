@@ -41,8 +41,9 @@ class RecallFactsSkill(Skill):
             return SkillResult("I haven't remembered anything about you yet.")
         spoken = "; ".join(facts[:10])
         more = f" — and {len(facts) - 10} more" if len(facts) > 10 else ""
+        noun = "thing" if len(facts) == 1 else "things"
         return SkillResult(
-            f"I remember {len(facts)} things: {spoken}{more}.",
+            f"I remember {len(facts)} {noun}: {spoken}{more}.",
             data={"facts": facts},
         )
 
