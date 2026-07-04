@@ -113,13 +113,21 @@ class Router:
         """True when the last reply asked for confirmation (UI should re-listen)."""
         return self._pending is not None
 
-    async def route(self, text: str, context: dict[str, Any] | None = None) -> RouteResult:
+    async def route(
+        self,
+        text: str,
+        context: dict[str, Any] | None = None,
+        on_delta: Any = None,
+    ) -> RouteResult:
+        """Route one utterance. ``on_delta`` (optional ``Callable[[str], None]``)
+        receives LLM content chunks as they stream, so the voice loop can speak
+        sentences while the reply is still generating."""
         text = text.strip()
         started = time.perf_counter()
 
         # Announce the utterance so any UI (HUD) can show it, whatever the source.
         await self._bus.emit(Event(EventType.TRANSCRIPT, text))
-        result = await self._route_inner(text, context or {})
+        result = await self._route_inner(text, context or {}, on_delta)
         result.latency_ms = (time.perf_counter() - started) * 1000.0
 
         self.stats[result.path] += 1
@@ -137,7 +145,9 @@ class Router:
         await self._bus.emit(Event(EventType.ROUTED, result))
         return result
 
-    async def _route_inner(self, text: str, context: dict[str, Any]) -> RouteResult:
+    async def _route_inner(
+        self, text: str, context: dict[str, Any], on_delta: Any = None
+    ) -> RouteResult:
         # --- CONFIRMATION GATE ---
         # A destructive action is waiting on a yes/no; this reply answers it.
         if self._pending is not None:
@@ -152,7 +162,7 @@ class Router:
                 return await self._run_skill(skill, request)
 
         # --- LLM PATH ---
-        return await self._llm_reply(text, context)
+        return await self._llm_reply(text, context, on_delta)
 
     async def _run_skill(self, skill: Skill, request: SkillRequest) -> RouteResult:
         """Execute a fast-path skill, deferring for confirmation if it asks."""
@@ -196,7 +206,9 @@ class Router:
             return OFFLINE_CLOUD_REPLY
         return OFFLINE_LLM_REPLY
 
-    async def _llm_reply(self, text: str, context: dict[str, Any]) -> RouteResult:
+    async def _llm_reply(
+        self, text: str, context: dict[str, Any], on_delta: Any = None
+    ) -> RouteResult:
         if not self.model:
             return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
@@ -217,9 +229,12 @@ class Router:
             {"role": "user", "content": text},
         ]
 
+        # Passed as **kwargs so test fakes with a plain chat(model, messages,
+        # tools=...) signature keep working when streaming isn't requested.
+        stream_kw = {"on_delta": on_delta} if on_delta is not None else {}
         try:
             for _ in range(MAX_TOOL_ROUNDS):
-                message = await self._llm.chat(self.model, messages, tools=tools)
+                message = await self._llm.chat(self.model, messages, tools=tools, **stream_kw)
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
                     reply = (message.get("content") or "").strip()

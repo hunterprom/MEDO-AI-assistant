@@ -2,12 +2,11 @@
 
 Ordered by value-for-effort.
 
-1. **Sentence-streaming TTS.** Stream the LLM reply, synthesize and speak each
-   completed sentence immediately (v1 did this in the browser). Needs a
-   streaming path in `llm/client.py` (suppress-until-`</think>` like v1's
-   `chatStream`). *Barge-in itself shipped 2026-07-04:* say the wake word over
-   MEDO's reply (or hit the HUD mic button / `POST /interrupt`) to cut it off
-   and be heard.
+1. ~~**Sentence-streaming TTS.**~~ *Shipped 2026-07-04:* `llm/client.py`
+   streams both providers (`chat(..., on_delta=...)`), the voice loop speaks
+   each completed sentence while the rest generates — first audio ~0.8 s on
+   Groq instead of after the full reply. Barge-in (wake word / loud voice /
+   HUD button) drops the remaining queued sentences.
 2. **Custom "hey MEDO" wake word.** Train an openWakeWord model (or switch
    engine) so the assistant answers to its actual name; today it's the
    pretrained "hey jarvis".

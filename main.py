@@ -296,7 +296,7 @@ async def run_voice(
         resolve_input_device,
     )
     from voice.stt import Transcriber
-    from voice.tts import EdgeTTS, TextToSpeech, contains_cyrillic
+    from voice.tts import EdgeTTS, TextToSpeech, contains_cyrillic, drain_sentences
     from voice.wakeword import WakeWord
 
     vlog = logging.getLogger("voice")
@@ -545,10 +545,47 @@ async def run_voice(
                 continue
             ui.transcript(text)
 
-            result = await router.route(text)
+            # Sentence-streaming TTS: LLM content chunks arrive via on_delta,
+            # complete sentences are queued, and a speaker task voices them
+            # WHILE the rest of the reply is still generating — first audio
+            # after the first sentence, not after the whole reply. Fast-path
+            # and tool answers never stream (no deltas) and speak as before.
+            stream_buf = {"text": ""}
+            streamed = {"count": 0}
+            stream_q: asyncio.Queue = asyncio.Queue()
 
-            await sm.transition(AssistantState.SPEAKING)
-            tts_ms = await speak(result.speech)
+            def on_delta(chunk: str) -> None:
+                stream_buf["text"] += chunk
+                sentences, stream_buf["text"] = drain_sentences(stream_buf["text"])
+                for s in sentences:
+                    streamed["count"] += 1
+                    stream_q.put_nowait(s)
+
+            async def stream_speaker() -> None:
+                while True:
+                    sentence = await stream_q.get()
+                    if sentence is None:
+                        return
+                    if barge_in["hit"]:
+                        continue  # user cut in — drop the remaining sentences
+                    await sm.transition(AssistantState.SPEAKING)
+                    await speak(sentence)
+
+            speaker_task = asyncio.create_task(stream_speaker())
+            try:
+                result = await router.route(text, on_delta=on_delta)
+            finally:
+                tail = stream_buf["text"].strip()
+                if streamed["count"] and tail:
+                    streamed["count"] += 1
+                    stream_q.put_nowait(tail)  # the last, unterminated sentence
+                stream_q.put_nowait(None)
+                await speaker_task
+
+            tts_ms = None
+            if streamed["count"] == 0:  # nothing streamed: speak the reply whole
+                await sm.transition(AssistantState.SPEAKING)
+                tts_ms = await speak(result.speech)
             log.record(TurnTimings(
                 path=result.path.value,
                 wake_to_listen_ms=wake_to_listen_ms if require_wake else None,

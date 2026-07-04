@@ -31,6 +31,33 @@ def contains_cyrillic(text: str) -> bool:
     return bool(_CYRILLIC.search(text or ""))
 
 
+#: End of a sentence: terminal punctuation, optionally followed by a closing
+#: quote/bracket, then whitespace.
+_SENTENCE_END = re.compile(r"([.!?…]+[\"')\]]?)\s")
+
+
+def drain_sentences(buffer: str, min_len: int = 24) -> tuple[list[str], str]:
+    """Pull complete sentences off a streaming text buffer.
+
+    Returns ``(sentences, remainder)``. Sentences shorter than ``min_len`` are
+    merged with the following one ("Dr." or "1." must not be spoken alone), so
+    the TTS gets natural chunks. The remainder holds the trailing incomplete
+    sentence — flush it yourself when the stream ends.
+    """
+    sentences: list[str] = []
+    while True:
+        emitted = False
+        for m in _SENTENCE_END.finditer(buffer):
+            candidate = buffer[: m.end(1)].strip()
+            if len(candidate) >= min_len:
+                sentences.append(candidate)
+                buffer = buffer[m.end(1):].lstrip()
+                emitted = True
+                break
+        if not emitted:
+            return sentences, buffer
+
+
 def find_ffmpeg() -> str | None:
     """Locate ffmpeg (PATH first, then the winget install). None if absent."""
     path = shutil.which("ffmpeg")

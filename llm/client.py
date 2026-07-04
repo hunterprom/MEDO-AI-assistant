@@ -215,6 +215,7 @@ class LLMClient:
         *,
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
+        on_delta: Any = None,
     ) -> dict[str, Any]:
         """Send a chat completion and return the assistant *message* dict.
 
@@ -222,6 +223,12 @@ class LLMClient:
         a ``tool_calls`` list whose ``function.arguments`` is always a dict —
         whichever provider is active. Raises :class:`LLMUnavailableError` if the
         provider can't be reached so the caller can degrade gracefully.
+
+        ``on_delta`` (a ``Callable[[str], None]``) switches to the streaming
+        wire protocol: content chunks are pushed to it as they generate — the
+        voice loop speaks completed sentences while the rest is still being
+        written — and the SAME final message dict is returned. Tool-call
+        rounds produce no content deltas, so streaming is safe on every round.
         """
         try:
             import httpx
@@ -229,9 +236,17 @@ class LLMClient:
             raise LLMUnavailableError("httpx is not installed") from exc
 
         if self._provider == "openai":
-            message = await self._chat_openai(httpx, model, messages, tools, temperature)
+            if on_delta is not None:
+                message = await self._chat_openai_stream(httpx, model, messages,
+                                                         tools, temperature, on_delta)
+            else:
+                message = await self._chat_openai(httpx, model, messages, tools, temperature)
         else:
-            message = await self._chat_ollama(httpx, model, messages, tools, temperature)
+            if on_delta is not None:
+                message = await self._chat_ollama_stream(httpx, model, messages,
+                                                         tools, temperature, on_delta)
+            else:
+                message = await self._chat_ollama(httpx, model, messages, tools, temperature)
         # One choke point for reasoning removal: everything downstream (router,
         # conversation memory, HUD, TTS, confirmation gate) sees clean text.
         if isinstance(message.get("content"), str):
@@ -272,6 +287,143 @@ class LLMClient:
             raise LLMUnavailableError(str(exc)) from exc
 
         return data.get("message", {}) or {}
+
+    async def _chat_ollama_stream(
+        self,
+        httpx: Any,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        on_delta: Any,
+    ) -> dict[str, Any]:
+        """Streaming Ollama chat: push content chunks, return the final message.
+
+        Newer Ollama emits qwen3-style reasoning in a separate ``thinking``
+        field, so content deltas are clean; a ``<think`` guard stops emission
+        anyway if an older template leaks tags inline.
+        """
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": self._config.keep_alive,
+            "options": {
+                "temperature": (
+                    self._config.temperature if temperature is None else temperature
+                ),
+                "num_ctx": self._config.num_ctx,
+            },
+        }
+        if tools:
+            payload["tools"] = tools
+        content = ""
+        tool_calls: list[dict[str, Any]] = []
+        emit_ok = True
+        try:
+            async with httpx.AsyncClient(timeout=self._config.request_timeout_s) as client:
+                async with client.stream(
+                    "POST", f"{self._ollama_host()}/api/chat", json=payload
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        data = json.loads(line)
+                        msg = data.get("message") or {}
+                        delta = msg.get("content") or ""
+                        if delta:
+                            content += delta
+                            if "<think" in content:
+                                emit_ok = False  # inline reasoning: stop speaking it
+                            if emit_ok:
+                                on_delta(delta)
+                        tool_calls.extend(msg.get("tool_calls") or [])
+                        if data.get("done"):
+                            break
+        except httpx.HTTPError as exc:
+            raise LLMUnavailableError(str(exc)) from exc
+        message: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        return message
+
+    async def _chat_openai_stream(
+        self,
+        httpx: Any,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        temperature: float | None,
+        on_delta: Any,
+    ) -> dict[str, Any]:
+        """Streaming OpenAI-compatible chat (SSE); returns the final message.
+
+        Tool-call deltas are merged by index (OpenAI fragments name/arguments
+        across chunks). On any non-2xx (e.g. Groq's 400 for models that reject
+        tools) it falls back to the non-streaming path, which owns that retry.
+        """
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": _to_openai_messages(messages),
+            "temperature": (
+                self._config.temperature if temperature is None else temperature
+            ),
+            "stream": True,
+        }
+        if tools:
+            payload["tools"] = tools
+        content = ""
+        calls: dict[int, dict[str, Any]] = {}
+        emit_ok = True
+        try:
+            async with httpx.AsyncClient(timeout=self._config.request_timeout_s) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._openai_base()}/chat/completions",
+                    json=payload,
+                    headers=self._openai_headers(),
+                ) as resp:
+                    if resp.status_code >= 400:
+                        await resp.aread()  # drain; the non-stream path handles retries
+                        return await self._chat_openai(httpx, model, messages,
+                                                       tools, temperature)
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        chunk = line[5:].strip()
+                        if not chunk or chunk == "[DONE]":
+                            continue
+                        choices = json.loads(chunk).get("choices") or []
+                        delta = (choices[0].get("delta") if choices else None) or {}
+                        piece = delta.get("content") or ""
+                        if piece:
+                            content += piece
+                            if "<think" in content:
+                                emit_ok = False
+                            if emit_ok:
+                                on_delta(piece)
+                        for tc in delta.get("tool_calls") or []:
+                            slot = calls.setdefault(
+                                int(tc.get("index") or 0),
+                                {"id": "", "function": {"name": "", "arguments": ""}},
+                            )
+                            if tc.get("id"):
+                                slot["id"] = tc["id"]
+                            fn = tc.get("function") or {}
+                            if fn.get("name"):
+                                slot["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                slot["function"]["arguments"] += fn["arguments"]
+        except httpx.HTTPError as exc:
+            raise LLMUnavailableError(str(exc)) from exc
+        raw: dict[str, Any] = {"role": "assistant", "content": content}
+        if calls:
+            raw["tool_calls"] = [
+                {"id": c["id"], "type": "function", "function": c["function"]}
+                for _, c in sorted(calls.items())
+            ]
+        return _normalize_openai_message(raw)
 
     async def _chat_openai(
         self,
