@@ -64,6 +64,17 @@ from skills.vision_skill import SeeCameraSkill, SeeScreenSkill
 from skills.weather import WeatherSkill
 from skills.websearch import WebSearchSkill
 
+# Never let a pretty glyph kill the app: on legacy/cp1252 consoles (and
+# redirected stdout) rich's output hits charmap encoding, and one un-encodable
+# character (the "●" state chip took down a whole voice session) raises
+# UnicodeEncodeError mid-print. errors="replace" renders those as "?" instead.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+
 console = Console()
 
 
