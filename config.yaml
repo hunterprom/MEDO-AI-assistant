@@ -47,9 +47,16 @@ vision:                             # camera hand-gesture control (sidecar proce
     enabled: true                   # feature available (runtime toggle always starts OFF)
     sensitivity: 2.5                # hand movement -> cursor movement amplification
     ema_alpha: 0.4                  # smoothing (0..1; higher = snappier, lower = steadier)
-    click_debounce_ms: 600          # min gap between gesture clicks
-    hold_frames: 3                  # frames a click pose must hold before it fires
-  gestures:                         # recognized gesture -> routed utterance
+    click_debounce_ms: 600          # min gap between gesture right-clicks
+    hold_frames: 3                  # frames a right-click pose must hold before it fires
+    scroll_gain: 45.0               # victory pose: hand up/down -> scroll speed
+    zoom_gain: 25.0                 # rock pose: hand up/down -> zoom speed (ctrl+wheel)
+    volume_interval_ms: 180         # min gap between volume steps while thumbs-up/open-palm held
+  # NOTE: this build is pointer-only — the gesture->utterance map below is no
+  # longer routed (kept for reference / future re-enable). Pointer poses:
+  #   index=move, pinch=drag/click, victory=scroll, rock=zoom, three=right-click,
+  #   thumbs_up=volume up, open_palm=volume down, fist=exit.
+  gestures:                         # (inactive) recognized gesture -> routed utterance
     thumbs_up: "yes"                # confirm a pending action (safety gate)
     open_palm: "no"                 # cancel
     victory:   "take a screenshot"

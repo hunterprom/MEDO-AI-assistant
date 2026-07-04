@@ -70,8 +70,9 @@ class HudServer:
                 "lat": self._settings.weather.latitude,
                 "lon": self._settings.weather.longitude,
             },
-            # Folder shortcuts bound to the orb dots (centre dot = system drive).
-            "dirs": dirs.user_dirs(),
+            # Folder shortcuts scattered across the orb dots (centre = system
+            # drive; ~100+ real directories, only the curated ones are labelled).
+            "dirs": dirs.sphere_dirs(),
         }
         html = html.replace("__MEDO_CONFIG__", json.dumps(page_config))
         return web.Response(text=html, content_type="text/html")

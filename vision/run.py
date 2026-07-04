@@ -58,6 +58,9 @@ class PointerRunConfig:
     ema_alpha: float = 0.4
     click_debounce_ms: int = 600
     hold_frames: int = 3
+    scroll_gain: float = 45.0
+    zoom_gain: float = 25.0
+    volume_interval_ms: int = 180
 
 
 @dataclass
@@ -100,6 +103,9 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
             ema_alpha=float(p.get("ema_alpha", 0.4)),
             click_debounce_ms=int(p.get("click_debounce_ms", 600)),
             hold_frames=int(p.get("hold_frames", 3)),
+            scroll_gain=float(p.get("scroll_gain", 45.0)),
+            zoom_gain=float(p.get("zoom_gain", 25.0)),
+            volume_interval_ms=int(p.get("volume_interval_ms", 180)),
         ),
     )
     host = r.get("host", "127.0.0.1")

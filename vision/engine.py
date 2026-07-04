@@ -4,10 +4,20 @@ Runs in the vision sidecar process (its own venv, so MediaPipe's numpy<2 pin nev
 touches the voice stack). This build is **pointer-only** — discrete command
 gestures are disabled:
 
-* **Pointer** (ported from v1 jarvis-web): the index fingertip drives the OS
-  cursor — a thumb-to-index pinch left-clicks, three-fingers right-clicks, a
-  stabilized fist exits. Toggled by voice ("pointer on"), the HUD switch, or
-  ``POST :stream_port/pointer`` — and it always boots OFF.
+* **Pointer** (ported from v1 jarvis-web, then expanded): the index fingertip
+  drives the OS cursor. The recognized pose selects the action —
+
+    - index only ............ move the cursor
+    - thumb+index pinch ..... press/hold = drag; a quick tap = left click
+    - two fingers (victory) . scroll (move the hand up/down)
+    - index+pinky (rock) .... zoom (Ctrl+wheel; move the hand up/down)
+    - three fingers ......... right click
+    - thumbs up ............. volume up      (repeats while held)
+    - open palm ............. volume down    (repeats while held)
+    - fist .................. exit pointer mode
+
+  Toggled by voice ("pointer on"), the HUD switch, or ``POST :stream_port/pointer``
+  — and it always boots OFF.
 
 When pointer mode is OFF the camera simply streams the annotated feed; no gesture
 is routed as an utterance. (``on_gesture`` is retained for API compatibility but
@@ -26,13 +36,26 @@ from collections.abc import Callable
 from vision.camera import Camera
 from vision.gestures import (
     FIST,
-    THREE,
     UNKNOWN,
     GestureRecognizer,
     GestureStabilizer,
     index_thumb_pinch,
 )
-from vision.pointer import ClickDebouncer, Ema, PoseHold, to_screen
+from vision.pointer import (
+    DRAG,
+    MOVE,
+    RIGHT_CLICK,
+    SCROLL,
+    VOLUME_DOWN,
+    VOLUME_UP,
+    ZOOM,
+    ClickDebouncer,
+    Ema,
+    PoseHold,
+    ScrollAccumulator,
+    pointer_action,
+    to_screen,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +169,15 @@ class GestureEngine:
                 logger.warning("pointer mode unavailable on this system: %s", exc)
         ema = Ema(getattr(pcfg, "ema_alpha", 0.4)) if pointer_ready else None
         click_gate = ClickDebouncer(getattr(pcfg, "click_debounce_ms", 600))
-        pinch_hold = PoseHold(getattr(pcfg, "hold_frames", 3))
         three_hold = PoseHold(getattr(pcfg, "hold_frames", 3))
+        # Continuous-motion actions (scroll/zoom) and repeatable ones (volume).
+        scroll_acc = ScrollAccumulator(float(getattr(pcfg, "scroll_gain", 45.0)))
+        zoom_acc = ScrollAccumulator(float(getattr(pcfg, "zoom_gain", 25.0)))
+        vol_interval = int(getattr(pcfg, "volume_interval_ms", 180))
+        vol_up_gate = ClickDebouncer(vol_interval)
+        vol_dn_gate = ClickDebouncer(vol_interval)
+        prev_iy: float | None = None   # previous fingertip y, for scroll/zoom deltas
+        pinch_down = False             # is the left button currently held (drag)?
         was_pointer = False
 
         try:
@@ -188,37 +218,93 @@ class GestureEngine:
                 was_pointer = pointer_now
 
                 if pointer_now:
+                    now = time.monotonic()
                     if landmarks is not None and len(landmarks) > 8:
                         tip = landmarks[8]  # index fingertip
+                        iy = float(tip.y)
                         # Frames are already selfie-mirrored when c.flip is on;
                         # only unmirrored cameras need the horizontal flip.
                         px, py = to_screen(
-                            float(tip.x), float(tip.y),
+                            float(tip.x), iy,
                             getattr(pcfg, "sensitivity", 2.5),
                             screen_w, screen_h,
                             mirror_x=not c.flip,
                         )
                         sx, sy = ema.update(px, py)
+                        # A pinch always means drag/click; otherwise the pose picks
+                        # the action (move / scroll / zoom / right-click / volume).
+                        action = pointer_action(gesture, index_thumb_pinch(landmarks))
+                        dy = 0.0 if prev_iy is None else (iy - prev_iy)
+                        if abs(dy) < 0.004:
+                            dy = 0.0  # deadzone: ignore fingertip jitter
                         try:
-                            winmouse.move(int(sx), int(sy))
-                            now = time.monotonic()
-                            # Left click = thumb tip touches index tip, decoupled
-                            # from the other fingers so it fires from the natural
-                            # pointing pose (see gestures.index_thumb_pinch).
-                            if pinch_hold.update(index_thumb_pinch(landmarks)) and click_gate.ready(now):
-                                winmouse.click_left()
-                                last_fired, last_utterance = "pinch", "left click"
-                            if three_hold.update(gesture == THREE) and click_gate.ready(now):
-                                winmouse.click_right()
-                                last_fired, last_utterance = THREE, "right click"
+                            if action == DRAG:
+                                if not pinch_down:
+                                    winmouse.press_left()
+                                    pinch_down = True
+                                    last_fired, last_utterance = "pinch", "drag / click"
+                                winmouse.move(int(sx), int(sy))
+                            else:
+                                if pinch_down:
+                                    winmouse.release_left()
+                                    pinch_down = False
+                                if action == MOVE:
+                                    winmouse.move(int(sx), int(sy))
+                                elif action == SCROLL:
+                                    n = scroll_acc.update(dy)
+                                    if n:
+                                        winmouse.scroll(n)
+                                        last_fired, last_utterance = "victory", "scroll"
+                                elif action == ZOOM:
+                                    n = zoom_acc.update(dy)
+                                    if n:
+                                        winmouse.zoom(n)
+                                        last_fired, last_utterance = "rock", "zoom"
+                                elif action == RIGHT_CLICK:
+                                    if three_hold.update(True) and click_gate.ready(now):
+                                        winmouse.click_right()
+                                        last_fired, last_utterance = "three", "right click"
+                                elif action == VOLUME_UP:
+                                    if vol_up_gate.ready(now):
+                                        winmouse.volume_up()
+                                        last_fired, last_utterance = "thumbs_up", "volume up"
+                                elif action == VOLUME_DOWN:
+                                    if vol_dn_gate.ready(now):
+                                        winmouse.volume_down()
+                                        last_fired, last_utterance = "open_palm", "volume down"
+                                # action == IDLE: hold the cursor still.
+                            # Re-arm the latches/accumulators the moment their pose ends.
+                            if action != RIGHT_CLICK:
+                                three_hold.update(False)
+                            if action != SCROLL:
+                                scroll_acc.reset()
+                            if action != ZOOM:
+                                zoom_acc.reset()
+                            prev_iy = iy
                         except Exception:
                             logger.exception("pointer control failed; disabling")
                             self._pointer = False
+                            pinch_down = False
                     else:
-                        pinch_hold.update(False)
+                        # Hand lost: release any held drag and forget motion history.
+                        if pinch_down:
+                            try:
+                                winmouse.release_left()
+                            except Exception:
+                                pass
+                            pinch_down = False
                         three_hold.update(False)
-                        ema.reset()  # hand lost: don't lerp across the gap
+                        scroll_acc.reset()
+                        zoom_acc.reset()
+                        ema.reset()  # don't lerp across the gap
+                        prev_iy = None
                     if confirmed == FIST:
+                        if pinch_down:
+                            try:
+                                winmouse.release_left()
+                            except Exception:
+                                pass
+                            pinch_down = False
                         self.set_pointer(False)
                 # Command gestures are intentionally disabled: this build is
                 # pointer-only. When pointer mode is OFF the camera just streams

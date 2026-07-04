@@ -399,7 +399,7 @@
         <h2>OPTICAL FEED</h2>
         <img id="cam-img" alt="camera" style="display:none" />
         <div id="cam-off" class="mono">FEED OFFLINE</div>
-        <div id="cam-legend">POINTER MODE · INDEX FINGERTIP = MOVE CURSOR · THUMB+INDEX PINCH = LEFT CLICK<br/>THREE FINGERS = RIGHT CLICK · FIST = EXIT POINTER</div>
+        <div id="cam-legend">POINTER · INDEX = MOVE · PINCH = DRAG/CLICK · TWO FINGERS = SCROLL · INDEX+PINKY = ZOOM<br/>THREE FINGERS = RIGHT CLICK · THUMBS UP = VOL+ · OPEN PALM = VOL− · FIST = EXIT</div>
       </div>
     </div>
   </div>
@@ -430,7 +430,7 @@
         <button class="toggle on" disabled><span class="knob"></span></button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Pointer mode</span><span class="desc">GESTURE MOUSE — INDEX MOVES · THUMB+INDEX PINCH CLICKS · FIST EXITS</span></div>
+        <div class="info"><span class="name">Pointer mode</span><span class="desc">GESTURE MOUSE — MOVE · PINCH-DRAG · SCROLL · ZOOM · RIGHT-CLICK · VOLUME · FIST EXITS</span></div>
         <button class="toggle" id="cfg-pointer"><span class="knob"></span></button>
       </div>
       <div class="setting">
@@ -490,7 +490,7 @@
   $('channel-label').textContent = `SECURE CHANNEL · ${(CFG.name || 'MEDO').toUpperCase()}`;
   const wakePhrase = (CFG.wakePhrase || 'hey jarvis').toUpperCase();
   $('wake-desc').textContent = `WAKE WORD: "${wakePhrase}"`;
-  $('miclabel').textContent = `SAY "${wakePhrase}" OR TYPE A COMMAND`;
+  $('miclabel').textContent = `SAY "${wakePhrase}", TAP TO WAKE, OR TYPE`;
 
   /* ---- clock ---- */
   const DAYS = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
@@ -513,7 +513,13 @@
   $('tab-core').onclick = () => go('core');
   $('tab-comms').onclick = () => go('comms');
   $('tab-config').onclick = () => go('config');
-  $('micbtn').onclick = () => go('comms');
+  async function triggerWake() {
+    try {
+      const r = await fetch(`${API}/wake`, { method: 'POST' });
+      log(r.ok ? 'WAKE (manual)' : 'WAKE — voice mode not running');
+    } catch { log('WAKE — API offline'); }
+  }
+  $('micbtn').onclick = () => { triggerWake(); go('comms'); };
 
   /* ---- waveform bars (24, staggered like the design) ---- */
   for (let i = 0; i < 24; i++) {
@@ -738,7 +744,7 @@
   }
   $('dev-scan').onclick = $('cfg-scan').onclick = () => { scan = !scan; applyScan(); };
   applyScan();
-  $('dev-voice').onclick = () => go('comms');
+  $('dev-voice').onclick = () => { triggerWake(); go('comms'); };
 
   /* ---- appearance: accent color themes ----
      The whole HUD (and the orb canvas) is recolored with a single hue-rotate/
@@ -819,6 +825,8 @@
   const connectBtn = $('connect-btn');
   let curProvider = 'ollama';
   let firstStatus = true;
+  let keySaved = false;       // is an online API key remembered on this PC?
+  let savedBaseUrl = '';      // the remembered OpenAI-compatible base URL
 
   const PLACEHOLDER_RE = /^(loading|no models|connect|api offline|—)/i;
 
@@ -828,6 +836,10 @@
     onlineFields.classList.toggle('show', curProvider === 'openai');
     localHint.style.display = curProvider === 'ollama' ? '' : 'none';
     connectBtn.textContent = curProvider === 'openai' ? 'CONNECT' : 'APPLY';
+    if (curProvider === 'openai') {
+      apiKeyInput.placeholder = keySaved ? '•••••••••• saved on this PC — leave blank to keep' : 'sk-…';
+      if (savedBaseUrl && !apiBaseInput.value) apiBaseInput.value = savedBaseUrl;
+    }
   }
   function fillModels(models, active) {
     modelSel.innerHTML = '';
@@ -845,7 +857,14 @@
   async function loadModels() {
     try {
       const d = await (await fetch(`${API}/status`)).json();
-      if (firstStatus) { reflectProvider(d.provider || 'ollama'); firstStatus = false; }
+      keySaved = !!d.has_api_key;
+      savedBaseUrl = d.openai_base_url || '';
+      if (savedBaseUrl && document.activeElement !== apiBaseInput) apiBaseInput.value = savedBaseUrl;
+      if (firstStatus) {
+        reflectProvider(d.provider || 'ollama');
+        if (keySaved && (d.provider || 'ollama') === 'openai') { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED'; }
+        firstStatus = false;
+      }
       if (document.activeElement !== modelSel) fillModels(d.models, d.model);  // don't yank an open dropdown
       $('model-desc').textContent = `ACTIVE BRAIN · ${(d.provider || 'ollama').toUpperCase()}`;
     } catch { modelSel.innerHTML = '<option>api offline</option>'; }
@@ -857,7 +876,11 @@
       log(`MODEL → ${modelSel.value}`);
     } catch { }
   };
-  for (const b of providerSeg.querySelectorAll('button')) b.onclick = () => { reflectProvider(b.dataset.prov); connStatus.className = ''; connStatus.textContent = ''; };
+  for (const b of providerSeg.querySelectorAll('button')) b.onclick = () => {
+    reflectProvider(b.dataset.prov);
+    connStatus.className = ''; connStatus.textContent = '';
+    if (curProvider === 'openai' && keySaved) { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED · LEAVE BLANK TO KEEP'; }
+  };
   connectBtn.onclick = async () => {
     const body = { provider: curProvider };
     if (curProvider === 'openai') {
@@ -932,11 +955,12 @@
     const otherDirs = DIRS.filter(d => !d.center);
     if (centerDir) nodes[0].dir = centerDir;
     for (let i = 0; i < otherDirs.length; i++) {
-      const yy = 1 - (i + 0.5) / otherDirs.length * 2;      // -1..1
+      const yy = 1 - (i + 0.5) / otherDirs.length * 2;      // -1..1 (even spread)
       const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
       const phi = i * 2.399963229;                          // golden angle
-      const rad = 0.74;
-      nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: 11, br: 1, dir: otherDirs[i] });
+      const prim = !!otherDirs[i].primary;
+      const rad = prim ? 0.78 : 0.58 + (i % 5) * 0.075;     // shells so 100+ dots don't pile up
+      nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: prim ? 11 : 6, br: prim ? 1 : 0.7, dir: otherDirs[i] });
     }
     const hotspots = [];   // rebuilt each frame: {x,y,r,key,label,path} in client px
 
@@ -1015,20 +1039,23 @@
       for (const fd of frameDirs) {
         if (fd.depth < 0.42) continue;                          // hidden behind the sphere
         const alpha = Math.min(1, (fd.depth - 0.42) / 0.28);
-        const ringR = Math.min(46, Math.max(13, fd.rad * 0.8));
-        ctx.strokeStyle = `rgba(150,220,255,${(0.55 * alpha).toFixed(3)})`;
-        ctx.lineWidth = 2;
+        const prim = !!fd.dir.primary;
+        const ringR = prim ? Math.min(46, Math.max(15, fd.rad * 0.85)) : Math.max(9, fd.rad * 0.7);
+        ctx.strokeStyle = `rgba(150,220,255,${((prim ? 0.6 : 0.3) * alpha).toFixed(3)})`;
+        ctx.lineWidth = prim ? 2 : 1;
         ctx.beginPath(); ctx.arc(fd.px, fd.py, ringR, 0, Math.PI * 2); ctx.stroke();
-        const label = fd.dir.label || fd.dir.key || '';
-        ctx.fillStyle = `rgba(0,0,0,${(0.5 * alpha).toFixed(3)})`;
-        ctx.fillText(label, fd.px + 1, fd.py + ringR + 23);     // shadow for legibility
-        ctx.fillStyle = `rgba(205,238,255,${(0.9 * alpha).toFixed(3)})`;
-        ctx.fillText(label, fd.px, fd.py + ringR + 22);
+        if (prim) {                                             // label only the curated folders
+          const label = fd.dir.label || '';
+          ctx.fillStyle = `rgba(0,0,0,${(0.5 * alpha).toFixed(3)})`;
+          ctx.fillText(label, fd.px + 1, fd.py + ringR + 23);   // shadow for legibility
+          ctx.fillStyle = `rgba(205,238,255,${(0.9 * alpha).toFixed(3)})`;
+          ctx.fillText(label, fd.px, fd.py + ringR + 22);
+        }
         hotspots.push({
           x: rect.left + fd.px * scaleX,
           y: rect.top + fd.py * scaleY,
-          r: Math.max(15, ringR * scaleX),
-          key: fd.dir.key, label, path: fd.dir.path,
+          r: Math.max(prim ? 15 : 10, ringR * scaleX),
+          key: fd.dir.key, label: fd.dir.label, path: fd.dir.path,
         });
       }
       ctx.textAlign = 'start';

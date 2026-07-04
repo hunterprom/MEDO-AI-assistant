@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import threading
 
 from rich.console import Console
 
@@ -260,7 +261,7 @@ async def run_repl(
 
 async def run_voice(
     settings: Settings, router: Router, sm: StateMachine, announcer: Announcer,
-    ui: ConsoleUI, log: LatencyLog,
+    ui: ConsoleUI, log: LatencyLog, wake_event: threading.Event | None = None,
 ) -> None:
     """Hands-free loop: wake word -> record -> STT -> route -> TTS.
 
@@ -268,6 +269,11 @@ async def run_voice(
     companion API, if serving) stays responsive. After a reply that asks for
     confirmation, we record again *without* the wake word so "yes" works
     naturally. Every stage is timed into a :class:`TurnTimings`.
+
+    ``wake_event`` (set by ``POST /wake``) is an escape hatch: while waiting for
+    the wake word we also poll it, so the HUD can start a turn without the phrase
+    — which is how you break out of STANDING BY when the pretrained wake word
+    doesn't match what you say.
     """
     import time
 
@@ -293,8 +299,15 @@ async def run_voice(
 
     def wait_for_wake(mic: Microphone) -> None:
         wake.reset()
-        while not wake.triggered(mic.read_frame()):
-            pass
+        if wake_event is not None:
+            wake_event.clear()  # ignore any press that arrived mid-turn
+        while True:
+            if wake_event is not None and wake_event.is_set():
+                wake_event.clear()
+                console.print("[dim](woken from the HUD)[/dim]")
+                return
+            if wake.triggered(mic.read_frame()):  # ~80 ms/frame, so /wake lands fast
+                return
 
     async def speak(text: str) -> float:
         """Synthesize and play; returns synth time (ms) for instrumentation."""
@@ -408,11 +421,16 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         await respond(router, sm, ui, log, once)
         return
 
+    # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
+    # returns immediately — so you can start a turn from the HUD without saying
+    # the "hey jarvis" phrase (fixes being stuck in STANDING BY).
+    wake_event = threading.Event()
+
     remote: RemoteServer | None = None
     # The vision sidecar POSTs gestures to the companion API, so enabling vision
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
-        remote = RemoteServer(settings, router, sm, persist_secrets=True)
+        remote = RemoteServer(settings, router, sm, persist_secrets=True, wake_event=wake_event)
         await remote.start()
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "
@@ -432,7 +450,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         if voice:
             # Voice pipeline; the companion API (if started) serves alongside it.
             try:
-                await run_voice(settings, router, sm, announcer, ui, log)
+                await run_voice(settings, router, sm, announcer, ui, log, wake_event=wake_event)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 raise
             except Exception as exc:

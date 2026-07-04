@@ -80,8 +80,11 @@ class PointerConfig(BaseModel):
     enabled: bool = True
     sensitivity: float = 2.5            # hand range → screen range amplification
     ema_alpha: float = 0.4              # 0..1 smoothing (higher = snappier)
-    click_debounce_ms: int = 600        # min gap between gesture clicks
-    hold_frames: int = 3                # frames a click pose must hold to fire
+    click_debounce_ms: int = 600        # min gap between gesture right-clicks
+    hold_frames: int = 3                # frames a right-click pose must hold to fire
+    scroll_gain: float = 45.0           # hand vertical motion → wheel notches (victory)
+    zoom_gain: float = 25.0             # hand vertical motion → ctrl+wheel zoom (rock)
+    volume_interval_ms: int = 180       # min gap between volume steps while held
 
 
 class VisionConfig(BaseModel):

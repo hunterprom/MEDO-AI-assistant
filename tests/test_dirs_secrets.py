@@ -6,6 +6,7 @@ helpers, plus the companion API's /open + /dirs endpoints over real HTTP.
 
 from __future__ import annotations
 
+import pathlib
 from collections.abc import AsyncIterator
 
 import pytest
@@ -37,6 +38,28 @@ def test_resolve_only_returns_whitelisted_keys():
     assert dirs.resolve("../../etc/passwd") is None
     assert dirs.resolve("") is None
     assert dirs.resolve("definitely-not-a-key") is None
+
+
+def test_sphere_dirs_scatters_many_dots_with_one_center():
+    s = dirs.sphere_dirs()
+    assert len(s) >= len(dirs.user_dirs())        # at least the curated set
+    assert sum(1 for d in s if d["center"]) == 1  # exactly one centre dot
+    assert all("primary" in d for d in s)
+    # curated folders are the labelled (primary) ones
+    assert any(d["primary"] for d in s)
+
+
+def test_sphere_dirs_respects_limit():
+    assert len(dirs.sphere_dirs(limit=5)) <= 5
+
+
+def test_sphere_path_key_resolves_and_traversal_still_blocked():
+    s = dirs.sphere_dirs()
+    extra = next((d for d in s if not d["primary"]), None)
+    if extra is not None:                         # only if this machine has sub-dirs
+        assert dirs.resolve(extra["key"]) == pathlib.Path(extra["path"])
+    assert dirs.resolve("/etc/shadow") is None
+    assert dirs.resolve("../../secret") is None
 
 
 # --- local secrets ----------------------------------------------------------
@@ -106,3 +129,28 @@ async def test_open_known_key_launches_explorer(api, monkeypatch):
     assert resp.status == 200
     assert (await resp.json())["ok"] is True
     assert "path" in opened
+
+
+@pytest.mark.asyncio
+async def test_wake_returns_409_when_voice_not_running(api):
+    # The api fixture builds a server with no wake_event (voice off).
+    resp = await api.post("/wake")
+    assert resp.status == 409
+
+
+@pytest.mark.asyncio
+async def test_wake_sets_event_when_voice_running():
+    import threading
+
+    ev = threading.Event()
+    server = RemoteServer(
+        load_settings(), router=None, sm=StateMachine(EventBus()), wake_event=ev  # type: ignore[arg-type]
+    )
+    client = TestClient(TestServer(server.build_app()))
+    await client.start_server()
+    try:
+        resp = await client.post("/wake")
+        assert resp.status == 200
+        assert ev.is_set()
+    finally:
+        await client.close()

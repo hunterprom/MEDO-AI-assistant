@@ -15,6 +15,7 @@ Model/provider endpoints let clients switch the LLM at runtime.
                     "model"?}        -> {"ok", "provider", "model", "models"}
     GET  /dirs            -> {"dirs": [{"key", "label", "path", "center"}, …]}
     POST /open {"key": …} -> {"ok", "path"}   (opens a folder in the file explorer)
+    POST /wake            -> {"ok": true}      (start a voice turn without the wake word)
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -29,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 
 import psutil
 from aiohttp import web
@@ -76,6 +78,7 @@ class RemoteServer:
         sm: StateMachine,
         *,
         persist_secrets: bool = False,
+        wake_event: threading.Event | None = None,
     ) -> None:
         self._settings = settings
         self._router = router
@@ -83,6 +86,9 @@ class RemoteServer:
         # When True, a /provider switch writes the key/model to the git-ignored
         # secrets file so it survives a restart. Off by default (and in tests).
         self._persist_secrets = persist_secrets
+        # Set by POST /wake to break the voice loop out of STANDING BY without
+        # the wake word. None when voice mode isn't running.
+        self._wake_event = wake_event
         self._runner: web.AppRunner | None = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
@@ -102,6 +108,7 @@ class RemoteServer:
         app.router.add_post("/provider", self._handle_set_provider)
         app.router.add_get("/dirs", self._handle_dirs)
         app.router.add_post("/open", self._handle_open)
+        app.router.add_post("/wake", self._handle_wake)
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
@@ -220,6 +227,10 @@ class RemoteServer:
                 "model": self._router.model,
                 "models": models,
                 "state": self._sm.state.value,
+                # Let the HUD show what's remembered. The key itself is never
+                # returned — only whether one is stored locally.
+                "openai_base_url": self._settings.llm.openai_base_url,
+                "has_api_key": bool(self._settings.llm.api_key),
             }
         )
 
@@ -290,9 +301,21 @@ class RemoteServer:
             {"ok": True, "provider": provider, "model": model, "models": models}
         )
 
+    async def _handle_wake(self, request: web.Request) -> web.Response:
+        """Start a voice turn without the wake word (HUD "wake" button).
+
+        Frees the assistant from STANDING BY when the pretrained wake phrase
+        doesn't match what the user says. 409 if voice mode isn't running.
+        """
+        if self._wake_event is None:
+            return _error(409, "voice mode is not running")
+        self._wake_event.set()
+        logger.info("manual wake requested via companion API")
+        return web.json_response({"ok": True})
+
     async def _handle_dirs(self, request: web.Request) -> web.Response:
         """Folder shortcuts for the HUD sphere dots (labels + resolved paths)."""
-        return web.json_response({"dirs": dirs.user_dirs()})
+        return web.json_response({"dirs": dirs.sphere_dirs()})
 
     async def _handle_open(self, request: web.Request) -> web.Response:
         """Open a whitelisted folder shortcut in the OS file explorer.
