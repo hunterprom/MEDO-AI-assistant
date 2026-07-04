@@ -90,7 +90,18 @@ class Router:
         #: Rolling context so follow-ups ("and tomorrow?") resolve.
         self.conversation = ConversationMemory(settings.memory.max_turns)
         #: Long-term user facts, injected into the system prompt each LLM turn.
-        self.facts = FactsStore(settings.memory.db_path)
+        #: With an embed model configured, facts are ranked semantically against
+        #: the utterance (local Ollama embeddings); otherwise newest-N.
+        embedder = None
+        if settings.memory.embed_model:
+            from core.embeddings import embed_texts
+
+            embed_model, embed_host = settings.memory.embed_model, settings.llm.host
+
+            def embedder(texts):  # noqa: E731 - tiny closure over config
+                return embed_texts(texts, embed_model, embed_host)
+
+        self.facts = FactsStore(settings.memory.db_path, embedder)
 
     @property
     def llm(self) -> OllamaClient:
@@ -192,7 +203,7 @@ class Router:
         tools = build_tools(self._registry)
         try:
             facts = await asyncio.to_thread(
-                self.facts.recent, self._settings.memory.max_facts
+                self.facts.relevant, text, self._settings.memory.max_facts
             )
         except Exception:  # a broken facts DB must never take down the LLM path
             logger.exception("could not load remembered facts")

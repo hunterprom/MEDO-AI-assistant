@@ -203,7 +203,10 @@ class VisionLLMConfig(BaseModel):
 class MemoryConfig(BaseModel):
     db_path: str = "jarvis.db"
     max_turns: int = 10
-    max_facts: int = 20                 # newest facts injected into the system prompt
+    max_facts: int = 20                 # facts injected into the system prompt
+    # Local Ollama embedding model for semantic fact recall ("dentist" finds
+    # "my dentist is Dr. ..."). Empty string disables -> newest-N as before.
+    embed_model: str = "nomic-embed-text"
 
 
 class LoggingConfig(BaseModel):
