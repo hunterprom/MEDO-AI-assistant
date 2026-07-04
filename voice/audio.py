@@ -61,6 +61,29 @@ def resolve_input_device(device: int | str | None):
     )
 
 
+def normalize_peak(
+    audio: np.ndarray,
+    target: float = 0.6,
+    min_peak: float = 1e-4,
+    max_gain: float = 25.0,
+) -> np.ndarray:
+    """Scale a float waveform so its peak sits at ``target`` (quiet-mic rescue).
+
+    Webcam/onboard mics often record speech peaking at 0.01–0.05, which hurts
+    Whisper accuracy. Boosting the clip to a healthy peak costs nothing when the
+    audio is already loud (it can also attenuate). ``min_peak`` skips silent
+    clips entirely, and ``max_gain`` (~+28 dB) caps the boost so a clip that
+    barely crossed the recording gate — a cough, a chair squeak — can't be
+    amplified into loud garbage that Whisper hallucinates words from.
+    """
+    if audio.size == 0:
+        return audio
+    peak = float(np.max(np.abs(audio)))
+    if peak < min_peak:
+        return audio
+    return (audio * min(target / peak, max_gain)).astype(np.float32)
+
+
 def frame_rms(frame: np.ndarray) -> float:
     """Root-mean-square level of an int16 frame, normalized to 0.0–1.0."""
     if frame.size == 0:

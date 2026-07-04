@@ -113,7 +113,11 @@ audio:                              # M1
   input_device: "FHD Webcam"
   output_device: null
   sample_rate: 16000
-  silence_threshold: 0.015          # RMS below this counts as silence
+  # RMS below this counts as silence (speech onset gate). Quiet webcam/onboard
+  # mics peak at only a few percent — 0.015 was above their speech level, so
+  # recording never "started" and MEDO seemed deaf after waking. The adaptive
+  # floor (ambient*2.5) still raises this automatically in noisy rooms.
+  silence_threshold: 0.006
   silence_duration_s: 1.0           # stop recording after this much silence
 
 safety:                             # M2

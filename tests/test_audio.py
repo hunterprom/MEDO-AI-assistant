@@ -90,3 +90,32 @@ def test_ambient_noise_alone_never_triggers_onset():
         mic, silence_threshold=0.01, silence_duration_s=0.5, start_timeout_s=1.0
     )
     assert audio.size == 0
+
+
+def test_normalize_peak_boosts_quiet_and_caps_loud():
+    from voice.audio import normalize_peak
+
+    quiet = np.array([0.02, -0.05, 0.03], dtype=np.float32)    # webcam-mic level
+    boosted = normalize_peak(quiet, target=0.6)
+    assert abs(float(np.max(np.abs(boosted))) - 0.6) < 1e-6
+    loud = np.array([0.95, -0.9], dtype=np.float32)
+    assert abs(float(np.max(np.abs(normalize_peak(loud, target=0.6)))) - 0.6) < 1e-6
+
+
+def test_normalize_peak_gain_is_capped():
+    from voice.audio import normalize_peak
+
+    # A clip that barely crossed the recording gate must not be blasted all the
+    # way to target: the gain stops at max_gain so noise stays quiet.
+    faint = np.array([0.002, -0.001], dtype=np.float32)
+    out = normalize_peak(faint, target=0.6, max_gain=25.0)
+    assert abs(float(np.max(np.abs(out))) - 0.05) < 1e-6   # 0.002 * 25
+
+
+def test_normalize_peak_leaves_silence_and_empty_alone():
+    from voice.audio import normalize_peak
+
+    silence = np.zeros(100, dtype=np.float32)
+    assert np.array_equal(normalize_peak(silence), silence)  # no noise amplification
+    empty = np.zeros(0, dtype=np.float32)
+    assert normalize_peak(empty).size == 0

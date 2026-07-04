@@ -336,8 +336,9 @@ class RemoteServer:
         """Choose the microphone the wake word listens on, at runtime.
 
         Accepts an int index, a name substring, or null (system default). The
-        change is picked up when the voice loop next reopens the mic; poking the
-        wake event makes that happen promptly instead of waiting for a wake.
+        voice loop's wake wait polls this setting every frame (~80 ms) and
+        reopens the mic itself — no wake/interrupt signal is abused for it, so
+        switching mics never cuts a reply or triggers a phantom listen.
         """
         try:
             payload = await request.json()
@@ -355,14 +356,12 @@ class RemoteServer:
             from core.config import save_audio_input
 
             save_audio_input(device)
-        if self._wake_event is not None:
-            self._wake_event.set()  # reopen the mic on the new device now
         logger.info("audio input device set to %r via companion API", device)
         return web.json_response({"ok": True, "device": device})
 
     async def _handle_dirs(self, request: web.Request) -> web.Response:
         """Folder shortcuts for the HUD sphere dots (labels + resolved paths)."""
-        return web.json_response({"dirs": dirs.sphere_dirs()})
+        return web.json_response({"dirs": await asyncio.to_thread(dirs.sphere_dirs)})
 
     async def _handle_open(self, request: web.Request) -> web.Response:
         """Open a whitelisted folder shortcut in the OS file explorer.
@@ -377,12 +376,13 @@ class RemoteServer:
 
         key = str(payload.get("key") or "").strip()
         path_str = str(payload.get("path") or "").strip()
+        # to_thread: both validators hit the disk (exists / cold whitelist BFS).
         if path_str:  # a search result: validate it's under an allowed root
-            path = dirs.resolve_path(path_str)
+            path = await asyncio.to_thread(dirs.resolve_path, path_str)
             if path is None:
                 return _error(403, "path not allowed or does not exist")
         else:
-            path = dirs.resolve(key)
+            path = await asyncio.to_thread(dirs.resolve, key)
             if path is None:
                 return _error(404, f"unknown folder shortcut {key!r}")
         opened = await asyncio.to_thread(dirs.open_path, path)
@@ -462,23 +462,22 @@ class RemoteServer:
 def _web_search(query: str, max_results: int = 8) -> list[dict] | None:
     """DuckDuckGo results as ``[{"title","url","snippet"}]`` (None if unreachable).
 
-    Shares the ddgs backend the web_search skill uses, but returns raw results for
-    the HUD to render + open, rather than an LLM summary.
+    Delegates to the web_search skill's shared ddgs accessor — one place to fix
+    when the ddgs API changes — and just maps fields for the HUD.
     """
-    try:
-        from ddgs import DDGS
+    from skills.websearch import ddg_text_search
 
-        with DDGS() as ddgs:
-            return [
-                {
-                    "title": r.get("title", ""),
-                    "url": r.get("href", "") or r.get("url", ""),
-                    "snippet": r.get("body", ""),
-                }
-                for r in ddgs.text(query, max_results=max_results)
-            ]
-    except Exception:  # offline, rate-limited, parser change, ddgs missing
+    results = ddg_text_search(query, max_results)
+    if results is None:
         return None
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("href", "") or r.get("url", ""),
+            "snippet": r.get("body", ""),
+        }
+        for r in results
+    ]
 
 
 def _error(status: int, message: str) -> web.Response:

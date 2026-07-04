@@ -277,7 +277,7 @@ async def run_voice(
     """
     import time
 
-    from voice.audio import Microphone, Speaker, frame_rms, record_until_silence
+    from voice.audio import Microphone, frame_rms, normalize_peak, record_until_silence
     from voice.stt import Transcriber
     from voice.tts import TextToSpeech
     from voice.wakeword import WakeWord
@@ -297,28 +297,35 @@ async def run_voice(
                 f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
                 f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
             )
-    speaker = Speaker(settings.audio.output_device)
+    def wait_for_wake(mic: Microphone, opened_device) -> str:
+        """Block until something should end the wait; returns why.
 
-    def wait_for_wake(mic: Microphone) -> None:
+        ``"go"``     — wake word heard, or a manual /wake / barge-in carried over.
+        ``"reopen"`` — the input device changed in settings (HUD mic picker);
+                       the caller must reopen the mic on the new device.
+
+        NB: wake_event is NOT cleared on entry — a /wake or /interrupt fired
+        during the previous turn should carry over and start listening now.
+        """
         wake.reset()
-        # NB: we do NOT clear wake_event here — a /wake or /interrupt that fired
-        # during the previous turn should carry over and start listening now
-        # (barge-in). It's cleared only when consumed, just below.
         # Report the peak wake score + mic level every few seconds so it's obvious
         # whether the mic is even hearing you and how close the phrase gets to the
         # threshold — the two things that keep it "stuck on STANDING BY".
         peak_score = peak_rms = 0.0
         last_report = time.monotonic()
         while True:
+            if settings.audio.input_device != opened_device:
+                vlog.info("input device changed — reopening the microphone")
+                return "reopen"
             if wake_event is not None and wake_event.is_set():
                 wake_event.clear()
                 console.print("[dim](woken from the HUD)[/dim]")
-                return
+                return "go"
             frame = mic.read_frame()               # ~80 ms/frame, so /wake lands fast
             score = wake.predict(frame)
             if score >= wake.threshold:
                 vlog.info("wake word detected (score %.2f)", score)
-                return
+                return "go"
             peak_score = max(peak_score, score)
             peak_rms = max(peak_rms, frame_rms(frame))
             now = time.monotonic()
@@ -327,41 +334,100 @@ async def run_voice(
                           peak_score, wake.threshold, peak_rms)
                 if peak_rms < 0.004:
                     console.print("[yellow](microphone seems silent — check the input "
-                                  "device/mute, or set audio.input_device in config.yaml)[/yellow]")
+                                  "device/mute, or pick a mic in the HUD CONFIG tab)[/yellow]")
                 peak_score = peak_rms = 0.0
                 last_report = now
 
+    # Set by the interruptible player when the user barges in mid-reply; the main
+    # loop reads it to skip the wake word and listen immediately.
+    barge_in = {"hit": False}
+
+    def play_interruptible(wav, sr: int) -> bool:
+        """Play a reply while watching the mic; True if the user barged in.
+
+        During playback the mic keeps running through the wake model, so saying
+        the wake phrase over MEDO's voice stops it mid-sentence (as does the
+        HUD's interrupt button via ``wake_event``). Wake-word-gated on purpose:
+        a plain energy gate would trip on MEDO's own audio from the speakers.
+        Falls back to blocking playback if the mic can't be opened.
+        """
+        import sounddevice as sd
+
+        sd.play(wav, samplerate=sr, device=settings.audio.output_device)
+        stream = sd.get_stream()
+        interrupted = False
+        try:
+            wake.reset()
+            with Microphone(settings.audio.sample_rate,
+                            device=settings.audio.input_device) as m:
+                while stream.active:
+                    frame = m.read_frame()  # 80 ms cadence paces this loop
+                    if wake_event is not None and wake_event.is_set():
+                        wake_event.clear()
+                        interrupted = True
+                        break
+                    if wake.predict(frame) >= wake.threshold:
+                        interrupted = True
+                        break
+        except Exception:  # mic busy/unavailable — degrade to plain playback
+            logging.getLogger("voice").debug("barge-in watcher failed", exc_info=True)
+            sd.wait()
+            return False
+        finally:
+            wake.reset()
+        if interrupted:
+            sd.stop()
+            vlog.info("barge-in: reply interrupted, listening")
+        return interrupted
+
     async def speak(text: str) -> float:
-        """Synthesize and play; returns synth time (ms) for instrumentation."""
+        """Synthesize and play (interruptibly); returns synth time (ms)."""
         if tts is None:  # TTS unavailable — reply is shown, not spoken.
             return 0.0
         t0 = time.perf_counter()
         wav, sr = await asyncio.to_thread(tts.synthesize, text)
         tts_ms = (time.perf_counter() - t0) * 1000
-        await asyncio.to_thread(speaker.play, wav, sr)
+        if await asyncio.to_thread(play_interruptible, wav, sr):
+            barge_in["hit"] = True
         return tts_ms
 
     async def capture(require_wake: bool) -> tuple[np.ndarray, float]:
         """Open the mic, optionally wait for the wake word, record a phrase.
 
-        Returns the audio plus the wake→listen latency (ms)."""
-        mic = Microphone(settings.audio.sample_rate, device=settings.audio.input_device)
-        try:
-            mic.open()
-            if require_wake:
-                await asyncio.to_thread(wait_for_wake, mic)
-            t_wake = time.perf_counter()
-            await sm.transition(AssistantState.LISTENING)
-            wake_to_listen_ms = (time.perf_counter() - t_wake) * 1000
-            audio = await asyncio.to_thread(
-                record_until_silence,
-                mic,
-                silence_threshold=settings.audio.silence_threshold,
-                silence_duration_s=settings.audio.silence_duration_s,
-            )
-            return audio, wake_to_listen_ms
-        finally:
-            mic.close()
+        Returns the audio plus the wake→listen latency (ms). Reopens on the new
+        device when the HUD mic picker changes settings mid-wait, and falls back
+        to the system default when a picked device can't be opened — so a bad
+        pick degrades instead of killing voice mode.
+        """
+        while True:
+            device = settings.audio.input_device
+            mic = Microphone(settings.audio.sample_rate, device=device)
+            try:
+                mic.open()
+            except Exception as exc:
+                if device is None:
+                    raise  # even the system default is broken — that's fatal
+                vlog.warning("mic %r failed (%s) — falling back to system default",
+                             device, exc)
+                settings.audio.input_device = None
+                continue
+            try:
+                if require_wake:
+                    why = await asyncio.to_thread(wait_for_wake, mic, device)
+                    if why == "reopen":
+                        continue  # device changed under us — reopen on the new one
+                t_wake = time.perf_counter()
+                await sm.transition(AssistantState.LISTENING)
+                wake_to_listen_ms = (time.perf_counter() - t_wake) * 1000
+                audio = await asyncio.to_thread(
+                    record_until_silence,
+                    mic,
+                    silence_threshold=settings.audio.silence_threshold,
+                    silence_duration_s=settings.audio.silence_duration_s,
+                )
+                return audio, wake_to_listen_ms
+            finally:
+                mic.close()
 
     # Timer/reminder announcements should be spoken, not just printed.
     announcer.speak = speak
@@ -380,7 +446,9 @@ async def run_voice(
 
         await sm.transition(AssistantState.THINKING)
         t0 = time.perf_counter()
-        text = await asyncio.to_thread(stt.transcribe, audio)
+        # Quiet mics (webcam/onboard) record speech peaking at a few percent;
+        # normalizing before STT noticeably improves Whisper on those clips.
+        text = await asyncio.to_thread(stt.transcribe, normalize_peak(audio))
         stt_ms = (time.perf_counter() - t0) * 1000
         if not text.strip():
             console.print("[dim](couldn't make that out)[/dim]")
@@ -398,8 +466,10 @@ async def run_voice(
             stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
         ))
         ui.turn(result, log.turns[-1])
-        # If MEDO just asked "are you sure?", listen for the yes/no without a wake.
-        require_wake = not router.awaiting_confirmation
+        # Listen again immediately (no wake word) when MEDO asked "are you sure?"
+        # or when the user just interrupted the reply — they clearly want to talk.
+        require_wake = not (router.awaiting_confirmation or barge_in["hit"])
+        barge_in["hit"] = False
 
 
 async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> None:

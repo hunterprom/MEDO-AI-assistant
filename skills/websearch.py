@@ -24,6 +24,22 @@ _OFFLINE = "I can't search the web right now. I appear to be offline."
 _MAX_RESULTS = 5
 
 
+def ddg_text_search(query: str, max_results: int = _MAX_RESULTS) -> list[dict[str, str]] | None:
+    """Raw DuckDuckGo text results (None when unreachable/offline).
+
+    The single ddgs entry point — this skill summarizes them for voice, and the
+    companion API's /search/web serves them to the HUD. When the ddgs API or
+    parser changes again, this is the only place to fix.
+    """
+    try:
+        from ddgs import DDGS
+
+        with DDGS() as ddgs:
+            return list(ddgs.text(query, max_results=max_results))
+    except Exception:  # network down, rate limit, parser change, etc.
+        return None
+
+
 class WebSearchSkill(Skill):
     name = "web_search"
     description = "Search the web and summarize the results for a query."
@@ -37,13 +53,7 @@ class WebSearchSkill(Skill):
         self._summarize = summarize
 
     def _search(self, query: str) -> list[dict[str, str]] | None:
-        try:
-            from ddgs import DDGS
-
-            with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=_MAX_RESULTS))
-        except Exception:  # network down, rate limit, parser change, etc.
-            return None
+        return ddg_text_search(query, _MAX_RESULTS)
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}

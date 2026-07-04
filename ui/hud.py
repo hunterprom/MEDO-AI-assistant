@@ -72,7 +72,10 @@ class HudServer:
             },
             # Folder shortcuts scattered across the orb dots (centre = system
             # drive; hundreds of real directories, only curated ones are labelled).
-            "dirs": dirs.sphere_dirs(self._settings.hud.max_dir_dots),
+            # to_thread: this walks the filesystem — never block the event loop.
+            "dirs": await asyncio.to_thread(
+                dirs.sphere_dirs, self._settings.hud.max_dir_dots
+            ),
         }
         html = html.replace("__MEDO_CONFIG__", json.dumps(page_config))
         return web.Response(text=html, content_type="text/html")

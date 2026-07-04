@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -212,23 +210,20 @@ def resolve(key: str) -> Path | None:
 
 
 def open_path(path: Path) -> bool:
-    """Open ``path`` in the OS file explorer. Returns True on a clean launch.
+    """Open ``path`` with the OS default handler. True on a clean launch.
 
-    Windows uses ``explorer`` (``os.startfile`` also works but returns nothing to
-    check); macOS uses ``open``; Linux uses ``xdg-open``. Never raises.
+    Thin never-raises wrapper around :func:`core.platform.open_path` (the one
+    OS-dispatch table, shared with the files skill): folders open in the file
+    explorer, files open in their default app. Adds the exists() gate and a
+    bool result for the companion API.
     """
+    from core import platform as osplat
+
     try:
         if not path.exists():
             return False
-        if sys.platform.startswith("win"):
-            # explorer returns 1 even on success for some paths, so trust the
-            # spawn rather than the exit code.
-            subprocess.Popen(["explorer", str(path)])
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
+        osplat.open_path(path)
         return True
     except Exception:
-        logger.exception("could not open %s in file explorer", path)
+        logger.exception("could not open %s", path)
         return False
