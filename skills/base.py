@@ -43,8 +43,8 @@ class SkillResult:
 class Skill(ABC):
     """Base class for every capability.
 
-    Subclasses set the class attributes below and implement ``execute`` and
-    ``tool_schema``.
+    Subclasses set the class attributes below and implement ``execute``;
+    override ``tool_schema`` only when the tool takes arguments.
     """
 
     #: Stable identifier, also the LLM tool name. e.g. ``"datetime"``.
@@ -68,9 +68,21 @@ class Skill(ABC):
     async def execute(self, request: SkillRequest) -> SkillResult:
         """Perform the action and return speech + data."""
 
-    @abstractmethod
     def tool_schema(self) -> dict[str, Any]:
-        """Ollama/OpenAI-style function schema for the LLM path (used in M3)."""
+        """Ollama/OpenAI-style function schema for the LLM path.
+
+        Default: an argument-less tool built from ``name``/``description`` —
+        enough for most plugins, so simple skills need no boilerplate.
+        Override to declare parameters.
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
 
 
 class SkillRegistry:

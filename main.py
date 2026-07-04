@@ -167,6 +167,18 @@ def build_registry(
     registry.register(WeatherSkill(settings.weather))
     registry.register(NewsSkill(settings.news))
     registry.register(WebSearchSkill(summarize))
+
+    # Drop-in plugins load LAST so they can't steal fast-path precedence from
+    # the built-ins; a broken plugin is skipped, never fatal (core/plugins.py).
+    from core.plugins import load_plugins
+
+    load_plugins(registry, {
+        "settings": settings,
+        "announcer": announcer,
+        "summarize": summarize,
+        "reminders": reminder_store,
+        "doc_index": doc_index,
+    })
     return registry
 
 

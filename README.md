@@ -56,6 +56,9 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
   real folder dots** — hover shows the path, click opens it in Explorer — and
   the top **search box** searches your files and the web side by side
   (results open in Explorer / the browser, or hand the query to MEDO).
+- **Plugins**: drop a `.py` file in `plugins/` and restart — your skill works
+  by voice AND as an LLM tool, no core changes (see `plugins/README.md`; a
+  broken plugin is skipped, never fatal).
 - **Watch app** (`watch/`): Wear OS companion that talks to the same API.
 
 ## Ports (LAN only — never forward these)
