@@ -73,10 +73,12 @@ def test_pointer_action_pose_map():
     assert pointer_action("rock", False) == ZOOM
     assert pointer_action("three", False) == RIGHT_CLICK
     assert pointer_action("thumbs_up", False) == VOLUME_UP
-    assert pointer_action("open_palm", False) == VOLUME_DOWN
-    # fist / anything unmapped holds the cursor still (fist exit is separate)
+    assert pointer_action("pinky_up", False) == VOLUME_DOWN
+    # Only a fist idles (deliberate hold-to-exit pose); ambiguous poses keep
+    # moving the cursor so a misread pointing hand doesn't freeze mid-move.
     assert pointer_action("fist", False) == IDLE
-    assert pointer_action("unknown", False) == IDLE
+    assert pointer_action("unknown", False) == MOVE
+    assert pointer_action("open_palm", False) == MOVE
 
 
 def test_scroll_accumulator_direction_and_carry():

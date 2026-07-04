@@ -21,20 +21,44 @@ logger = logging.getLogger(__name__)
 FRAME_SAMPLES = 1280
 
 
-def list_input_devices() -> list[dict]:
-    """``[{"index", "name"}]`` for every input-capable device (``[]`` on error).
+# Host API whose devices sounddevice can't read with the blocking API — a name
+# match landing on one of these would "resolve" and then fail to open.
+_UNUSABLE_HOSTAPI = "Windows WDM-KS"
 
-    Used by the HUD microphone picker so a user can choose the mic the wake word
-    listens on without editing config. Never raises.
+
+def _usable_inputs() -> list[tuple[int, str, str]]:
+    """(index, name, hostapi_name) for every input device we can actually read."""
+    import sounddevice as sd
+
+    apis = [a["name"] for a in sd.query_hostapis()]
+    out = []
+    for i, dev in enumerate(sd.query_devices()):
+        if dev.get("max_input_channels", 0) <= 0:
+            continue
+        api = apis[dev["hostapi"]] if dev["hostapi"] < len(apis) else "?"
+        if api == _UNUSABLE_HOSTAPI:
+            continue
+        out.append((i, str(dev["name"]), api))
+    return out
+
+
+def list_input_devices() -> list[dict]:
+    """``[{"index", "name"}]`` for the HUD microphone picker (``[]`` on error).
+
+    Windows enumerates every endpoint once per host API (MME, DirectSound,
+    WASAPI, WDM-KS) — a raw dump shows each mic four times, and the WDM-KS
+    copies can't be opened at all. Return just the MME set: names are truncated
+    to 31 chars, but MME resamples to any rate, whereas WASAPI endpoints refuse
+    our 16 kHz outright (PaErrorCode -9997, verified on this machine). Never
+    raises.
     """
     try:
-        import sounddevice as sd
-
-        return [
-            {"index": i, "name": str(dev["name"])}
-            for i, dev in enumerate(sd.query_devices())
-            if dev.get("max_input_channels", 0) > 0
-        ]
+        usable = _usable_inputs()
+        for preferred in ("MME", "Windows WASAPI"):
+            subset = [(i, n) for i, n, api in usable if api == preferred]
+            if subset:
+                return [{"index": i, "name": n} for i, n in subset]
+        return [{"index": i, "name": n} for i, n, _ in usable]
     except Exception:
         logger.debug("could not list input devices", exc_info=True)
         return []
@@ -44,20 +68,20 @@ def resolve_input_device(device: int | str | None):
     """Turn a device name-substring into its index; pass ints/None through.
 
     Lets ``audio.input_device`` be a stable name like ``"FHD Webcam"`` instead of
-    a PortAudio index that can change across reboots. Raises with a helpful hint
-    when nothing matches so a typo doesn't silently fall back to a dead default.
+    a PortAudio index that can change across reboots. Only matches endpoints on
+    host APIs we can actually read (WDM-KS pins exist even for disabled devices
+    and don't support blocking reads). Raises with a helpful hint when nothing
+    matches so a typo doesn't silently fall back to a dead default.
     """
     if not isinstance(device, str):
         return device
-    import sounddevice as sd
-
     want = device.strip().lower()
-    for i, dev in enumerate(sd.query_devices()):
-        if dev["max_input_channels"] > 0 and want in str(dev["name"]).lower():
+    for i, name, _api in _usable_inputs():
+        if want in name.lower():
             return i
     raise RuntimeError(
-        f"no input device name contains {device!r}; list them with "
-        f"'python -m voice.wakeword'"
+        f"no usable input device name contains {device!r}; pick one in the HUD "
+        f"CONFIG tab or list them with 'python -m voice.wakeword'"
     )
 
 

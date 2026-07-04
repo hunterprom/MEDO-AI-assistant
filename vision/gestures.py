@@ -29,6 +29,7 @@ VICTORY = "victory"
 PINCH = "pinch"
 THREE = "three"
 ROCK = "rock"
+PINKY_UP = "pinky_up"
 UNKNOWN = "unknown"
 
 # Thumb tip and index tip count as "touching" (a pinch) when they are closer
@@ -87,6 +88,8 @@ def classify_landmarks(landmarks: Sequence[object]) -> str:
         return THUMBS_UP
     if n_fingers == 1 and index:
         return POINT_UP
+    if n_fingers == 1 and pinky:
+        return PINKY_UP
     if n_fingers == 2 and index and middle:
         return VICTORY
     if index and middle and ring and not pinky:

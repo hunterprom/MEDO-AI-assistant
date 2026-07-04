@@ -13,8 +13,10 @@ gestures are disabled:
     - index+pinky (rock) .... zoom (Ctrl+wheel; move the hand up/down)
     - three fingers ......... right click
     - thumbs up ............. volume up      (repeats while held)
-    - open palm ............. volume down    (repeats while held)
-    - fist .................. exit pointer mode
+    - pinky only ............ volume down    (repeats while held)
+    - fist HELD ~1 s ........ exit pointer mode (brief fist misreads while
+                              pointing must not kick you out — anything
+                              unrecognized just keeps moving the cursor)
 
   Toggled by voice ("pointer on"), the HUD switch, or ``POST :stream_port/pointer``
   — and it always boots OFF.
@@ -38,7 +40,6 @@ from vision.gestures import (
     FIST,
     UNKNOWN,
     GestureRecognizer,
-    GestureStabilizer,
     index_thumb_pinch,
 )
 from vision.pointer import (
@@ -79,7 +80,7 @@ def _draw_debug_overlay(
         f"utterance: {utterance or '-'}",
     ]
     if pointer_on:
-        lines.append("POINTER ACTIVE - fist to exit")
+        lines.append("POINTER ACTIVE - hold fist to exit")
     for i, line in enumerate(lines):
         origin = (8, 24 + 22 * i)
         color = (90, 190, 255) if line.startswith("POINTER") else (80, 255, 190)
@@ -148,8 +149,6 @@ class GestureEngine:
             return
 
         c = self._config
-        cooldown_frames = int(c.cooldown_s * max(1, c.max_fps))
-        stabilizer = GestureStabilizer(c.stability_frames, cooldown_frames)
         min_period = 1.0 / max(1, c.max_fps)
 
         # Pointer plumbing (camera-thread-local). winmouse is imported lazily so
@@ -170,6 +169,10 @@ class GestureEngine:
         ema = Ema(getattr(pcfg, "ema_alpha", 0.4)) if pointer_ready else None
         click_gate = ClickDebouncer(getattr(pcfg, "click_debounce_ms", 600))
         three_hold = PoseHold(getattr(pcfg, "hold_frames", 3))
+        # Exiting pointer mode takes a deliberate, HELD fist (~1.2 s at 15 fps):
+        # pointing at the camera often momentarily classifies as a fist, and a
+        # short confirm was kicking users out of pointer mode mid-move.
+        fist_hold = PoseHold(int(getattr(pcfg, "exit_hold_frames", 18)))
         # Continuous-motion actions (scroll/zoom) and repeatable ones (volume).
         scroll_acc = ScrollAccumulator(float(getattr(pcfg, "scroll_gain", 45.0)))
         zoom_acc = ScrollAccumulator(float(getattr(pcfg, "zoom_gain", 25.0)))
@@ -210,15 +213,16 @@ class GestureEngine:
                     continue
 
                 gesture, annotated, landmarks = recognizer.process(frame)
-                confirmed = stabilizer.update(gesture)
 
                 pointer_now = pointer_ready and self._pointer
                 if pointer_now and not was_pointer:
-                    ema.reset()  # fresh smoothing on every activation
+                    ema.reset()              # fresh smoothing on every activation
+                    fist_hold.update(False)  # and a fresh exit hold
                 was_pointer = pointer_now
 
                 if pointer_now:
                     now = time.monotonic()
+                    fist_exit = False
                     if landmarks is not None and len(landmarks) > 8:
                         tip = landmarks[8]  # index fingertip
                         iy = float(tip.y)
@@ -285,6 +289,8 @@ class GestureEngine:
                             logger.exception("pointer control failed; disabling")
                             self._pointer = False
                             pinch_down = False
+                        # Exit only on a deliberately HELD fist, not a misread.
+                        fist_exit = fist_hold.update(gesture == FIST)
                     else:
                         # Hand lost: release any held drag and forget motion history.
                         if pinch_down:
@@ -294,11 +300,12 @@ class GestureEngine:
                                 pass
                             pinch_down = False
                         three_hold.update(False)
+                        fist_hold.update(False)
                         scroll_acc.reset()
                         zoom_acc.reset()
                         ema.reset()  # don't lerp across the gap
                         prev_iy = None
-                    if confirmed == FIST:
+                    if fist_exit:
                         if pinch_down:
                             try:
                                 winmouse.release_left()

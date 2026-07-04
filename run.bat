@@ -32,6 +32,9 @@ ollama list 2>nul | findstr /i /c:"qwen3" >nul
 if %errorlevel%==0 goto ollama_ready
 if not exist "D:\OllamaModels\manifests" goto ollama_ready
 echo [medo] Ollama is running without the D: model store - restarting it...
+REM Kill the tray app FIRST: it silently respawns ollama.exe without
+REM OLLAMA_MODELS, which is exactly the zero-models state we're fixing.
+taskkill /im "ollama app.exe" /f >nul 2>&1
 taskkill /im ollama.exe /f >nul 2>&1
 timeout /t 2 >nul
 :ollama_start

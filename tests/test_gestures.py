@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from vision.gestures import (
-    FIST, OPEN_PALM, PINCH, POINT_UP, ROCK, THREE, THUMBS_UP, UNKNOWN, VICTORY,
-    GestureStabilizer, classify_landmarks, index_thumb_pinch,
+    FIST, OPEN_PALM, PINCH, PINKY_UP, POINT_UP, ROCK, THREE, THUMBS_UP, UNKNOWN,
+    VICTORY, GestureStabilizer, classify_landmarks, index_thumb_pinch,
 )
 
 WRIST_Y = 0.9  # normalized image coords, y grows downward
@@ -51,8 +51,9 @@ def pinch_hand(touching=True):
     (dict(), FIST),
     (dict(thumb=True), THUMBS_UP),
     (dict(index=True), POINT_UP),
+    (dict(pinky=True), PINKY_UP),         # pinky only = volume down in pointer mode
     (dict(index=True, middle=True), VICTORY),
-    (dict(ring=True), UNKNOWN),           # a single non-index finger => unknown
+    (dict(ring=True), UNKNOWN),           # a lone ring finger stays unknown
     # THREE: index+middle+ring up, pinky folded — thumb must not matter.
     (dict(index=True, middle=True, ring=True), THREE),
     (dict(thumb=True, index=True, middle=True, ring=True), THREE),

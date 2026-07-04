@@ -27,7 +27,8 @@ _POSE_ACTION = {
     "rock": ZOOM,
     "three": RIGHT_CLICK,
     "thumbs_up": VOLUME_UP,
-    "open_palm": VOLUME_DOWN,
+    "pinky_up": VOLUME_DOWN,
+    "fist": IDLE,
 }
 
 
@@ -36,12 +37,14 @@ def pointer_action(gesture: str, is_pinch: bool) -> str:
 
     A pinch (thumb tip on index tip) always means :data:`DRAG` — pressing/holding
     the left button, which doubles as a click on a quick tap — regardless of the
-    classified pose. Otherwise the pose selects the action; anything unmapped
-    (e.g. ``fist``, ``unknown``) is :data:`IDLE` so the cursor holds still.
+    classified pose. Otherwise the pose selects the action. Anything unmapped
+    (``unknown``, ``open_palm``, transitional poses) defaults to :data:`MOVE`, so
+    a briefly misread pointing hand keeps driving the cursor instead of freezing;
+    only a ``fist`` idles (it's the deliberate hold-to-exit pose).
     """
     if is_pinch:
         return DRAG
-    return _POSE_ACTION.get(gesture, IDLE)
+    return _POSE_ACTION.get(gesture, MOVE)
 
 
 class ScrollAccumulator:

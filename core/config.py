@@ -85,6 +85,7 @@ class PointerConfig(BaseModel):
     scroll_gain: float = 45.0           # hand vertical motion → wheel notches (victory)
     zoom_gain: float = 25.0             # hand vertical motion → ctrl+wheel zoom (rock)
     volume_interval_ms: int = 180       # min gap between volume steps while held
+    exit_hold_frames: int = 18          # frames a fist must HOLD to exit (~1.2 s @15fps)
 
 
 class VisionConfig(BaseModel):

@@ -61,6 +61,7 @@ class PointerRunConfig:
     scroll_gain: float = 45.0
     zoom_gain: float = 25.0
     volume_interval_ms: int = 180
+    exit_hold_frames: int = 18
 
 
 @dataclass
@@ -106,6 +107,7 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
             scroll_gain=float(p.get("scroll_gain", 45.0)),
             zoom_gain=float(p.get("zoom_gain", 25.0)),
             volume_interval_ms=int(p.get("volume_interval_ms", 180)),
+            exit_hold_frames=int(p.get("exit_hold_frames", 18)),
         ),
     )
     host = r.get("host", "127.0.0.1")
