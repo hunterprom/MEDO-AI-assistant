@@ -119,3 +119,39 @@ def test_normalize_peak_leaves_silence_and_empty_alone():
     assert np.array_equal(normalize_peak(silence), silence)  # no noise amplification
     empty = np.zeros(0, dtype=np.float32)
     assert normalize_peak(empty).size == 0
+
+
+def _fake_inputs(monkeypatch, devices):
+    """Patch the usable-device table: [(index, name, hostapi), ...]."""
+    import voice.audio as va
+
+    monkeypatch.setattr(va, "_usable_inputs", lambda: devices)
+
+
+def test_resolve_input_device_priority_chain(monkeypatch):
+    import pytest
+
+    from voice.audio import resolve_input_device
+
+    _fake_inputs(monkeypatch, [(5, "Microphone (FHD Webcam)", "MME")])
+    # Headphones absent -> the chain falls through to the webcam.
+    assert resolve_input_device(["A25", "FHD Webcam"]) == 5
+    # Headphones connect -> the chain now prefers them.
+    _fake_inputs(monkeypatch, [
+        (5, "Microphone (FHD Webcam)", "MME"),
+        (7, "Headset (A25 Hands-Free)", "MME"),
+    ])
+    assert resolve_input_device(["A25", "FHD Webcam"]) == 7
+    # Nothing in the chain available -> loud error, not a silent dead default.
+    _fake_inputs(monkeypatch, [(3, "Microphone (Other)", "MME")])
+    with pytest.raises(RuntimeError):
+        resolve_input_device(["A25", "FHD Webcam"])
+
+
+def test_resolve_input_device_passthrough_and_single(monkeypatch):
+    from voice.audio import resolve_input_device
+
+    assert resolve_input_device(None) is None
+    assert resolve_input_device(9) == 9
+    _fake_inputs(monkeypatch, [(2, "Microphone (NVIDIA Broadcast)", "MME")])
+    assert resolve_input_device("nvidia") == 2

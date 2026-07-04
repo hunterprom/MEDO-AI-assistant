@@ -159,9 +159,11 @@ class WakeWordConfig(BaseModel):
 
 
 class AudioConfig(BaseModel):
-    # int index, or a case-insensitive name substring (e.g. "FHD Webcam") that
-    # survives device re-indexing across reboots. null = system default.
-    input_device: int | str | None = None
+    # int index, a case-insensitive name substring (e.g. "FHD Webcam") that
+    # survives device re-indexing across reboots, or a PRIORITY LIST of those —
+    # the first currently-available entry wins and the voice loop hot-swaps
+    # (~2 s) when a higher-priority device connects. null = system default.
+    input_device: int | str | list[int | str] | None = None
     output_device: int | None = None
     sample_rate: int = 16000
     silence_threshold: float = 0.015

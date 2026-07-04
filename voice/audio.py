@@ -64,15 +64,30 @@ def list_input_devices() -> list[dict]:
         return []
 
 
-def resolve_input_device(device: int | str | None):
-    """Turn a device name-substring into its index; pass ints/None through.
+def resolve_input_device(device):
+    """Resolve ``audio.input_device`` to a PortAudio index (or None = default).
 
-    Lets ``audio.input_device`` be a stable name like ``"FHD Webcam"`` instead of
-    a PortAudio index that can change across reboots. Only matches endpoints on
-    host APIs we can actually read (WDM-KS pins exist even for disabled devices
-    and don't support blocking reads). Raises with a helpful hint when nothing
-    matches so a typo doesn't silently fall back to a dead default.
+    Accepts an int index (passed through), ``None`` (system default), a
+    case-insensitive name substring like ``"FHD Webcam"`` (stable across the
+    re-indexing PortAudio does on every reboot), or a **priority list** of any
+    of those — e.g. ``["A25", "FHD Webcam"]`` means "the headphones' mic
+    whenever they're connected, the webcam otherwise". Only endpoints on host
+    APIs we can actually read are matched (WDM-KS pins enumerate even for
+    disconnected devices and don't support blocking reads). Raises with a
+    helpful hint when nothing usable matches so a typo doesn't silently fall
+    back to a dead default.
     """
+    if isinstance(device, (list, tuple)):
+        for entry in device:
+            try:
+                return resolve_input_device(entry)
+            except RuntimeError:
+                continue
+        raise RuntimeError(
+            f"none of the preferred input devices {list(device)!r} is currently "
+            f"available; pick one in the HUD CONFIG tab or list them with "
+            f"'python -m voice.wakeword'"
+        )
     if not isinstance(device, str):
         return device
     want = device.strip().lower()
@@ -129,22 +144,27 @@ class Microphone:
         self,
         sample_rate: int = 16000,
         frame_samples: int = FRAME_SAMPLES,
-        device: int | None = None,
+        device: int | str | list | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.frame_samples = frame_samples
         self.device = device
+        # The concrete PortAudio index open() resolved to (None = default).
+        # The voice loop compares this against a fresh resolve to hot-swap when
+        # a higher-priority device (e.g. headphones) appears or disappears.
+        self.resolved_index: int | None = None
         self._stream = None  # sounddevice.InputStream, created on open()
 
     def open(self) -> "Microphone":
         import sounddevice as sd
 
+        self.resolved_index = resolve_input_device(self.device)
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
             blocksize=self.frame_samples,
             channels=1,
             dtype="int16",
-            device=resolve_input_device(self.device),
+            device=self.resolved_index,
         )
         self._stream.start()
         return self

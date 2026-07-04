@@ -107,13 +107,15 @@ wakeword:                           # M1
   threshold: 0.4
 
 audio:                              # M1
-  # Which microphone the wake word listens on. Your Windows default is a silent
-  # "High Definition Audio" jack, so voice sat on STANDING BY — pointing it at
-  # the live webcam mic instead. Can be an index or a name substring; run
+  # Which microphone the wake word listens on — a PRIORITY LIST: the first
+  # available device wins, and MEDO hot-swaps within ~2 s when a higher-priority
+  # one connects. "A25" = the Bluetooth headphones' hands-free mic (used the
+  # moment the headset connects to the PC for calls/voice); the webcam mic is
+  # the fallback so voice keeps working when the headphones are off. Entries
+  # can be an index or a name substring; run
   #   .venv\Scripts\python -m voice.wakeword
-  # to list devices + watch levels, then set the one whose level jumps when you
-  # speak (e.g. "NVIDIA Broadcast", "FHD Webcam", or null for system default).
-  input_device: "FHD Webcam"
+  # to list devices + watch live levels. null = system default.
+  input_device: ["A25", "FHD Webcam"]
   output_device: null
   sample_rate: 16000
   # RMS below this counts as silence (speech onset gate). Quiet webcam/onboard

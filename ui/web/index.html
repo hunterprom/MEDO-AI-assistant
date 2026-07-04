@@ -1057,10 +1057,17 @@
       const cur = d.current;
       if (cur === null || cur === undefined) micSel.value = '__default__';
       else {
-        const asStr = String(cur);
-        const m = [...micSel.options].find(o => o.value === asStr)
-              || [...micSel.options].find(o => o.textContent.toLowerCase().includes(asStr.toLowerCase()));
-        micSel.value = m ? m.value : '__default__';
+        // May be a priority chain (["A25", "FHD Webcam"]) — show the first
+        // entry that matches a currently-available device.
+        const cands = Array.isArray(cur) ? cur : [cur];
+        let matched = null;
+        for (const c of cands) {
+          const asStr = String(c).toLowerCase();
+          matched = [...micSel.options].find(o => o.value === String(c))
+                || [...micSel.options].find(o => o.textContent.toLowerCase().includes(asStr));
+          if (matched) break;
+        }
+        micSel.value = matched ? matched.value : '__default__';
       }
     } catch { micSel.innerHTML = '<option>api offline</option>'; }
   }

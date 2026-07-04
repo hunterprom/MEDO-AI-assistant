@@ -277,7 +277,13 @@ async def run_voice(
     """
     import time
 
-    from voice.audio import Microphone, frame_rms, normalize_peak, record_until_silence
+    from voice.audio import (
+        Microphone,
+        frame_rms,
+        normalize_peak,
+        record_until_silence,
+        resolve_input_device,
+    )
     from voice.stt import Transcriber
     from voice.tts import TextToSpeech
     from voice.wakeword import WakeWord
@@ -301,8 +307,10 @@ async def run_voice(
         """Block until something should end the wait; returns why.
 
         ``"go"``     — wake word heard, or a manual /wake / barge-in carried over.
-        ``"reopen"`` — the input device changed in settings (HUD mic picker);
-                       the caller must reopen the mic on the new device.
+        ``"reopen"`` — the input device changed in settings (HUD mic picker), or
+                       a higher-priority device in the configured chain came or
+                       went (e.g. Bluetooth headphones connected) — the caller
+                       must reopen the mic on the newly-resolved device.
 
         NB: wake_event is NOT cleared on entry — a /wake or /interrupt fired
         during the previous turn should carry over and start listening now.
@@ -313,10 +321,19 @@ async def run_voice(
         # threshold — the two things that keep it "stuck on STANDING BY".
         peak_score = peak_rms = 0.0
         last_report = time.monotonic()
+        frames = 0
         while True:
             if settings.audio.input_device != opened_device:
                 vlog.info("input device changed — reopening the microphone")
                 return "reopen"
+            frames += 1
+            if frames % 25 == 0:  # ~2 s: hot-swap when the chain resolves elsewhere
+                try:
+                    if resolve_input_device(settings.audio.input_device) != mic.resolved_index:
+                        vlog.info("a preferred microphone (dis)connected — switching")
+                        return "reopen"
+                except Exception:
+                    pass  # nothing usable right now — keep the mic we have
             if wake_event is not None and wake_event.is_set():
                 wake_event.clear()
                 console.print("[dim](woken from the HUD)[/dim]")
