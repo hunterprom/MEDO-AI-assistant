@@ -209,6 +209,16 @@ class MemoryConfig(BaseModel):
     embed_model: str = "nomic-embed-text"
 
 
+class RoutineItem(BaseModel):
+    """One proactive routine (see core/routines.py)."""
+
+    name: str = "routine"
+    at: str = "08:00"                   # HH:MM local time
+    days: list[str] = Field(default_factory=list)  # empty = daily; [mon, tue, ...]
+    ask: list[str] = Field(default_factory=list)   # utterances routed + announced
+    enabled: bool = True
+
+
 class LoggingConfig(BaseModel):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     routing_stats: bool = True
@@ -240,6 +250,7 @@ class Settings(BaseSettings):
     news: NewsConfig = Field(default_factory=NewsConfig)
     vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    routines: list[RoutineItem] = Field(default_factory=list)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
     skills: dict = Field(default_factory=dict)

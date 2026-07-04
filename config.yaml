@@ -180,6 +180,15 @@ memory:                             # M4
   embed_model: "nomic-embed-text"   # semantic fact recall via local Ollama embeddings
                                     # ("" disables -> newest-N only)
 
+routines:                           # proactive briefings (core/routines.py)
+  - name: "morning briefing"
+    at: "08:00"                     # HH:MM local time
+    days: []                        # empty = every day; or [mon, tue, wed, thu, fri]
+    ask:
+      - "what's the weather"
+      - "what's the news"
+    enabled: true
+
 logging:
   level: "INFO"                     # DEBUG for state transitions + routing detail
   routing_stats: true               # tally fast-path vs LLM-path for the README

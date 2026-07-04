@@ -713,6 +713,14 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     # say about X" has something to search (incremental; skips unchanged files).
     if doc_index is not None:
         asyncio.create_task(asyncio.to_thread(doc_index.reindex))
+    # Proactive routines (morning briefing etc.): answers are announced —
+    # spoken in voice mode, printed otherwise, visible in the HUD either way.
+    if settings.routines:
+        from core.routines import RoutineScheduler
+
+        asyncio.create_task(
+            RoutineScheduler(settings.routines, router, announcer).run_forever()
+        )
 
     # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
     # returns immediately — so you can start a turn from the HUD without saying
