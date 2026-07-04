@@ -165,7 +165,10 @@ def _make_video_handler(engine: GestureEngine):
                         self.wfile.write(jpeg)
                         self.wfile.write(b"\r\n")
                     time.sleep(1 / 15)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # Browser closed/refreshed the stream (incl. WinError 10053);
+                # without ConnectionAbortedError here, socketserver dumps a
+                # full traceback into the sidecar console on every tab close.
                 return
 
         def do_POST(self):

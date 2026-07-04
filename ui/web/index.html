@@ -1126,16 +1126,25 @@
     // Each carries {key,label,path}; hovering shows the path, clicking opens it.
     const DIRS = CFG.dirs || [];
     const centerDir = DIRS.find(d => d.center);
-    const otherDirs = DIRS.filter(d => !d.center);
     if (centerDir) nodes[0].dir = centerDir;
-    for (let i = 0; i < otherDirs.length; i++) {
-      const yy = 1 - (i + 0.5) / otherDirs.length * 2;      // -1..1 (even spread)
+    // Primaries and extras get SEPARATE spirals: with one spiral over all ~300
+    // dirs, the 7 labeled folders (first in the array) landed on consecutive
+    // indices = the same latitude, clumped unreadably at the sphere's pole.
+    const prims = DIRS.filter(d => !d.center && d.primary);
+    const extras = DIRS.filter(d => !d.center && !d.primary);
+    prims.forEach((d, i) => {
+      const yy = (i + 0.5) / prims.length * 1.5 - 0.75;     // mid-latitude band, labels stay apart
       const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
       const phi = i * 2.399963229;                          // golden angle
-      const prim = !!otherDirs[i].primary;
-      const rad = prim ? 0.78 : 0.58 + (i % 5) * 0.075;     // shells so 100+ dots don't pile up
-      nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: prim ? 11 : 6, br: prim ? 1 : 0.7, dir: otherDirs[i] });
-    }
+      nodes.push({ x: Math.cos(phi) * rr * 0.78, y: yy * 0.78, z: Math.sin(phi) * rr * 0.78, sz: 11, br: 1, dir: d });
+    });
+    extras.forEach((d, i) => {
+      const yy = 1 - (i + 0.5) / extras.length * 2;         // -1..1 (even spread)
+      const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
+      const phi = i * 2.399963229;
+      const rad = 0.58 + (i % 5) * 0.075;                   // shells so 300 dots don't pile up
+      nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: 6, br: 0.7, dir: d });
+    });
     const hotspots = [];   // rebuilt each frame: {x,y,r,key,label,path} in client px
 
     const dust = [];
