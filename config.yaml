@@ -96,11 +96,21 @@ tts:                                # M1
 
 wakeword:                           # M1
   engine: "openwakeword"
-  phrase: "hey_jarvis"              # built-in model name
-  threshold: 0.5
+  phrase: "hey_jarvis"              # built-in model name (say "hey jarvis")
+  # Lower = easier to trigger (0.5 is openWakeWord's default; 0.4 helps a
+  # non-native "hey jarvis"). Watch your live score with:
+  #   .venv\Scripts\python -m voice.wakeword
+  # If the mic level stays ~0 there, it's the input device, not the threshold.
+  threshold: 0.4
 
 audio:                              # M1
-  input_device: null                # null = system default
+  # Which microphone the wake word listens on. Your Windows default is a silent
+  # "High Definition Audio" jack, so voice sat on STANDING BY — pointing it at
+  # the live webcam mic instead. Can be an index or a name substring; run
+  #   .venv\Scripts\python -m voice.wakeword
+  # to list devices + watch levels, then set the one whose level jumps when you
+  # speak (e.g. "NVIDIA Broadcast", "FHD Webcam", or null for system default).
+  input_device: "FHD Webcam"
   output_device: null
   sample_rate: 16000
   silence_threshold: 0.015          # RMS below this counts as silence

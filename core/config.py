@@ -157,7 +157,9 @@ class WakeWordConfig(BaseModel):
 
 
 class AudioConfig(BaseModel):
-    input_device: int | None = None
+    # int index, or a case-insensitive name substring (e.g. "FHD Webcam") that
+    # survives device re-indexing across reboots. null = system default.
+    input_device: int | str | None = None
     output_device: int | None = None
     sample_rate: int = 16000
     silence_threshold: float = 0.015

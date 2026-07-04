@@ -277,10 +277,12 @@ async def run_voice(
     """
     import time
 
-    from voice.audio import Microphone, Speaker, record_until_silence
+    from voice.audio import Microphone, Speaker, frame_rms, record_until_silence
     from voice.stt import Transcriber
     from voice.tts import TextToSpeech
     from voice.wakeword import WakeWord
+
+    vlog = logging.getLogger("voice")
 
     with console.status("[dim]loading voice models…[/dim]"):
         wake = WakeWord(settings.wakeword)
@@ -301,13 +303,32 @@ async def run_voice(
         wake.reset()
         if wake_event is not None:
             wake_event.clear()  # ignore any press that arrived mid-turn
+        # Report the peak wake score + mic level every few seconds so it's obvious
+        # whether the mic is even hearing you and how close the phrase gets to the
+        # threshold — the two things that keep it "stuck on STANDING BY".
+        peak_score = peak_rms = 0.0
+        last_report = time.monotonic()
         while True:
             if wake_event is not None and wake_event.is_set():
                 wake_event.clear()
                 console.print("[dim](woken from the HUD)[/dim]")
                 return
-            if wake.triggered(mic.read_frame()):  # ~80 ms/frame, so /wake lands fast
+            frame = mic.read_frame()               # ~80 ms/frame, so /wake lands fast
+            score = wake.predict(frame)
+            if score >= wake.threshold:
+                vlog.info("wake word detected (score %.2f)", score)
                 return
+            peak_score = max(peak_score, score)
+            peak_rms = max(peak_rms, frame_rms(frame))
+            now = time.monotonic()
+            if now - last_report >= 4.0:
+                vlog.info("listening for wake word — peak score %.2f (need %.2f), mic level %.3f",
+                          peak_score, wake.threshold, peak_rms)
+                if peak_rms < 0.004:
+                    console.print("[yellow](microphone seems silent — check the input "
+                                  "device/mute, or set audio.input_device in config.yaml)[/yellow]")
+                peak_score = peak_rms = 0.0
+                last_report = now
 
     async def speak(text: str) -> float:
         """Synthesize and play; returns synth time (ms) for instrumentation."""

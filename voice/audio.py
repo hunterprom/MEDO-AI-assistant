@@ -21,6 +21,27 @@ logger = logging.getLogger(__name__)
 FRAME_SAMPLES = 1280
 
 
+def resolve_input_device(device: int | str | None):
+    """Turn a device name-substring into its index; pass ints/None through.
+
+    Lets ``audio.input_device`` be a stable name like ``"FHD Webcam"`` instead of
+    a PortAudio index that can change across reboots. Raises with a helpful hint
+    when nothing matches so a typo doesn't silently fall back to a dead default.
+    """
+    if not isinstance(device, str):
+        return device
+    import sounddevice as sd
+
+    want = device.strip().lower()
+    for i, dev in enumerate(sd.query_devices()):
+        if dev["max_input_channels"] > 0 and want in str(dev["name"]).lower():
+            return i
+    raise RuntimeError(
+        f"no input device name contains {device!r}; list them with "
+        f"'python -m voice.wakeword'"
+    )
+
+
 def frame_rms(frame: np.ndarray) -> float:
     """Root-mean-square level of an int16 frame, normalized to 0.0–1.0."""
     if frame.size == 0:
@@ -57,7 +78,7 @@ class Microphone:
             blocksize=self.frame_samples,
             channels=1,
             dtype="int16",
-            device=self.device,
+            device=resolve_input_device(self.device),
         )
         self._stream.start()
         return self
