@@ -163,13 +163,10 @@ def build_registry(
     registry.register(ScreenshotSkill(shots))
     registry.register(PointerControlSkill(settings.vision.stream_port))
     registry.register(PowerSkill())
-    # Web skills (network; degrade gracefully offline).
-    registry.register(WeatherSkill(settings.weather))
-    registry.register(NewsSkill(settings.news))
-    registry.register(WebSearchSkill(summarize))
-
-    # Drop-in plugins load LAST so they can't steal fast-path precedence from
-    # the built-ins; a broken plugin is skipped, never fatal (core/plugins.py).
+    # Drop-in plugins load after the core skills (which keep fast-path
+    # precedence) but BEFORE the broad web skills — otherwise web_search's
+    # greedy "search … for …" pattern steals plugin triggers like
+    # "search obsidian for …". A broken plugin is skipped, never fatal.
     from core.plugins import load_plugins
 
     load_plugins(registry, {
@@ -179,6 +176,11 @@ def build_registry(
         "reminders": reminder_store,
         "doc_index": doc_index,
     })
+
+    # Web skills (network; degrade gracefully offline; broad patterns last).
+    registry.register(WeatherSkill(settings.weather))
+    registry.register(NewsSkill(settings.news))
+    registry.register(WebSearchSkill(summarize))
     return registry
 
 
@@ -678,10 +680,15 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         from core.embeddings import embed_texts
 
         _em, _eh = settings.memory.embed_model, settings.llm.host
+        # The Obsidian vault (docs/) is indexed FIRST: notes are the densest,
+        # most-asked-about content, and the whitelist walk could take a while
+        # (or hit the chunk cap) before reaching it otherwise.
+        _roots = [p for p in [PROJECT_ROOT / "docs"] if p.exists()]
+        _roots += PathWhitelist(settings.safety.whitelist_dirs).roots
         doc_index = DocumentIndex(
             settings.memory.db_path,
             lambda texts: embed_texts(texts, _em, _eh),
-            PathWhitelist(settings.safety.whitelist_dirs).roots,
+            _roots,
         )
 
     registry = build_registry(settings, announcer, summarize, reminders, doc_index)

@@ -132,6 +132,8 @@ class DocumentIndex:
             total = conn.execute("SELECT COUNT(*) FROM doc_chunks").fetchone()[0]
         for path in self._iter_files():
             key = os.path.normpath(str(path))
+            if key in seen:  # roots may overlap (e.g. the vault inside Desktop)
+                continue
             seen.add(key)
             try:
                 mtime = path.stat().st_mtime
