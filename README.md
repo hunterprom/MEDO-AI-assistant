@@ -34,7 +34,11 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
   time, timers, notes, volume (real Core Audio on Windows), media keys, apps,
   files, screenshots, window management, typing, clipboard, brightness, power.
 - **Long-term memory**: "remember that …", "what do you remember about me",
-  "forget …" — stored in sqlite, injected into the LLM's system prompt.
+  "forget …" — stored in sqlite and recalled **semantically** (local
+  embeddings: "when is my tooth appointment" finds the dentist fact).
+- **Ask your documents (RAG)**: "what do my documents say about the lease?" —
+  .txt/.md/.pdf files in the whitelisted folders are chunked, embedded
+  locally, and searched by meaning; answers quote the source file.
 - **Pointer mode** (webcam sidecar; pointer-only build — say "pointer on" or
   toggle in the HUD): your index finger drives the mouse cursor ·
   **🤏 pinch = drag / quick-tap click** · **✌ two fingers = scroll** ·

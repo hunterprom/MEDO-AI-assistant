@@ -84,6 +84,7 @@ class RemoteServer:
         *,
         persist_secrets: bool = False,
         wake_event: threading.Event | None = None,
+        doc_index=None,
     ) -> None:
         self._settings = settings
         self._router = router
@@ -94,6 +95,8 @@ class RemoteServer:
         # Set by POST /wake to break the voice loop out of STANDING BY without
         # the wake word. None when voice mode isn't running.
         self._wake_event = wake_event
+        # Documents RAG index (None when embeddings are disabled).
+        self._doc_index = doc_index
         self._runner: web.AppRunner | None = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
@@ -119,6 +122,8 @@ class RemoteServer:
         app.router.add_post("/audio/input", self._handle_set_audio_input)
         app.router.add_get("/search/files", self._handle_search_files)
         app.router.add_get("/search/web", self._handle_search_web)
+        app.router.add_get("/docs/stats", self._handle_docs_stats)
+        app.router.add_post("/docs/reindex", self._handle_docs_reindex)
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
@@ -444,6 +449,20 @@ class RemoteServer:
             self._wake_event.set()
         logger.info("interrupt requested (listen=%s)", listen)
         return web.json_response({"ok": True, "listening": listen and self._wake_event is not None})
+
+    async def _handle_docs_stats(self, request: web.Request) -> web.Response:
+        """Documents-RAG index size (files/chunks) for UIs."""
+        if self._doc_index is None:
+            return web.json_response({"ok": True, "enabled": False, "files": 0, "chunks": 0})
+        stats = await asyncio.to_thread(self._doc_index.stats)
+        return web.json_response({"ok": True, **stats})
+
+    async def _handle_docs_reindex(self, request: web.Request) -> web.Response:
+        """Kick a background reindex of the user's documents."""
+        if self._doc_index is None:
+            return _error(409, "document indexing is disabled (no embed model)")
+        asyncio.create_task(asyncio.to_thread(self._doc_index.reindex))
+        return web.json_response({"ok": True, "started": True})
 
     async def _handle_search_files(self, request: web.Request) -> web.Response:
         """Filename/-folder substring search under the user's folders."""

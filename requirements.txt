@@ -26,6 +26,7 @@ comtypes>=1.2; sys_platform == "win32"     # COM backend pycaw talks to Core Aud
 # --- M3: web skills ---
 ddgs>=6.0            # DuckDuckGo web search (no key)
 edge-tts>=6.1        # Macedonian neural voice (free MS voices; Cyrillic replies)
+pypdf>=4.0           # text extraction for the documents RAG index
 feedparser>=6.0      # news via RSS
 
 # --- tooling ---

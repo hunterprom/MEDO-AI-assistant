@@ -117,6 +117,7 @@ def build_registry(
     announcer: Announcer,
     summarize: "callable[[str, str], Awaitable[str]] | None" = None,
     reminder_store: ReminderStore | None = None,
+    doc_index=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -145,6 +146,12 @@ def build_registry(
     registry.register(AppsSkill(apps_table))
     registry.register(SeeCameraSkill(settings))
     registry.register(SeeScreenSkill(settings))
+    # Documents RAG before FilesSkill/WebSearch so "search my documents for X"
+    # isn't stolen by the filename search or the broad web "search for …".
+    if doc_index is not None:
+        from skills.documents import DocumentsSkill
+
+        registry.register(DocumentsSkill(doc_index))
     registry.register(FilesSkill(whitelist))
     registry.register(VolumeSkill())
     registry.register(MediaSkill())
@@ -650,7 +657,22 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         return (message.get("content") or "").strip() or "I couldn't summarize that."
 
     reminders = ReminderStore(settings.memory.db_path)
-    registry = build_registry(settings, announcer, summarize, reminders)
+
+    # Documents RAG index: same local embedder as semantic facts, same safety
+    # whitelist as the files skill. None when embeddings are disabled.
+    doc_index = None
+    if settings.memory.embed_model:
+        from core.docindex import DocumentIndex
+        from core.embeddings import embed_texts
+
+        _em, _eh = settings.memory.embed_model, settings.llm.host
+        doc_index = DocumentIndex(
+            settings.memory.db_path,
+            lambda texts: embed_texts(texts, _em, _eh),
+            PathWhitelist(settings.safety.whitelist_dirs).roots,
+        )
+
+    registry = build_registry(settings, announcer, summarize, reminders, doc_index)
     bus = EventBus()
     sm = StateMachine(bus)
     router = Router(settings, registry, llm, bus)
@@ -668,6 +690,10 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     # first question otherwise, which users read as "it doesn't answer".
     if settings.llm.provider == "ollama" and router.model:
         asyncio.create_task(llm.warmup(router.model))
+    # Index the user's documents in the background so "what do my documents
+    # say about X" has something to search (incremental; skips unchanged files).
+    if doc_index is not None:
+        asyncio.create_task(asyncio.to_thread(doc_index.reindex))
 
     # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
     # returns immediately — so you can start a turn from the HUD without saying
@@ -681,7 +707,8 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
-                              wake_event=wake_event if voice else None)
+                              wake_event=wake_event if voice else None,
+                              doc_index=doc_index)
         try:
             await remote.start()
         except OSError as exc:
