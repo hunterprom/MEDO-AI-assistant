@@ -136,6 +136,20 @@ class FactsStore:
 
             logging.getLogger(__name__).debug("embedding backfill failed", exc_info=True)
 
+    def list_all(self) -> list[dict]:
+        """Every fact as ``{"id", "fact", "created_at"}``, oldest first (for UIs)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, fact, created_at FROM facts ORDER BY id"
+            ).fetchall()
+        return [{"id": r[0], "fact": r[1], "created_at": r[2]} for r in rows]
+
+    def delete(self, fact_id: int) -> bool:
+        """Delete one fact by id (the HUD memory manager). True when it existed."""
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM facts WHERE id = ?", (int(fact_id),))
+            return cur.rowcount > 0
+
     def forget(self, needle: str) -> int:
         """Delete every fact containing ``needle`` (case-insensitive). Returns count."""
         needle = needle.strip()

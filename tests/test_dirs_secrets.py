@@ -277,3 +277,27 @@ async def test_set_audio_input_updates_settings_and_validates(monkeypatch):
         assert (await client.post("/audio/input", json={"device": {"x": 1}})).status == 400
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_facts_endpoints_crud(tmp_path):
+    from core.facts import FactsStore
+
+    class _R:  # the slice of Router the facts endpoints touch
+        facts = FactsStore(tmp_path / "facts.db")
+
+    server = RemoteServer(load_settings(), router=_R(), sm=StateMachine(EventBus()))  # type: ignore[arg-type]
+    client = TestClient(TestServer(server.build_app()))
+    await client.start_server()
+    try:
+        assert (await client.post("/facts", json={"fact": "likes espresso"})).status == 200
+        body = await (await client.get("/facts")).json()
+        assert [f["fact"] for f in body["facts"]] == ["likes espresso"]
+        fid = body["facts"][0]["id"]
+        assert (await client.post("/facts/delete", json={"id": fid})).status == 200
+        assert (await client.post("/facts/delete", json={"id": fid})).status == 404
+        assert (await client.post("/facts", json={"fact": ""})).status == 400
+        body = await (await client.get("/facts")).json()
+        assert body["facts"] == []
+    finally:
+        await client.close()

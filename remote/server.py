@@ -124,6 +124,9 @@ class RemoteServer:
         app.router.add_get("/search/web", self._handle_search_web)
         app.router.add_get("/docs/stats", self._handle_docs_stats)
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
+        app.router.add_get("/facts", self._handle_facts_list)
+        app.router.add_post("/facts", self._handle_facts_add)
+        app.router.add_post("/facts/delete", self._handle_facts_delete)
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
@@ -449,6 +452,35 @@ class RemoteServer:
             self._wake_event.set()
         logger.info("interrupt requested (listen=%s)", listen)
         return web.json_response({"ok": True, "listening": listen and self._wake_event is not None})
+
+    async def _handle_facts_list(self, request: web.Request) -> web.Response:
+        """Remembered facts for the HUD memory manager."""
+        facts = await asyncio.to_thread(self._router.facts.list_all)
+        return web.json_response({"ok": True, "facts": facts})
+
+    async def _handle_facts_add(self, request: web.Request) -> web.Response:
+        """Remember a fact typed into the HUD."""
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error(400, "body must be JSON like {\"fact\": \"…\"}")
+        fact = str(payload.get("fact") or "").strip()
+        if not fact:
+            return _error(400, "missing or empty 'fact'")
+        added = await asyncio.to_thread(self._router.facts.add, fact)
+        return web.json_response({"ok": True, "added": added})
+
+    async def _handle_facts_delete(self, request: web.Request) -> web.Response:
+        """Forget one fact by id (HUD memory manager delete button)."""
+        try:
+            payload = await request.json()
+            fact_id = int(payload.get("id"))
+        except (ValueError, TypeError):
+            return _error(400, "body must be JSON like {\"id\": 3}")
+        deleted = await asyncio.to_thread(self._router.facts.delete, fact_id)
+        if not deleted:
+            return _error(404, f"no fact with id {fact_id}")
+        return web.json_response({"ok": True})
 
     async def _handle_docs_stats(self, request: web.Request) -> web.Response:
         """Documents-RAG index size (files/chunks) for UIs."""

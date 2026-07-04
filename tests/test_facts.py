@@ -134,3 +134,15 @@ def test_add_backfills_embeddings(tmp_path):
     with sqlite3.connect(tmp_path / "h.db") as conn:
         blob = conn.execute("SELECT embedding FROM facts").fetchone()[0]
     assert blob is not None and len(np.frombuffer(blob, dtype=np.float32)) == 3
+
+
+def test_list_all_and_delete_by_id(tmp_path):
+    store = FactsStore(tmp_path / "m.db")
+    store.add("first fact")
+    store.add("second fact")
+    rows = store.list_all()
+    assert [r["fact"] for r in rows] == ["first fact", "second fact"]
+    assert all("id" in r and "created_at" in r for r in rows)
+    assert store.delete(rows[0]["id"]) is True
+    assert store.delete(9999) is False
+    assert [r["fact"] for r in store.list_all()] == ["second fact"]
