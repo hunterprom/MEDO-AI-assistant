@@ -17,6 +17,7 @@ _WHEEL_DELTA = 120             # one notch
 _KEYUP = 0x0002                # KEYEVENTF_KEYUP
 _VK_CONTROL = 0x11
 _VK_VOLUME_DOWN, _VK_VOLUME_UP = 0xAE, 0xAF
+_VK_MEDIA_PLAY_PAUSE = 0xB3
 
 
 def _user32():
@@ -86,3 +87,8 @@ def volume_up() -> None:
 
 def volume_down() -> None:
     _tap(_VK_VOLUME_DOWN)
+
+
+def play_pause() -> None:
+    """Media play/pause key — toggles Spotify/YouTube/whatever has media focus."""
+    _tap(_VK_MEDIA_PLAY_PAUSE)

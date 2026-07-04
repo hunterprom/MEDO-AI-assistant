@@ -454,7 +454,7 @@
         <h2>OPTICAL FEED</h2>
         <img id="cam-img" alt="camera" style="display:none" />
         <div id="cam-off" class="mono">FEED OFFLINE</div>
-        <div id="cam-legend">POINTER · INDEX = MOVE · PINCH = DRAG/CLICK · TWO FINGERS = SCROLL · INDEX+PINKY = ZOOM<br/>THREE FINGERS = RIGHT CLICK · THUMBS UP = VOL+ · PINKY = VOL− · HOLD FIST ≈1s = EXIT</div>
+        <div id="cam-legend">POINTER · INDEX = MOVE · PINCH = DRAG/CLICK · TWO FINGERS = SCROLL · INDEX+PINKY = ZOOM<br/>THREE FINGERS = RIGHT CLICK · THUMBS UP = VOL+ · PINKY = VOL− · HOLD FIST ≈1s = EXIT<br/>TWO HANDS: SPREAD = ZOOM · 2nd THUMBS UP = PLAY/PAUSE · (ORB: WHEEL/DBL-CLICK = ZOOM + LABELS)</div>
       </div>
     </div>
   </div>
@@ -1159,12 +1159,26 @@
       z = p.y * sinX + z * cosX;
       return { x, y, z };
     };
+    // Zoom: mouse wheel over the orb (and a gentle bump while hovering it)
+    // smoothly magnifies the sphere so the unlabeled dots spread out and
+    // reveal their folder names. Eased every frame; rotation slows when
+    // zoomed so labels are readable.
+    let zoom = 1, zoomTarget = 1, hoverBump = 0;
+    cv.addEventListener('wheel', e => {
+      e.preventDefault();
+      zoomTarget = Math.min(3.2, Math.max(1, zoomTarget * (e.deltaY < 0 ? 1.15 : 0.87)));
+    }, { passive: false });
+    cv.addEventListener('mouseenter', () => { hoverBump = 0.18; });
+    cv.addEventListener('mouseleave', () => { hoverBump = 0; if (zoomTarget < 1.2) zoomTarget = 1; });
+    cv.addEventListener('dblclick', () => { zoomTarget = zoomTarget > 1.4 ? 1 : 2.2; });
+
     let t = 0, last = performance.now(), speed = 1, glow = 1;
     function frame(now) {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
       speed += (orbSpeedTarget - speed) * 0.06;   // ease between states
       glow += (orbGlowTarget - glow) * 0.06;
-      t += dt * speed;
+      zoom += (Math.max(zoomTarget, 1 + hoverBump) - zoom) * 0.08;
+      t += dt * speed / (0.4 + 0.6 * zoom);       // rotate slower when zoomed in
       // Skip all drawing while the orb is hidden (COMMS/CONFIG tab): no point
       // animating a full-screen canvas — and hue-rotate — behind another screen.
       if (document.body.dataset.screen !== 'core') { if (!reduced) requestAnimationFrame(frame); return; }
@@ -1177,6 +1191,7 @@
       g.addColorStop(1, 'rgba(10,40,120,0)');
       ctx.fillStyle = g;
       ctx.beginPath(); ctx.arc(cx, cy, R * 1.22, 0, Math.PI * 2); ctx.fill();
+      const RZ = R * zoom;   // magnified projection radius (zoom = 1 when idle)
       const ry = t * 0.32, rx = 0.42 + Math.sin(t * 0.09) * 0.22;
       const cosY = Math.cos(ry), sinY = Math.sin(ry), cosX = Math.cos(rx), sinX = Math.sin(rx);
       for (const p of dust) {
@@ -1184,7 +1199,7 @@
         const depth = (q.z + 1.05) / 2.1;
         const a = (0.03 + depth * 0.16) * (0.6 + 0.4 * Math.sin(t * 2 + p.tw)) * glow;
         ctx.fillStyle = `rgba(90,180,255,${a.toFixed(3)})`;
-        ctx.fillRect(cx + q.x * R, cy + q.y * R, p.sz, p.sz);
+        ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, p.sz, p.sz);
       }
       for (const p of fil) {
         const q = rot(p, cosY, sinY, cosX, sinX);
@@ -1193,13 +1208,13 @@
         const a = (0.1 + depth * 0.6) * flick * glow;
         const sz = p.sz * (0.5 + depth * 0.9);
         ctx.fillStyle = `rgba(${depth > 0.7 ? '190,235,255' : '70,170,255'},${a.toFixed(3)})`;
-        ctx.fillRect(cx + q.x * R, cy + q.y * R, sz, sz);
+        ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, sz, sz);
       }
       for (let i = 0; i < nodes.length; i++) {
         const p = nodes[i];
         const q = rot(p, cosY, sinY, cosX, sinX);
         const depth = (q.z + 1.05) / 2.1;
-        const px = cx + q.x * R, py = cy + q.y * R;
+        const px = cx + q.x * RZ, py = cy + q.y * RZ;
         const rad = p.sz * (0.55 + depth * 0.75) * (i === 0 ? 2.6 : 1);
         const pulse = i === 0 ? 0.85 + 0.15 * Math.sin(t * 1.6) : 0.7 + 0.3 * Math.sin(t * 2 + p.sz);
         const hg = ctx.createRadialGradient(px, py, 0, px, py, rad);
@@ -1227,12 +1242,21 @@
         ctx.strokeStyle = `rgba(150,220,255,${((prim ? 0.6 : 0.3) * alpha).toFixed(3)})`;
         ctx.lineWidth = prim ? 2 : 1;
         ctx.beginPath(); ctx.arc(fd.px, fd.py, ringR, 0, Math.PI * 2); ctx.stroke();
-        if (prim) {                                             // label only the curated folders
+        // Curated folders are always labelled; the other ~290 reveal their
+        // names as you zoom in (wheel / double-click / hover) — front-facing
+        // dots only, fading in with zoom so the idle view stays clean.
+        const zoomReveal = Math.min(1, Math.max(0, (zoom - 1.45) / 0.7));
+        if (prim || zoomReveal > 0.05) {
           const label = fd.dir.label || '';
-          ctx.fillStyle = `rgba(0,0,0,${(0.5 * alpha).toFixed(3)})`;
-          ctx.fillText(label, fd.px + 1, fd.py + ringR + 23);   // shadow for legibility
-          ctx.fillStyle = `rgba(205,238,255,${(0.9 * alpha).toFixed(3)})`;
-          ctx.fillText(label, fd.px, fd.py + ringR + 22);
+          const la = prim ? alpha : alpha * zoomReveal * (fd.depth > 0.62 ? 1 : 0.35);
+          if (la > 0.04) {
+            ctx.font = prim ? '600 20px "Share Tech Mono", monospace'
+                            : '500 14px "Share Tech Mono", monospace';
+            ctx.fillStyle = `rgba(0,0,0,${(0.5 * la).toFixed(3)})`;
+            ctx.fillText(label, fd.px + 1, fd.py + ringR + (prim ? 23 : 17));
+            ctx.fillStyle = `rgba(205,238,255,${(0.9 * la).toFixed(3)})`;
+            ctx.fillText(label, fd.px, fd.py + ringR + (prim ? 22 : 16));
+          }
         }
         hotspots.push({
           x: rect.left + fd.px * scaleX,

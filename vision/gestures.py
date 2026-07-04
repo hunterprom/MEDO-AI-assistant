@@ -160,7 +160,7 @@ class GestureRecognizer:
         self._mp = mp
         self._hands = mp.solutions.hands.Hands(
             static_image_mode=False,
-            max_num_hands=1,
+            max_num_hands=2,  # second hand: spread-zoom + media control
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
         )
@@ -168,11 +168,12 @@ class GestureRecognizer:
         self._styles = mp.solutions.drawing_styles
 
     def process(self, frame_bgr):
-        """Return (gesture_name, annotated_bgr_frame, landmarks) for one frame.
+        """Return (gesture, annotated_frame, landmarks, hands) for one frame.
 
-        ``landmarks`` is MediaPipe's 21-point list (objects with .x/.y) when a
-        hand is visible, else None — pointer mode maps the index tip [8] to
-        the cursor from it.
+        ``landmarks`` is the first hand's 21-point list (objects with .x/.y)
+        or None. ``hands`` is ``[(gesture_name, landmarks), ...]`` for up to
+        two visible hands in MediaPipe order — the engine re-orders them so
+        the cursor stays on the hand the user was already pointing with.
         """
         import cv2
 
@@ -183,18 +184,20 @@ class GestureRecognizer:
         gesture = UNKNOWN
         annotated = frame_bgr
         landmarks = None
+        hands: list[tuple[str, object]] = []
         if result.multi_hand_landmarks:
-            hand = result.multi_hand_landmarks[0]
-            landmarks = hand.landmark
-            gesture = classify_landmarks(landmarks)
-            self._draw.draw_landmarks(
-                annotated,
-                hand,
-                self._mp.solutions.hands.HAND_CONNECTIONS,
-                self._styles.get_default_hand_landmarks_style(),
-                self._styles.get_default_hand_connections_style(),
-            )
-        return gesture, annotated, landmarks
+            for hand in result.multi_hand_landmarks[:2]:
+                lms = hand.landmark
+                hands.append((classify_landmarks(lms), lms))
+                self._draw.draw_landmarks(
+                    annotated,
+                    hand,
+                    self._mp.solutions.hands.HAND_CONNECTIONS,
+                    self._styles.get_default_hand_landmarks_style(),
+                    self._styles.get_default_hand_connections_style(),
+                )
+            gesture, landmarks = hands[0]
+        return gesture, annotated, landmarks, hands
 
     def close(self) -> None:
         self._hands.close()
