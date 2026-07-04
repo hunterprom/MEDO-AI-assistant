@@ -154,6 +154,37 @@ async def test_provider_switch_changes_target_and_headers(monkeypatch: pytest.Mo
     assert message["content"] == "hello from openai"
 
 
+@pytest.mark.asyncio
+async def test_openai_400_tools_rejection_retries_without_tools(monkeypatch: pytest.MonkeyPatch):
+    """Models that reject tool schemas (Groq allam-2-7b) must still answer."""
+    calls: list[dict[str, Any]] = []
+
+    class _Client:
+        def __init__(self, *a: Any, **k: Any) -> None: ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc: Any): return False
+
+        async def post(self, url: str, json: Any = None, headers: Any = None) -> FakeResponse:
+            calls.append(dict(json))  # snapshot: the client mutates the payload on retry
+            if "tools" in json:
+                return FakeResponse(
+                    {"error": {"message": "`tool calling` is not supported with this model"}},
+                    status_code=400,
+                )
+            return FakeResponse(openai_chat_payload({"role": "assistant", "content": "4"}))
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    client = LLMClient(LLMConfig(provider="openai", api_key="sk-test"))
+    tools = [{"type": "function", "function": {"name": "t", "parameters": {}}}]
+
+    message = await client.chat("allam-2-7b", [{"role": "user", "content": "2+2?"}], tools=tools)
+
+    assert message["content"] == "4"
+    assert len(calls) == 2 and "tools" in calls[0] and "tools" not in calls[1]
+
+
 def test_is_available_openai_means_key_present():
     assert LLMClient(LLMConfig(provider="openai", api_key="sk-x")).is_available() is True
     assert LLMClient(LLMConfig(provider="openai", api_key="")).is_available() is False

@@ -177,6 +177,35 @@ class LLMClient:
             logger.debug("could not list models: %s", exc)
             return []
 
+    async def warmup(self, model: str | None) -> None:
+        """Preload a local model so the first real question doesn't stall.
+
+        A cold qwen3:30b takes ~27 s just to load on this GPU — users read that
+        as "no answer". Fired as a background task at startup and after a
+        provider/model switch; a 1-token generation forces the load and
+        ``keep_alive`` then keeps it resident. No-op for online providers,
+        never raises.
+        """
+        if self._provider != "ollama" or not model:
+            return
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                await client.post(
+                    f"{self._ollama_host()}/api/chat",
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": False,
+                        "keep_alive": self._config.keep_alive,
+                        "options": {"num_ctx": self._config.num_ctx, "num_predict": 1},
+                    },
+                )
+            logger.info("warmed up local model %s", model)
+        except Exception:
+            logger.debug("model warmup failed (non-fatal)", exc_info=True)
+
     # -- inference ----------------------------------------------------------
 
     async def chat(
@@ -262,13 +291,25 @@ class LLMClient:
         }
         if tools:
             payload["tools"] = tools
+        url = f"{self._openai_base()}/chat/completions"
         try:
             async with httpx.AsyncClient(timeout=self._config.request_timeout_s) as client:
-                resp = await client.post(
-                    f"{self._openai_base()}/chat/completions",
-                    json=payload,
-                    headers=self._openai_headers(),
-                )
+                resp = await client.post(url, json=payload, headers=self._openai_headers())
+                if resp.status_code == 400 and tools:
+                    # Some hosted models (e.g. Groq's allam-2-7b) reject tool
+                    # schemas outright with a 400. Retry once without tools so
+                    # plain questions still get answered — tool skills simply
+                    # won't run through this model.
+                    detail = ""
+                    try:
+                        detail = str(resp.json().get("error", {}).get("message", ""))
+                    except Exception:
+                        pass
+                    if "tool" in detail.lower() or "function" in detail.lower():
+                        logger.info("model rejected tool schemas (%s); retrying without tools",
+                                    detail[:100])
+                        payload.pop("tools", None)
+                        resp = await client.post(url, json=payload, headers=self._openai_headers())
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError as exc:

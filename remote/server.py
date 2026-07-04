@@ -260,8 +260,19 @@ class RemoteServer:
         if not name:
             return _error(400, "missing or empty 'name'")
         self._router.model = name
+        self._warm_model(name)
         logger.info("active model set to %r via companion API", name)
         return web.json_response({"ok": True, "model": name})
+
+    def _warm_model(self, model: str | None) -> None:
+        """Preload a local model in the background after a switch (no-op online).
+
+        Without this the first question after picking a model pays the full
+        cold load (~27 s for the 30B) — which reads as "it doesn't answer".
+        """
+        warm = getattr(self._router.llm, "warmup", None)
+        if warm is not None and model:
+            asyncio.create_task(warm(model))
 
     async def _handle_set_provider(self, request: web.Request) -> web.Response:
         """Switch the LLM provider (and optionally key/base URL/model) live.
@@ -294,6 +305,7 @@ class RemoteServer:
         models = await asyncio.to_thread(self._router.llm.list_models)
         model = str(payload.get("model") or "").strip() or (models[0] if models else None)
         self._router.model = model
+        self._warm_model(model)  # local switch: load now, not on the first question
         logger.info("provider switched to %r (model %r) via companion API", provider, model)
 
         if self._persist_secrets:

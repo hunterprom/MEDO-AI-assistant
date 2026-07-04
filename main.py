@@ -489,7 +489,25 @@ async def run_voice(
         barge_in["hit"] = False
 
 
+def _trust_os_certificates() -> None:
+    """Make Python's TLS trust the Windows certificate store.
+
+    This network intercepts TLS with its own root CA; httpx/requests ship the
+    certifi bundle which doesn't contain it, so every https call to an online
+    LLM API (Groq/OpenAI/...), and even weather/news feeds, dies with
+    CERTIFICATE_VERIFY_FAILED. truststore patches ssl to use the OS store —
+    where that root actually lives — fixing all of them at once.
+    """
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception:  # pragma: no cover - best effort; local Ollama unaffected
+        logging.getLogger("main").debug("truststore unavailable", exc_info=True)
+
+
 async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> None:
+    _trust_os_certificates()
     settings = load_settings()
     # Overlay any online API key / model saved via the HUD (git-ignored file), so
     # an online provider chosen last session is restored without touching config.yaml.
@@ -529,6 +547,11 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     if once is not None:
         await respond(router, sm, ui, log, once)
         return
+
+    # Preload the local model in the background: a cold 30B costs ~27 s on the
+    # first question otherwise, which users read as "it doesn't answer".
+    if settings.llm.provider == "ollama" and router.model:
+        asyncio.create_task(llm.warmup(router.model))
 
     # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
     # returns immediately — so you can start a turn from the HUD without saying
