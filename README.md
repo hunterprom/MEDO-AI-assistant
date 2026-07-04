@@ -90,8 +90,8 @@ handoff is preserved in `docs/design/`.
 
 ## Known limitations
 
-- Piper has **no Macedonian voice**: Macedonian replies are correct as text in
-  the HUD but are spoken with the English voice. Roadmap: optional edge-tts.
+- Macedonian replies are spoken with a **neural mk-MK voice via edge-tts**
+  (free, needs internet); offline they fall back to the English Piper voice.
 - The wake word is openWakeWord's pretrained **"hey jarvis"** — a custom
   "hey MEDO" model is on the roadmap.
 - Brightness control needs a laptop-class display (external monitors usually

@@ -296,7 +296,7 @@ async def run_voice(
         resolve_input_device,
     )
     from voice.stt import Transcriber
-    from voice.tts import TextToSpeech
+    from voice.tts import EdgeTTS, TextToSpeech, contains_cyrillic
     from voice.wakeword import WakeWord
 
     vlog = logging.getLogger("voice")
@@ -317,6 +317,15 @@ async def run_voice(
             f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
             f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
         )
+    # Macedonian neural voice (edge-tts, online) for Cyrillic replies; Piper
+    # remains the offline voice and the fallback when the network is down.
+    edge: EdgeTTS | None = None
+    if settings.tts.multilingual:
+        try:
+            edge = EdgeTTS(settings.tts.mk_voice)
+        except Exception as exc:
+            console.print(f"[dim]Macedonian voice unavailable ({exc}); "
+                          f"Cyrillic replies will use the English voice.[/dim]")
     def wait_for_wake(mic: Microphone, opened_device) -> str:
         """Block until something should end the wait; returns why.
 
@@ -441,11 +450,26 @@ async def run_voice(
         return interrupted
 
     async def speak(text: str) -> float:
-        """Synthesize and play (interruptibly); returns synth time (ms)."""
-        if tts is None:  # TTS unavailable — reply is shown, not spoken.
+        """Synthesize and play (interruptibly); returns synth time (ms).
+
+        Cyrillic replies go to the Macedonian neural voice; anything else (and
+        any edge-tts failure — offline, service hiccup) uses local Piper.
+        """
+        if tts is None and edge is None:  # no voice at all — reply shown only
             return 0.0
         t0 = time.perf_counter()
-        wav, sr = await asyncio.to_thread(tts.synthesize, text)
+        wav = None
+        sr = 0
+        if edge is not None and contains_cyrillic(text):
+            try:
+                wav, sr = await edge.synthesize(text)
+            except Exception:
+                vlog.warning("edge-tts failed; falling back to Piper", exc_info=True)
+                wav = None
+        if wav is None or getattr(wav, "size", 0) == 0:
+            if tts is None:
+                return 0.0
+            wav, sr = await asyncio.to_thread(tts.synthesize, text)
         tts_ms = (time.perf_counter() - t0) * 1000
         if await asyncio.to_thread(play_interruptible, wav, sr):
             barge_in["hit"] = True

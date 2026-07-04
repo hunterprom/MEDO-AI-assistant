@@ -150,6 +150,10 @@ class TTSConfig(BaseModel):
     engine: str = "piper"
     voice_model: str = ""
     speed: float = 1.0
+    # Cyrillic replies are spoken with a Macedonian neural voice via edge-tts
+    # (free, online); Piper stays the offline voice for everything else.
+    multilingual: bool = True
+    mk_voice: str = "mk-MK-MarijaNeural"
 
 
 class WakeWordConfig(BaseModel):

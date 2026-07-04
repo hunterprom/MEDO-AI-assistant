@@ -96,6 +96,8 @@ tts:                                # M1
   engine: "piper"
   voice_model: "models/piper/en_US-lessac-medium.onnx"   # relative to project root
   speed: 1.0
+  multilingual: true                # Cyrillic replies -> Macedonian neural voice (edge-tts, online)
+  mk_voice: "mk-MK-MarijaNeural"    # or mk-MK-AleksandarNeural (male)
 
 wakeword:                           # M1
   engine: "openwakeword"
