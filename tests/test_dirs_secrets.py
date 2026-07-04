@@ -54,6 +54,27 @@ def test_sphere_dirs_respects_limit():
     assert len(dirs.sphere_dirs(limit=5)) <= 5
 
 
+def test_search_files_finds_matches_and_ignores_empty(tmp_path, monkeypatch):
+    (tmp_path / "alpha_report.txt").write_text("x")
+    sub = tmp_path / "sub"; sub.mkdir()
+    (sub / "beta_report.txt").write_text("y")
+    (tmp_path / "unrelated.log").write_text("z")
+    monkeypatch.setattr(dirs, "_search_roots", lambda: [tmp_path])
+    names = {r["name"] for r in dirs.search_files("report")}
+    assert "alpha_report.txt" in names and "beta_report.txt" in names
+    assert "unrelated.log" not in names
+    assert dirs.search_files("") == []          # empty query -> nothing
+
+
+def test_resolve_path_allows_home_blocks_outside(tmp_path, monkeypatch):
+    monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: tmp_path))
+    f = tmp_path / "doc.txt"; f.write_text("x")
+    assert dirs.resolve_path(str(f)) is not None
+    outside = tmp_path.parent / "elsewhere_medo"; outside.mkdir(exist_ok=True)
+    assert dirs.resolve_path(str(outside)) is None       # exists but outside home
+    assert dirs.resolve_path(str(tmp_path / "missing")) is None
+
+
 def test_sphere_path_key_resolves_and_traversal_still_blocked():
     s = dirs.sphere_dirs()
     extra = next((d for d in s if not d["primary"]), None)
@@ -178,6 +199,48 @@ async def test_wake_sets_event_when_voice_running():
         assert ev.is_set()
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_stops_and_listens():
+    import threading
+
+    ev = threading.Event()
+    server = RemoteServer(
+        load_settings(), router=None, sm=StateMachine(EventBus()), wake_event=ev  # type: ignore[arg-type]
+    )
+    client = TestClient(TestServer(server.build_app()))
+    await client.start_server()
+    try:
+        resp = await client.post("/interrupt")            # default listen=true
+        assert resp.status == 200
+        assert ev.is_set()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_search_files_endpoint_empty_query(api):
+    resp = await api.get("/search/files?q=")
+    assert resp.status == 200
+    assert (await resp.json())["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_search_web_endpoint(api, monkeypatch):
+    import remote.server as rs
+
+    monkeypatch.setattr(rs, "_web_search", lambda q, n=8: [{"title": "T", "url": "http://x", "snippet": "s"}])
+    body = await (await api.get("/search/web?q=hello")).json()
+    assert body["results"][0]["url"] == "http://x"
+    assert (await (await api.get("/search/web?q=")).json())["results"] == []
+
+
+@pytest.mark.asyncio
+async def test_open_path_rejects_disallowed(api):
+    # A real path outside the user's home must not be openable.
+    resp = await api.post("/open", json={"path": "C:/Windows/System32"})
+    assert resp.status in (403, 404)
 
 
 @pytest.mark.asyncio

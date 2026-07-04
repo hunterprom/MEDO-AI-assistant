@@ -121,6 +121,7 @@ class HudConfig(BaseModel):
     enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 8730
+    max_dir_dots: int = 300             # how many folder dots to scatter on the orb
 
 
 class STTConfig(BaseModel):

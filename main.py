@@ -301,8 +301,9 @@ async def run_voice(
 
     def wait_for_wake(mic: Microphone) -> None:
         wake.reset()
-        if wake_event is not None:
-            wake_event.clear()  # ignore any press that arrived mid-turn
+        # NB: we do NOT clear wake_event here — a /wake or /interrupt that fired
+        # during the previous turn should carry over and start listening now
+        # (barge-in). It's cleared only when consumed, just below.
         # Report the peak wake score + mic level every few seconds so it's obvious
         # whether the mic is even hearing you and how close the phrase gets to the
         # threshold — the two things that keep it "stuck on STANDING BY".

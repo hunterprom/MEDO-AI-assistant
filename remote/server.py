@@ -14,10 +14,13 @@ Model/provider endpoints let clients switch the LLM at runtime.
     POST /provider {"provider": "ollama"|"openai", "api_key"?, "base_url"?,
                     "model"?}        -> {"ok", "provider", "model", "models"}
     GET  /dirs            -> {"dirs": [{"key", "label", "path", "center"}, …]}
-    POST /open {"key": …} -> {"ok", "path"}   (opens a folder in the file explorer)
+    POST /open {"key"|"path": …} -> {"ok", "path"}   (opens a folder/file in explorer)
     POST /wake            -> {"ok": true}      (start a voice turn without the wake word)
+    POST /interrupt       -> {"ok": true}      (stop TTS mid-sentence; barge-in)
     GET  /audio/devices   -> {"devices": [{"index", "name"}], "current": …}
     POST /audio/input {"device": int|str|null} -> {"ok", "device"}  (pick the mic)
+    GET  /search/files?q= -> {"results": [{"name", "path", "is_dir"}, …]}
+    GET  /search/web?q=   -> {"results": [{"title", "url", "snippet"}, …]}
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -111,8 +114,11 @@ class RemoteServer:
         app.router.add_get("/dirs", self._handle_dirs)
         app.router.add_post("/open", self._handle_open)
         app.router.add_post("/wake", self._handle_wake)
+        app.router.add_post("/interrupt", self._handle_interrupt)
         app.router.add_get("/audio/devices", self._handle_audio_devices)
         app.router.add_post("/audio/input", self._handle_set_audio_input)
+        app.router.add_get("/search/files", self._handle_search_files)
+        app.router.add_get("/search/web", self._handle_search_web)
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
@@ -370,14 +376,59 @@ class RemoteServer:
             return _error(400, "body must be JSON like {\"key\": \"downloads\"}")
 
         key = str(payload.get("key") or "").strip()
-        path = dirs.resolve(key)
-        if path is None:
-            return _error(404, f"unknown folder shortcut {key!r}")
+        path_str = str(payload.get("path") or "").strip()
+        if path_str:  # a search result: validate it's under an allowed root
+            path = dirs.resolve_path(path_str)
+            if path is None:
+                return _error(403, "path not allowed or does not exist")
+        else:
+            path = dirs.resolve(key)
+            if path is None:
+                return _error(404, f"unknown folder shortcut {key!r}")
         opened = await asyncio.to_thread(dirs.open_path, path)
         if not opened:
             return _error(500, f"could not open {path}")
-        logger.info("opened folder %s via companion API", path)
+        logger.info("opened %s via companion API", path)
         return web.json_response({"ok": True, "path": str(path)})
+
+    async def _handle_interrupt(self, request: web.Request) -> web.Response:
+        """Barge-in: stop any TTS playback now, and (by default) start listening.
+
+        ``sounddevice.stop()`` is global, so it cuts the current Piper utterance
+        wherever the voice loop is blocked on playback. ``{"listen": false}`` just
+        silences it without opening the mic.
+        """
+        try:
+            import sounddevice as sd
+
+            await asyncio.to_thread(sd.stop)
+        except Exception:
+            logger.debug("interrupt: could not stop audio", exc_info=True)
+        listen = True
+        with contextlib.suppress(ValueError):
+            listen = bool((await request.json()).get("listen", True))
+        if listen and self._wake_event is not None:
+            self._wake_event.set()
+        logger.info("interrupt requested (listen=%s)", listen)
+        return web.json_response({"ok": True, "listening": listen and self._wake_event is not None})
+
+    async def _handle_search_files(self, request: web.Request) -> web.Response:
+        """Filename/-folder substring search under the user's folders."""
+        query = request.query.get("q", "").strip()
+        results = await asyncio.to_thread(dirs.search_files, query, 40) if query else []
+        return web.json_response({"ok": True, "results": results})
+
+    async def _handle_search_web(self, request: web.Request) -> web.Response:
+        """Keyless DuckDuckGo web search (server-side, so the HUD dodges CORS)."""
+        query = request.query.get("q", "").strip()
+        if not query:
+            return web.json_response({"ok": True, "results": []})
+        results = await asyncio.to_thread(_web_search, query, 8)
+        if results is None:
+            return web.json_response(
+                {"ok": False, "results": [], "error": "web search unavailable (offline?)"}
+            )
+        return web.json_response({"ok": True, "results": results})
 
     async def _handle_ask(self, request: web.Request) -> web.Response:
         """Route one utterance and return the reply as JSON."""
@@ -406,6 +457,28 @@ class RemoteServer:
                 "latency_ms": round(result.latency_ms, 1),
             }
         )
+
+
+def _web_search(query: str, max_results: int = 8) -> list[dict] | None:
+    """DuckDuckGo results as ``[{"title","url","snippet"}]`` (None if unreachable).
+
+    Shares the ddgs backend the web_search skill uses, but returns raw results for
+    the HUD to render + open, rather than an LLM summary.
+    """
+    try:
+        from ddgs import DDGS
+
+        with DDGS() as ddgs:
+            return [
+                {
+                    "title": r.get("title", ""),
+                    "url": r.get("href", "") or r.get("url", ""),
+                    "snippet": r.get("body", ""),
+                }
+                for r in ddgs.text(query, max_results=max_results)
+            ]
+    except Exception:  # offline, rate-limited, parser change, ddgs missing
+        return None
 
 
 def _error(status: int, message: str) -> web.Response:

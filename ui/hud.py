@@ -71,8 +71,8 @@ class HudServer:
                 "lon": self._settings.weather.longitude,
             },
             # Folder shortcuts scattered across the orb dots (centre = system
-            # drive; ~100+ real directories, only the curated ones are labelled).
-            "dirs": dirs.sphere_dirs(),
+            # drive; hundreds of real directories, only curated ones are labelled).
+            "dirs": dirs.sphere_dirs(self._settings.hud.max_dir_dots),
         }
         html = html.replace("__MEDO_CONFIG__", json.dumps(page_config))
         return web.Response(text=html, content_type="text/html")

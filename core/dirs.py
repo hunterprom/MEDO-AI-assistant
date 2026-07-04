@@ -89,34 +89,108 @@ def _scan_children(root: Path, out: list[dict], seen: set[str], limit: int) -> N
         return
 
 
-def sphere_dirs(limit: int = 140) -> list[dict]:
-    """Up to ``limit`` real folders to scatter across the orb (>=100 on a normal PC).
+def sphere_dirs(limit: int = 300) -> list[dict]:
+    """Up to ``limit`` real folders to scatter across the orb (hundreds on a PC).
 
     Starts from the curated :func:`user_dirs` (drive + standard user folders, the
-    only ones with ``primary=True`` so the HUD labels just those), then breadth-
-    fills with the children of the drive root and each user folder, and a second
-    level if needed. Extra dots carry their absolute path as ``key``. The result
-    is cached so :func:`resolve` can whitelist exactly these paths for ``/open``.
+    only ones with ``primary=True`` so the HUD labels just those), then a
+    breadth-first descent through their sub-directories, level by level, until the
+    cap. Extra dots carry their absolute path as ``key``. The result is cached so
+    :func:`resolve` can whitelist exactly these paths for ``/open``.
     """
     curated = [{**d, "primary": True} for d in user_dirs()]
     out: list[dict] = list(curated)
     seen = {os.path.normpath(d["path"]) for d in out}
 
-    # First level: children of the drive root and every curated folder.
-    for entry in curated:
-        _scan_children(Path(entry["path"]), out, seen, limit)
-    # Second level: descend into what we just found until we hit the cap.
-    for entry in list(out):
-        if len(out) >= limit:
-            break
-        if entry["center"]:
-            continue
-        _scan_children(Path(entry["path"]), out, seen, limit)
+    # BFS: a queue of folders to expand, seeded with the curated set. Each pop
+    # scans one folder's children (appending new dots) and enqueues them, so the
+    # orb fills evenly outward instead of exhausting one branch first.
+    queue: list[Path] = [Path(d["path"]) for d in curated]
+    while queue and len(out) < limit:
+        parent = queue.pop(0)
+        before = len(out)
+        _scan_children(parent, out, seen, limit)
+        for entry in out[before:]:
+            queue.append(Path(entry["path"]))
 
     out = out[:limit]
     _SPHERE_INDEX.clear()
     _SPHERE_INDEX.update({d["key"]: d["path"] for d in out})
     return out
+
+
+def _search_roots() -> list[Path]:
+    """Trees that file search walks — the user's folders (fast, and what they mean)."""
+    home = Path.home()
+    roots = [home]
+    for sub in ("Desktop", "Downloads", "Documents", "Pictures", "Music", "Videos"):
+        p = home / sub
+        if p.exists():
+            roots.append(p)
+    return roots
+
+
+def search_files(query: str, limit: int = 40, max_scanned: int = 60000) -> list[dict]:
+    """Filename/-folder substring search under the user's folders.
+
+    Bounded DFS (``max_scanned`` entries) so a huge tree can't hang the request;
+    returns ``[{"name", "path", "is_dir"}]`` for names containing ``query``.
+    Hidden/system entries are skipped. Never raises.
+    """
+    q = query.strip().lower()
+    if not q:
+        return []
+    out: list[dict] = []
+    scanned = 0
+    stack: list[str] = [str(r) for r in _search_roots()]
+    seen_dirs: set[str] = set()
+    while stack and len(out) < limit and scanned < max_scanned:
+        d = stack.pop()
+        if d in seen_dirs:
+            continue
+        seen_dirs.add(d)
+        try:
+            with os.scandir(d) as it:
+                for entry in it:
+                    scanned += 1
+                    name = entry.name
+                    if name.startswith(".") or name.startswith("$"):
+                        continue
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if q in name.lower():
+                        out.append({"name": name, "path": os.path.normpath(entry.path),
+                                    "is_dir": is_dir})
+                        if len(out) >= limit:
+                            break
+                    if is_dir:
+                        stack.append(entry.path)
+        except (PermissionError, OSError, NotADirectoryError):
+            continue
+    return out
+
+
+def resolve_path(path_str: str) -> Path | None:
+    """Validate a caller-supplied path for ``/open`` — else ``None``.
+
+    Allowed only when the path exists AND lives under the user's home tree or was
+    one of the sphere dots. Keeps ``/open`` from launching anything arbitrary even
+    though the API is LAN-only.
+    """
+    try:
+        rp = Path(path_str).resolve()
+    except (OSError, ValueError):
+        return None
+    if not rp.exists():
+        return None
+    home = Path.home().resolve()
+    if rp == home or home in rp.parents:
+        return rp
+    if os.path.normpath(str(rp)) in _SPHERE_INDEX:
+        return rp
+    return None
 
 
 def resolve(key: str) -> Path | None:
