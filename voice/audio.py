@@ -21,6 +21,25 @@ logger = logging.getLogger(__name__)
 FRAME_SAMPLES = 1280
 
 
+def list_input_devices() -> list[dict]:
+    """``[{"index", "name"}]`` for every input-capable device (``[]`` on error).
+
+    Used by the HUD microphone picker so a user can choose the mic the wake word
+    listens on without editing config. Never raises.
+    """
+    try:
+        import sounddevice as sd
+
+        return [
+            {"index": i, "name": str(dev["name"])}
+            for i, dev in enumerate(sd.query_devices())
+            if dev.get("max_input_channels", 0) > 0
+        ]
+    except Exception:
+        logger.debug("could not list input devices", exc_info=True)
+        return []
+
+
 def resolve_input_device(device: int | str | None):
     """Turn a device name-substring into its index; pass ints/None through.
 

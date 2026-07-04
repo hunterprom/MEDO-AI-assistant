@@ -16,6 +16,8 @@ Model/provider endpoints let clients switch the LLM at runtime.
     GET  /dirs            -> {"dirs": [{"key", "label", "path", "center"}, …]}
     POST /open {"key": …} -> {"ok", "path"}   (opens a folder in the file explorer)
     POST /wake            -> {"ok": true}      (start a voice turn without the wake word)
+    GET  /audio/devices   -> {"devices": [{"index", "name"}], "current": …}
+    POST /audio/input {"device": int|str|null} -> {"ok", "device"}  (pick the mic)
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -109,6 +111,8 @@ class RemoteServer:
         app.router.add_get("/dirs", self._handle_dirs)
         app.router.add_post("/open", self._handle_open)
         app.router.add_post("/wake", self._handle_wake)
+        app.router.add_get("/audio/devices", self._handle_audio_devices)
+        app.router.add_post("/audio/input", self._handle_set_audio_input)
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
@@ -312,6 +316,43 @@ class RemoteServer:
         self._wake_event.set()
         logger.info("manual wake requested via companion API")
         return web.json_response({"ok": True})
+
+    async def _handle_audio_devices(self, request: web.Request) -> web.Response:
+        """List input devices (for the HUD mic picker) + the current selection."""
+        from voice.audio import list_input_devices
+
+        devices = await asyncio.to_thread(list_input_devices)
+        return web.json_response(
+            {"ok": True, "devices": devices, "current": self._settings.audio.input_device}
+        )
+
+    async def _handle_set_audio_input(self, request: web.Request) -> web.Response:
+        """Choose the microphone the wake word listens on, at runtime.
+
+        Accepts an int index, a name substring, or null (system default). The
+        change is picked up when the voice loop next reopens the mic; poking the
+        wake event makes that happen promptly instead of waiting for a wake.
+        """
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error(400, "body must be JSON like {\"device\": 4}")
+
+        device = payload.get("device")
+        if device is not None and not isinstance(device, (int, str)):
+            return _error(400, "'device' must be a number, a name, or null")
+        if isinstance(device, str) and not device.strip():
+            device = None
+
+        self._settings.audio.input_device = device
+        if self._persist_secrets:
+            from core.config import save_audio_input
+
+            save_audio_input(device)
+        if self._wake_event is not None:
+            self._wake_event.set()  # reopen the mic on the new device now
+        logger.info("audio input device set to %r via companion API", device)
+        return web.json_response({"ok": True, "device": device})
 
     async def _handle_dirs(self, request: web.Request) -> web.Response:
         """Folder shortcuts for the HUD sphere dots (labels + resolved paths)."""

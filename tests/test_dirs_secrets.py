@@ -18,6 +18,7 @@ from core.config import (
     apply_local_secrets,
     load_llm_secrets,
     load_settings,
+    save_audio_input,
     save_llm_secrets,
 )
 from core.events import EventBus, StateMachine
@@ -96,6 +97,29 @@ def test_load_missing_secrets_is_empty(tmp_path):
     assert load_llm_secrets(tmp_path / "nope.yaml") == {}
 
 
+def test_audio_and_llm_overrides_coexist(tmp_path):
+    path = tmp_path / "secrets.local.yaml"
+    save_llm_secrets(path, provider="openai", api_key="sk-keep")
+    save_audio_input(4, path)                     # must not wipe the llm section
+    assert load_llm_secrets(path)["api_key"] == "sk-keep"
+    save_llm_secrets(path, default_model="gpt-4o")  # must not wipe the audio section
+    settings = load_settings()
+    apply_local_secrets(settings, path)
+    assert settings.audio.input_device == 4
+    assert settings.llm.api_key == "sk-keep"
+    assert settings.llm.default_model == "gpt-4o"
+
+
+def test_apply_audio_override_accepts_name_and_null(tmp_path):
+    path = tmp_path / "secrets.local.yaml"
+    save_audio_input("FHD Webcam", path)
+    s = load_settings(); apply_local_secrets(s, path)
+    assert s.audio.input_device == "FHD Webcam"
+    save_audio_input(None, path)
+    s2 = load_settings(); apply_local_secrets(s2, path)
+    assert s2.audio.input_device is None
+
+
 # --- /open + /dirs over HTTP ------------------------------------------------
 
 
@@ -152,5 +176,32 @@ async def test_wake_sets_event_when_voice_running():
         resp = await client.post("/wake")
         assert resp.status == 200
         assert ev.is_set()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_audio_devices_endpoint(api):
+    resp = await api.get("/audio/devices")
+    assert resp.status == 200
+    body = await resp.json()
+    assert "devices" in body and "current" in body  # devices may be [] without audio
+
+
+@pytest.mark.asyncio
+async def test_set_audio_input_updates_settings_and_validates():
+    settings = load_settings()
+    server = RemoteServer(settings, router=None, sm=StateMachine(EventBus()))  # type: ignore[arg-type]
+    client = TestClient(TestServer(server.build_app()))
+    await client.start_server()
+    try:
+        assert (await client.post("/audio/input", json={"device": 4})).status == 200
+        assert settings.audio.input_device == 4
+        assert (await client.post("/audio/input", json={"device": "FHD Webcam"})).status == 200
+        assert settings.audio.input_device == "FHD Webcam"
+        assert (await client.post("/audio/input", json={"device": None})).status == 200
+        assert settings.audio.input_device is None
+        # a non-scalar device is rejected
+        assert (await client.post("/audio/input", json={"device": {"x": 1}})).status == 400
     finally:
         await client.close()

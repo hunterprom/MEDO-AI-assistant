@@ -269,41 +269,64 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     return _FileSettings()
 
 
-# --- local secrets (online API key) -----------------------------------------
+# --- local overrides (online API key + chosen mic) --------------------------
 #
-# Deliberately kept out of load_settings() so tests that call load_settings()
-# stay fully isolated from the developer's machine. main.py opts in by calling
-# apply_local_secrets() at startup, and the companion API opts in to writes.
+# A single git-ignored file holds per-machine settings that must not be committed
+# to config.yaml: the online API key/model (``llm:``) and the chosen microphone
+# (``audio:``). Deliberately kept out of load_settings() so tests that call
+# load_settings() stay isolated from the developer's machine; main.py opts in by
+# calling apply_local_secrets() at startup and the companion API opts in to writes.
 
 
-def load_llm_secrets(path: Path = SECRETS_PATH) -> dict:
-    """Return the persisted llm secrets ``{field: value}`` (``{}`` if none)."""
+def _read_local(path: Path = SECRETS_PATH) -> dict:
+    """Whole local-overrides document (``{}`` if missing/corrupt). Never raises."""
     if not path.exists():
         return {}
     try:
         import yaml
 
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        llm = data.get("llm", {}) or {}
-        return {k: llm[k] for k in _SECRET_LLM_FIELDS if k in llm}
-    except Exception:  # a corrupt secrets file must never crash startup
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # a corrupt file must never crash startup
         return {}
 
 
-def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settings:
-    """Overlay any locally-saved llm secrets onto ``settings.llm`` in place.
+def _write_local(data: dict, path: Path = SECRETS_PATH) -> None:
+    import yaml
 
-    Lets an online API key + model survive a restart without ever being written
-    to the git-tracked config.yaml. Returns the same settings for convenience.
+    path.write_text(
+        "# MEDO local overrides — git-ignored, do not commit.\n"
+        + yaml.safe_dump(data, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def load_llm_secrets(path: Path = SECRETS_PATH) -> dict:
+    """Return the persisted llm secrets ``{field: value}`` (``{}`` if none)."""
+    llm = _read_local(path).get("llm", {}) or {}
+    return {k: llm[k] for k in _SECRET_LLM_FIELDS if k in llm}
+
+
+def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settings:
+    """Overlay locally-saved llm secrets + chosen mic onto ``settings`` in place.
+
+    Lets an online API key/model and the picked microphone survive a restart
+    without ever being written to the git-tracked config.yaml. Returns the same
+    settings for convenience.
     """
-    for field, value in load_llm_secrets(path).items():
+    data = _read_local(path)
+    llm = data.get("llm", {}) or {}
+    for field in _SECRET_LLM_FIELDS:
+        value = llm.get(field)
         if value not in (None, ""):
             setattr(settings.llm, field, value)
+    audio = data.get("audio", {}) or {}
+    if "input_device" in audio:  # may be int, name, or None (= system default)
+        settings.audio.input_device = audio["input_device"]
     return settings
 
 
 def save_llm_secrets(path: Path = SECRETS_PATH, **fields: object) -> None:
-    """Merge the given llm fields into the git-ignored secrets file.
+    """Merge the given llm fields into the git-ignored overrides file.
 
     Merging (not overwriting) means switching provider to "ollama" keeps the
     stored key so the next switch back to online needs no re-entry. Only
@@ -313,14 +336,18 @@ def save_llm_secrets(path: Path = SECRETS_PATH, **fields: object) -> None:
     if not payload:
         return
     try:
-        import yaml
-
-        existing = load_llm_secrets(path)
-        existing.update(payload)
-        path.write_text(
-            "# MEDO local secrets — git-ignored, do not commit.\n"
-            + yaml.safe_dump({"llm": existing}, sort_keys=False),
-            encoding="utf-8",
-        )
+        data = _read_local(path)
+        data.setdefault("llm", {}).update(payload)
+        _write_local(data, path)
     except Exception:
         logging.getLogger(__name__).exception("could not persist llm secrets")
+
+
+def save_audio_input(device: int | str | None, path: Path = SECRETS_PATH) -> None:
+    """Persist the chosen microphone (index/name/None) to the overrides file."""
+    try:
+        data = _read_local(path)
+        data.setdefault("audio", {})["input_device"] = device
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist audio input device")

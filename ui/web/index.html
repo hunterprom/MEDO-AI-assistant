@@ -430,6 +430,10 @@
         <button class="toggle on" disabled><span class="knob"></span></button>
       </div>
       <div class="setting">
+        <div class="info"><span class="name">Microphone</span><span class="desc">INPUT DEVICE THE WAKE WORD LISTENS ON</span></div>
+        <select class="cfg" id="cfg-mic"><option>loading…</option></select>
+      </div>
+      <div class="setting">
         <div class="info"><span class="name">Pointer mode</span><span class="desc">GESTURE MOUSE — MOVE · PINCH-DRAG · SCROLL · ZOOM · RIGHT-CLICK · VOLUME · FIST EXITS</span></div>
         <button class="toggle" id="cfg-pointer"><span class="knob"></span></button>
       </div>
@@ -906,6 +910,42 @@
     } catch { connStatus.className = 'err'; connStatus.textContent = 'API OFFLINE'; }
   };
   loadModels(); setInterval(loadModels, 60000);
+
+  /* ---- microphone picker ---- */
+  const micSel = $('cfg-mic');
+  const MIC_PLACEHOLDER = /^(loading|api offline|no input)/i;
+  async function loadMics() {
+    try {
+      const d = await (await fetch(`${API}/audio/devices`)).json();
+      const devices = d.devices || [];
+      if (!devices.length) { micSel.innerHTML = '<option>no input devices</option>'; return; }
+      micSel.innerHTML = '';
+      const def = document.createElement('option');
+      def.value = '__default__'; def.textContent = 'System default'; micSel.appendChild(def);
+      for (const dev of devices) {
+        const o = document.createElement('option');
+        o.value = String(dev.index); o.textContent = `[${dev.index}] ${dev.name}`;
+        micSel.appendChild(o);
+      }
+      const cur = d.current;
+      if (cur === null || cur === undefined) micSel.value = '__default__';
+      else {
+        const asStr = String(cur);
+        const m = [...micSel.options].find(o => o.value === asStr)
+              || [...micSel.options].find(o => o.textContent.toLowerCase().includes(asStr.toLowerCase()));
+        micSel.value = m ? m.value : '__default__';
+      }
+    } catch { micSel.innerHTML = '<option>api offline</option>'; }
+  }
+  micSel.onchange = async () => {
+    if (MIC_PLACEHOLDER.test(micSel.value)) return;
+    const device = micSel.value === '__default__' ? null : Number(micSel.value);
+    try {
+      await fetch(`${API}/audio/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device }) });
+      log(`MIC → ${micSel.options[micSel.selectedIndex].textContent}`);
+    } catch { }
+  };
+  loadMics();
 
   /* ---- the orb: cosmic web (nodes + filaments + dust), from the design ---- */
   (function initOrb() {
