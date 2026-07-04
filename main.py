@@ -290,19 +290,22 @@ async def run_voice(
 
     vlog = logging.getLogger("voice")
 
-    with console.status("[dim]loading voice models…[/dim]"):
-        wake = WakeWord(settings.wakeword)
-        stt = Transcriber(settings.stt)
-        # A missing/broken Piper voice shouldn't sink the whole session — degrade
-        # to showing replies without speaking them (the HUD still renders them).
-        try:
-            tts: TextToSpeech | None = TextToSpeech(settings.tts)
-        except Exception as exc:
-            tts = None
-            console.print(
-                f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
-                f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
-            )
+    # Plain ASCII print, no rich Live/status spinner: with stdout redirected to
+    # a file (service/log launches) the spinner's buffer flush dies on cp1252
+    # encoding and takes ALL of voice mode down with it.
+    console.print("[dim]loading voice models...[/dim]")
+    wake = WakeWord(settings.wakeword)
+    stt = Transcriber(settings.stt)
+    # A missing/broken Piper voice shouldn't sink the whole session — degrade
+    # to showing replies without speaking them (the HUD still renders them).
+    try:
+        tts: TextToSpeech | None = TextToSpeech(settings.tts)
+    except Exception as exc:
+        tts = None
+        console.print(
+            f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
+            f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
+        )
     def wait_for_wake(mic: Microphone, opened_device) -> str:
         """Block until something should end the wait; returns why.
 
@@ -359,32 +362,61 @@ async def run_voice(
     # loop reads it to skip the wake word and listen immediately.
     barge_in = {"hit": False}
 
+    # Barge-in tuning (per the latency/leakage analysis): TTS leaking from the
+    # speakers into the open mic crushes the wake score, so 0.4 rarely fires
+    # while MEDO talks. During playback we run a LOWER wake threshold (barging
+    # in is low-risk — worst case the reply stops), plus an energy gate: mic
+    # level holding well above the playback's own leakage baseline means
+    # someone is talking over MEDO.
+    BARGE_WAKE_THRESHOLD = 0.25   # vs 0.4 when idle
+    BARGE_RMS_RATIO = 3.0         # mic level vs playback-leakage baseline
+    BARGE_MIN_RMS = 0.02          # absolute floor so silence can't ratio-trip
+    BARGE_HOLD_FRAMES = 4         # ~0.3 s sustained before it counts
+
     def play_interruptible(wav, sr: int) -> bool:
         """Play a reply while watching the mic; True if the user barged in.
 
-        During playback the mic keeps running through the wake model, so saying
-        the wake phrase over MEDO's voice stops it mid-sentence (as does the
-        HUD's interrupt button via ``wake_event``). Wake-word-gated on purpose:
-        a plain energy gate would trip on MEDO's own audio from the speakers.
-        Falls back to blocking playback if the mic can't be opened.
+        Interrupts on any of: the HUD/watch interrupt signal (``wake_event``),
+        the wake phrase at a playback-lowered threshold, or sustained mic
+        energy well above the reply's own speaker-leakage baseline (measured
+        live during the first frames of playback). Falls back to blocking
+        playback if the mic can't be opened.
         """
         import sounddevice as sd
 
         sd.play(wav, samplerate=sr, device=settings.audio.output_device)
         stream = sd.get_stream()
         interrupted = False
+        why = ""
         try:
             wake.reset()
+            baseline: float | None = None   # EMA of mic RMS incl. TTS leakage
+            loud_run = 0
+            frames = 0
             with Microphone(settings.audio.sample_rate,
                             device=settings.audio.input_device) as m:
                 while stream.active:
                     frame = m.read_frame()  # 80 ms cadence paces this loop
+                    frames += 1
                     if wake_event is not None and wake_event.is_set():
                         wake_event.clear()
-                        interrupted = True
+                        interrupted, why = True, "interrupt signal"
                         break
-                    if wake.predict(frame) >= wake.threshold:
-                        interrupted = True
+                    if wake.predict(frame) >= BARGE_WAKE_THRESHOLD:
+                        interrupted, why = True, "wake word over playback"
+                        break
+                    rms = frame_rms(frame)
+                    if baseline is None:
+                        baseline = rms
+                    elif frames <= 6 or rms < baseline * 1.5:
+                        # Track the reply's own loudness only while nothing
+                        # shouts over it, so a talking user can't raise the bar.
+                        baseline += 0.2 * (rms - baseline)
+                    loud = rms >= max(baseline * BARGE_RMS_RATIO, BARGE_MIN_RMS)
+                    # Ignore the first frames: the baseline is still settling.
+                    loud_run = loud_run + 1 if (loud and frames > 6) else 0
+                    if loud_run >= BARGE_HOLD_FRAMES:
+                        interrupted, why = True, "voice over playback"
                         break
         except Exception:  # mic busy/unavailable — degrade to plain playback
             logging.getLogger("voice").debug("barge-in watcher failed", exc_info=True)
@@ -394,7 +426,7 @@ async def run_voice(
             wake.reset()
         if interrupted:
             sd.stop()
-            vlog.info("barge-in: reply interrupted, listening")
+            vlog.info("barge-in (%s): reply interrupted, listening", why)
         return interrupted
 
     async def speak(text: str) -> float:
@@ -566,7 +598,19 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     if serve or settings.remote.enabled or settings.vision.enabled:
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
                               wake_event=wake_event if voice else None)
-        await remote.start()
+        try:
+            await remote.start()
+        except OSError as exc:
+            # Port already bound = a previous MEDO is still running. Without
+            # this message the new launch just dies and the user keeps talking
+            # to the old build, wondering why nothing they changed works.
+            console.print(
+                f"[red]Another MEDO is already running (port "
+                f"{settings.remote.port} is busy): {exc}[/red]\n"
+                f"[yellow]Close the old MEDO window (or re-run run.bat, which "
+                f"now replaces it automatically) and try again.[/yellow]"
+            )
+            return
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "
             f"watch app + vision sidecar connect here.[/dim]"
