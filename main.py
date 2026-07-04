@@ -504,32 +504,44 @@ async def run_voice(
             require_wake = True
             continue
 
-        await sm.transition(AssistantState.THINKING)
-        t0 = time.perf_counter()
-        # Quiet mics (webcam/onboard) record speech peaking at a few percent;
-        # normalizing before STT noticeably improves Whisper on those clips.
-        text = await asyncio.to_thread(stt.transcribe, normalize_peak(audio))
-        stt_ms = (time.perf_counter() - t0) * 1000
-        if not text.strip():
-            console.print("[dim](couldn't make that out)[/dim]")
+        # One failed turn must NEVER kill voice mode: an exception here used to
+        # propagate out of the loop, leaving the HUD stuck on "PROCESSING"
+        # forever (state frozen in THINKING, nothing consuming wake/interrupt)
+        # while typing kept working — the classic "voice is broken" state.
+        try:
+            await sm.transition(AssistantState.THINKING)
+            t0 = time.perf_counter()
+            # Quiet mics (webcam/onboard) record speech peaking at a few percent;
+            # normalizing before STT noticeably improves Whisper on those clips.
+            text = await asyncio.to_thread(stt.transcribe, normalize_peak(audio))
+            stt_ms = (time.perf_counter() - t0) * 1000
+            if not text.strip():
+                console.print("[dim](couldn't make that out)[/dim]")
+                require_wake = True
+                continue
+            ui.transcript(text)
+
+            result = await router.route(text)
+
+            await sm.transition(AssistantState.SPEAKING)
+            tts_ms = await speak(result.speech)
+            log.record(TurnTimings(
+                path=result.path.value,
+                wake_to_listen_ms=wake_to_listen_ms if require_wake else None,
+                stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
+            ))
+            ui.turn(result, log.turns[-1])
+            # Listen again right away (no wake word) when MEDO asked "are you
+            # sure?" or the user just interrupted — they clearly want to talk.
+            require_wake = not (router.awaiting_confirmation or barge_in["hit"])
+            barge_in["hit"] = False
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            raise
+        except Exception:
+            logging.getLogger("voice").exception("voice turn failed; back to standby")
+            console.print("[red]That one failed — say the wake word to try again.[/red]")
             require_wake = True
-            continue
-        ui.transcript(text)
-
-        result = await router.route(text)
-
-        await sm.transition(AssistantState.SPEAKING)
-        tts_ms = await speak(result.speech)
-        log.record(TurnTimings(
-            path=result.path.value,
-            wake_to_listen_ms=wake_to_listen_ms if require_wake else None,
-            stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
-        ))
-        ui.turn(result, log.turns[-1])
-        # Listen again immediately (no wake word) when MEDO asked "are you sure?"
-        # or when the user just interrupted the reply — they clearly want to talk.
-        require_wake = not (router.awaiting_confirmation or barge_in["hit"])
-        barge_in["hit"] = False
+            barge_in["hit"] = False
 
 
 def _trust_os_certificates() -> None:
