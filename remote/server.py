@@ -193,6 +193,15 @@ class RemoteServer:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             return None
+        except asyncio.CancelledError:
+            # Server shutdown cancelled us mid-communicate: reap the subprocess
+            # now, or its transport is finalized after the loop closes and
+            # spews "Event loop is closed" tracebacks on an otherwise clean exit.
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            raise
         parts = [p.strip() for p in out.decode(errors="replace").split(",")]
         if proc.returncode != 0 or len(parts) < 4:
             return None
@@ -362,6 +371,18 @@ class RemoteServer:
             return _error(400, "'device' must be a number, a name, or null")
         if isinstance(device, str) and not device.strip():
             device = None
+
+        # Persist (and apply) the device NAME, not the raw index: PortAudio
+        # re-numbers devices across reboots, so a stored index silently lands
+        # on a different microphone next session. (Live-verified: a stored "1"
+        # pointed at a virtual cable one boot later.)
+        if isinstance(device, int):
+            from voice.audio import list_input_devices
+
+            devices = await asyncio.to_thread(list_input_devices)
+            name = next((d["name"] for d in devices if d["index"] == device), None)
+            if name:
+                device = name
 
         self._settings.audio.input_device = device
         if self._persist_secrets:

@@ -555,14 +555,17 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
     # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
     # returns immediately — so you can start a turn from the HUD without saying
-    # the "hey jarvis" phrase (fixes being stuck in STANDING BY).
+    # the "hey jarvis" phrase (fixes being stuck in STANDING BY). Only handed to
+    # the server when voice mode will actually consume it, so /wake correctly
+    # 409s in text-only sessions instead of pretending to listen.
     wake_event = threading.Event()
 
     remote: RemoteServer | None = None
     # The vision sidecar POSTs gestures to the companion API, so enabling vision
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
-        remote = RemoteServer(settings, router, sm, persist_secrets=True, wake_event=wake_event)
+        remote = RemoteServer(settings, router, sm, persist_secrets=True,
+                              wake_event=wake_event if voice else None)
         await remote.start()
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "

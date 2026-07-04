@@ -252,14 +252,23 @@ async def test_audio_devices_endpoint(api):
 
 
 @pytest.mark.asyncio
-async def test_set_audio_input_updates_settings_and_validates():
+async def test_set_audio_input_updates_settings_and_validates(monkeypatch):
+    import voice.audio as va
+
+    # Indices are converted to stable NAMES before applying/persisting
+    # (PortAudio re-numbers devices across reboots).
+    monkeypatch.setattr(va, "list_input_devices",
+                        lambda: [{"index": 4, "name": "Microphone (FHD Webcam)"}])
     settings = load_settings()
     server = RemoteServer(settings, router=None, sm=StateMachine(EventBus()))  # type: ignore[arg-type]
     client = TestClient(TestServer(server.build_app()))
     await client.start_server()
     try:
         assert (await client.post("/audio/input", json={"device": 4})).status == 200
-        assert settings.audio.input_device == 4
+        assert settings.audio.input_device == "Microphone (FHD Webcam)"
+        # an index with no matching device stays an index (best effort)
+        assert (await client.post("/audio/input", json={"device": 99})).status == 200
+        assert settings.audio.input_device == 99
         assert (await client.post("/audio/input", json={"device": "FHD Webcam"})).status == 200
         assert settings.audio.input_device == "FHD Webcam"
         assert (await client.post("/audio/input", json={"device": None})).status == 200
