@@ -401,8 +401,13 @@ class RemoteServer:
         return web.json_response({"ok": True, "device": device})
 
     async def _handle_dirs(self, request: web.Request) -> web.Response:
-        """Folder shortcuts for the HUD sphere dots (labels + resolved paths)."""
-        return web.json_response({"dirs": await asyncio.to_thread(dirs.sphere_dirs)})
+        """Folder shortcuts for the HUD sphere dots (labels + resolved paths).
+
+        Rescans this machine live — the HUD's "SCAN THIS PC" button uses it to
+        replace beacons from a page rendered elsewhere. Same dot cap as the page.
+        """
+        return web.json_response({"dirs": await asyncio.to_thread(
+            dirs.sphere_dirs, self._settings.hud.max_dir_dots)})
 
     async def _handle_open(self, request: web.Request) -> web.Response:
         """Open a whitelisted folder shortcut in the OS file explorer.

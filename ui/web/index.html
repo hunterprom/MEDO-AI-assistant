@@ -114,9 +114,11 @@
   #orbcol { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 0; }
   #orbwrap {
     --orb: clamp(320px, 74vh, 880px);
-    position: relative; width: calc(var(--orb) * 1.045); height: calc(var(--orb) * 1.045);
+    /* barrier rings sit well outside the sphere (1.35× the orb, was 1.045×);
+       margins absorb the extra so the column layout doesn't grow. */
+    position: relative; width: calc(var(--orb) * 1.35); height: calc(var(--orb) * 1.35);
     flex: none; display: flex; align-items: center; justify-content: center;
-    margin: calc(var(--orb) * -0.18) 0 calc(var(--orb) * -0.145);
+    margin: calc(var(--orb) * -0.333) 0 calc(var(--orb) * -0.298);
   }
   #orbwrap .ring0 { position: absolute; inset: 0; border: 1px dashed rgba(56,168,255,.22); border-radius: 50%; animation: medo-spin 80s linear infinite; }
   #orbwrap .ring1 { position: absolute; inset: 4.8%; border: 1px solid transparent; border-top-color: rgba(127,208,255,.5); border-right-color: rgba(56,168,255,.18); border-radius: 50%; animation: medo-spin 16s linear infinite; }
@@ -569,6 +571,10 @@
       <div class="setting">
         <div class="info"><span class="name">Documents index</span><span class="desc" id="docs-desc">ASK ABOUT YOUR FILES · LOADING…</span></div>
         <button class="btn-sm" id="docs-reindex">REINDEX</button>
+      </div>
+      <div class="setting">
+        <div class="info"><span class="name">File map</span><span class="desc" id="dirs-desc">FOLDER BEACONS ON THE SPHERE · RESCAN AFTER MOVING TO A NEW MACHINE</span></div>
+        <button class="btn-sm" id="dirs-rescan">SCAN THIS PC</button>
       </div>
     </div>
   </div>
@@ -1193,6 +1199,26 @@
     } catch { }
   };
 
+  // File map rescan: GET /dirs walks THIS machine's folders server-side, then
+  // the orb rebuilds its beacons in place — no reload, stale dirs from a config
+  // rendered on another computer are replaced by what actually exists here.
+  let orbApplyDirs = null;            // assigned by initOrb below
+  $('dirs-rescan').onclick = async () => {
+    const desc = $('dirs-desc'), btn = $('dirs-rescan');
+    btn.disabled = true;
+    desc.textContent = 'SCANNING FILE SYSTEM…';
+    try {
+      const d = await (await fetch(`${API}/dirs`)).json();
+      const n = orbApplyDirs ? orbApplyDirs(d.dirs || []) : 0;
+      desc.textContent = `FOLDER BEACONS ON THE SPHERE · ${n} FOLDERS MAPPED FROM THIS PC`;
+      log(`FILE MAP REBUILT · ${n} FOLDERS`);
+    } catch {
+      desc.textContent = 'SCAN FAILED · API OFFLINE';
+      log('FILE MAP SCAN FAILED · API OFFLINE');
+    }
+    btn.disabled = false;
+  };
+
   /* ---- the orb: cosmic web (nodes + filaments + dust), from the design ---- */
   (function initOrb() {
     const cv = $('orb');
@@ -1236,27 +1262,36 @@
     // The centre node is the system drive; the rest are appended as evenly-spread
     // beacons (golden-angle spiral) so they never overlap and stay clickable.
     // Each carries {key,label,path}; hovering shows the path, clicking opens it.
-    const DIRS = CFG.dirs || [];
-    const centerDir = DIRS.find(d => d.center);
-    if (centerDir) nodes[0].dir = centerDir;
-    // Primaries and extras get SEPARATE spirals: with one spiral over all ~300
-    // dirs, the 7 labeled folders (first in the array) landed on consecutive
-    // indices = the same latitude, clumped unreadably at the sphere's pole.
-    const prims = DIRS.filter(d => !d.center && d.primary);
-    const extras = DIRS.filter(d => !d.center && !d.primary);
-    prims.forEach((d, i) => {
-      const yy = (i + 0.5) / prims.length * 1.5 - 0.75;     // mid-latitude band, labels stay apart
-      const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
-      const phi = i * 2.399963229;                          // golden angle
-      nodes.push({ x: Math.cos(phi) * rr * 0.78, y: yy * 0.78, z: Math.sin(phi) * rr * 0.78, sz: 11, br: 1, dir: d });
-    });
-    extras.forEach((d, i) => {
-      const yy = 1 - (i + 0.5) / extras.length * 2;         // -1..1 (even spread)
-      const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
-      const phi = i * 2.399963229;
-      const rad = 0.58 + (i % 5) * 0.075;                   // shells so 300 dots don't pile up
-      nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: 6, br: 0.7, dir: d });
-    });
+    // Wrapped in applyDirs() so CONFIG's "SCAN THIS PC" can swap the whole set
+    // live after a rescan (e.g. the config was rendered on another machine).
+    const WEB_NODES = nodes.length;   // cosmic-web nodes; dir beacons are appended after
+    function applyDirs(DIRS) {
+      nodes.length = WEB_NODES;       // drop previous beacons before re-adding
+      delete nodes[0].dir;
+      const centerDir = DIRS.find(d => d.center);
+      if (centerDir) nodes[0].dir = centerDir;
+      // Primaries and extras get SEPARATE spirals: with one spiral over all ~300
+      // dirs, the 7 labeled folders (first in the array) landed on consecutive
+      // indices = the same latitude, clumped unreadably at the sphere's pole.
+      const prims = DIRS.filter(d => !d.center && d.primary);
+      const extras = DIRS.filter(d => !d.center && !d.primary);
+      prims.forEach((d, i) => {
+        const yy = (i + 0.5) / prims.length * 1.5 - 0.75;   // mid-latitude band, labels stay apart
+        const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
+        const phi = i * 2.399963229;                        // golden angle
+        nodes.push({ x: Math.cos(phi) * rr * 0.78, y: yy * 0.78, z: Math.sin(phi) * rr * 0.78, sz: 11, br: 1, dir: d });
+      });
+      extras.forEach((d, i) => {
+        const yy = 1 - (i + 0.5) / extras.length * 2;       // -1..1 (even spread)
+        const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
+        const phi = i * 2.399963229;
+        const rad = 0.58 + (i % 5) * 0.075;                 // shells so 300 dots don't pile up
+        nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: 6, br: 0.7, dir: d });
+      });
+      return DIRS.length;
+    }
+    applyDirs(CFG.dirs || []);
+    orbApplyDirs = applyDirs;         // hand the rebuild hook to the CONFIG tab
     const hotspots = [];   // rebuilt each frame: {x,y,r,key,label,path} in client px
 
     const dust = [];
@@ -1284,6 +1319,32 @@
     cv.addEventListener('mouseleave', () => { hoverBump = 0; if (zoomTarget < 1.2) zoomTarget = 1; });
     cv.addEventListener('dblclick', () => { zoomTarget = zoomTarget > 1.4 ? 1 : 2.2; });
 
+    // Pre-rendered halo sprite: one radial gradient built once, stamped with
+    // drawImage + globalAlpha — replaces ~350 createRadialGradient calls per
+    // frame (the inner/mid stop alphas keep a ~0.5 ratio across all depths,
+    // so a single sprite is visually identical).
+    const SPR = 64;
+    const sprite = document.createElement('canvas');
+    sprite.width = sprite.height = SPR * 2;
+    {
+      const sc = sprite.getContext('2d');
+      const sg = sc.createRadialGradient(SPR, SPR, 0, SPR, SPR, SPR);
+      sg.addColorStop(0, 'rgba(220,245,255,1)');
+      sg.addColorStop(0.35, 'rgba(90,185,255,0.5)');
+      sg.addColorStop(1, 'rgba(30,90,200,0)');
+      sc.fillStyle = sg; sc.fillRect(0, 0, SPR * 2, SPR * 2);
+    }
+    // Lazily-built alpha→fillStyle tables (256 steps): the dust/filament loops
+    // were allocating ~2700 rgba() strings per frame; a quantized lookup keeps
+    // the exact same colors without the string churn.
+    const styleCache = (r, g, b) => {
+      const tbl = [];
+      return q => tbl[q] || (tbl[q] = `rgba(${r},${g},${b},${(q / 255).toFixed(3)})`);
+    };
+    const dustStyle = styleCache(90, 180, 255);
+    const filNear = styleCache(190, 235, 255), filFar = styleCache(70, 170, 255);
+    const q255 = a => a >= 1 ? 255 : a <= 0 ? 0 : (a * 255) | 0;
+
     let t = 0, last = performance.now(), speed = 1, glow = 1;
     function frame(now) {
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -1310,7 +1371,7 @@
         const q = rot(p, cosY, sinY, cosX, sinX);
         const depth = (q.z + 1.05) / 2.1;
         const a = (0.03 + depth * 0.16) * (0.6 + 0.4 * Math.sin(t * 2 + p.tw)) * glow;
-        ctx.fillStyle = `rgba(90,180,255,${a.toFixed(3)})`;
+        ctx.fillStyle = dustStyle(q255(a));
         ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, p.sz, p.sz);
       }
       for (const p of fil) {
@@ -1319,7 +1380,7 @@
         const flick = 0.6 + 0.4 * Math.sin(t * 2.6 + p.tw);
         const a = (0.1 + depth * 0.6) * flick * glow;
         const sz = p.sz * (0.5 + depth * 0.9);
-        ctx.fillStyle = `rgba(${depth > 0.7 ? '190,235,255' : '70,170,255'},${a.toFixed(3)})`;
+        ctx.fillStyle = (depth > 0.7 ? filNear : filFar)(q255(a));
         ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, sz, sz);
       }
       for (let i = 0; i < nodes.length; i++) {
@@ -1329,14 +1390,11 @@
         const px = cx + q.x * RZ, py = cy + q.y * RZ;
         const rad = p.sz * (0.55 + depth * 0.75) * (i === 0 ? 2.6 : 1);
         const pulse = i === 0 ? 0.85 + 0.15 * Math.sin(t * 1.6) : 0.7 + 0.3 * Math.sin(t * 2 + p.sz);
-        const hg = ctx.createRadialGradient(px, py, 0, px, py, rad);
-        hg.addColorStop(0, `rgba(220,245,255,${(p.br * pulse * (0.25 + depth * 0.65) * glow).toFixed(3)})`);
-        hg.addColorStop(0.35, `rgba(90,185,255,${(p.br * pulse * (0.12 + depth * 0.35) * glow).toFixed(3)})`);
-        hg.addColorStop(1, 'rgba(30,90,200,0)');
-        ctx.fillStyle = hg;
-        ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = Math.min(1, p.br * pulse * (0.25 + depth * 0.65) * glow);
+        ctx.drawImage(sprite, px - rad, py - rad, rad * 2, rad * 2);
         if (p.dir) frameDirs.push({ px, py, depth, rad, dir: p.dir });
       }
+      ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
 
       // Directory beacons: ring + label on front-facing dots, and register the
@@ -1388,9 +1446,10 @@
     let hoveredDir = null;
     function showTip(h, mx, my) {
       tip.innerHTML =
-        `<span class="k">${h.label}</span> <span class="p"></span>` +
+        `<span class="k"></span> <span class="p"></span>` +
         `<span class="go">CLICK TO OPEN IN FILE EXPLORER</span>`;
-      tip.querySelector('.p').textContent = h.path;   // textContent = no HTML injection
+      tip.querySelector('.k').textContent = h.label;  // textContent = no HTML injection
+      tip.querySelector('.p').textContent = h.path;   // (labels/paths come from disk names)
       tip.style.display = 'block';
       const pad = 14, r = tip.getBoundingClientRect();
       let x = mx + pad, y = my + pad;
