@@ -58,6 +58,10 @@ class PointerRunConfig:
     ema_alpha: float = 0.4
     click_debounce_ms: int = 600
     hold_frames: int = 3
+    scroll_gain: float = 45.0
+    zoom_gain: float = 25.0
+    volume_interval_ms: int = 180
+    exit_hold_frames: int = 18
 
 
 @dataclass
@@ -100,6 +104,10 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
             ema_alpha=float(p.get("ema_alpha", 0.4)),
             click_debounce_ms=int(p.get("click_debounce_ms", 600)),
             hold_frames=int(p.get("hold_frames", 3)),
+            scroll_gain=float(p.get("scroll_gain", 45.0)),
+            zoom_gain=float(p.get("zoom_gain", 25.0)),
+            volume_interval_ms=int(p.get("volume_interval_ms", 180)),
+            exit_hold_frames=int(p.get("exit_hold_frames", 18)),
         ),
     )
     host = r.get("host", "127.0.0.1")
@@ -157,7 +165,10 @@ def _make_video_handler(engine: GestureEngine):
                         self.wfile.write(jpeg)
                         self.wfile.write(b"\r\n")
                     time.sleep(1 / 15)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # Browser closed/refreshed the stream (incl. WinError 10053);
+                # without ConnectionAbortedError here, socketserver dumps a
+                # full traceback into the sidecar console on every tab close.
                 return
 
         def do_POST(self):
@@ -217,10 +228,11 @@ def main() -> None:
 
     server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port), _make_video_handler(engine))
     Thread(target=server.serve_forever, daemon=True).start()
-    logger.info("gestures → %s/ask  |  camera stream → http://127.0.0.1:%d/video  |  "
-                "pointer toggle → POST http://127.0.0.1:%d/pointer",
-                api_url, cfg.stream_port, cfg.stream_port)
-    logger.info("gesture map: %s (suspended while pointer mode is on)", cfg.gestures)
+    logger.info("pointer-only build | camera stream → http://127.0.0.1:%d/video | "
+                "pointer toggle → POST http://127.0.0.1:%d/pointer | companion API %s",
+                cfg.stream_port, cfg.stream_port, api_url)
+    logger.info("controls: index tip = cursor, thumb+index pinch = left click, "
+                "three fingers = right click, fist = exit pointer (boots OFF)")
 
     try:
         engine._thread.join()  # type: ignore[union-attr]

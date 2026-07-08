@@ -47,9 +47,19 @@ vision:                             # camera hand-gesture control (sidecar proce
     enabled: true                   # feature available (runtime toggle always starts OFF)
     sensitivity: 2.5                # hand movement -> cursor movement amplification
     ema_alpha: 0.4                  # smoothing (0..1; higher = snappier, lower = steadier)
-    click_debounce_ms: 600          # min gap between gesture clicks
-    hold_frames: 3                  # frames a click pose must hold before it fires
-  gestures:                         # recognized gesture -> routed utterance
+    click_debounce_ms: 600          # min gap between gesture right-clicks
+    hold_frames: 3                  # frames a right-click pose must hold before it fires
+    scroll_gain: 45.0               # victory pose: hand up/down -> scroll speed
+    zoom_gain: 25.0                 # rock pose: hand up/down -> zoom speed (ctrl+wheel)
+    volume_interval_ms: 180         # min gap between volume steps while thumbs-up/pinky held
+    exit_hold_frames: 18            # frames a fist must HOLD to exit (~1.2 s; brief
+                                    # fist misreads while pointing don't kick you out)
+  # NOTE: this build is pointer-only — the gesture->utterance map below is no
+  # longer routed (kept for reference / future re-enable). Pointer poses:
+  #   index=move, pinch=drag/click, victory=scroll, rock=zoom, three=right-click,
+  #   thumbs_up=volume up, pinky=volume down, HELD fist=exit,
+  #   anything unrecognized keeps moving the cursor.
+  gestures:                         # (inactive) recognized gesture -> routed utterance
     thumbs_up: "yes"                # confirm a pending action (safety gate)
     open_palm: "no"                 # cancel
     victory:   "take a screenshot"
@@ -86,17 +96,35 @@ tts:                                # M1
   engine: "piper"
   voice_model: "models/piper/en_US-lessac-medium.onnx"   # relative to project root
   speed: 1.0
+  multilingual: true                # Cyrillic replies -> Macedonian neural voice (edge-tts, online)
+  mk_voice: "mk-MK-MarijaNeural"    # or mk-MK-AleksandarNeural (male)
 
 wakeword:                           # M1
   engine: "openwakeword"
-  phrase: "hey_jarvis"              # built-in model name
-  threshold: 0.5
+  phrase: "hey_jarvis"              # built-in model name (say "hey jarvis")
+  # Lower = easier to trigger (0.5 is openWakeWord's default; 0.4 helps a
+  # non-native "hey jarvis"). Watch your live score with:
+  #   .venv\Scripts\python -m voice.wakeword
+  # If the mic level stays ~0 there, it's the input device, not the threshold.
+  threshold: 0.4
 
 audio:                              # M1
-  input_device: null                # null = system default
+  # Which microphone the wake word listens on — a PRIORITY LIST: the first
+  # available device wins, and MEDO hot-swaps within ~2 s when a higher-priority
+  # one connects. "A25" = the Bluetooth headphones' hands-free mic (used the
+  # moment the headset connects to the PC for calls/voice); the webcam mic is
+  # the fallback so voice keeps working when the headphones are off. Entries
+  # can be an index or a name substring; run
+  #   .venv\Scripts\python -m voice.wakeword
+  # to list devices + watch live levels. null = system default.
+  input_device: ["A25", "FHD Webcam"]
   output_device: null
   sample_rate: 16000
-  silence_threshold: 0.015          # RMS below this counts as silence
+  # RMS below this counts as silence (speech onset gate). Quiet webcam/onboard
+  # mics peak at only a few percent — 0.015 was above their speech level, so
+  # recording never "started" and MEDO seemed deaf after waking. The adaptive
+  # floor (ambient*2.5) still raises this automatically in noisy rooms.
+  silence_threshold: 0.006
   silence_duration_s: 1.0           # stop recording after this much silence
 
 safety:                             # M2
@@ -148,7 +176,18 @@ vision_llm:                         # "what do you see" / "read my screen"
 memory:                             # M4
   db_path: "jarvis.db"
   max_turns: 10                     # rolling conversation window sent to the LLM
-  max_facts: 20                     # newest remembered facts injected into the system prompt
+  max_facts: 20                     # remembered facts injected into the system prompt
+  embed_model: "nomic-embed-text"   # semantic fact recall via local Ollama embeddings
+                                    # ("" disables -> newest-N only)
+
+routines:                           # proactive briefings (core/routines.py)
+  - name: "morning briefing"
+    at: "08:00"                     # HH:MM local time
+    days: []                        # empty = every day; or [mon, tue, wed, thu, fri]
+    ask:
+      - "what's the weather"
+      - "what's the news"
+    enabled: true
 
 logging:
   level: "INFO"                     # DEBUG for state transitions + routing detail

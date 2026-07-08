@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from vision.gestures import (
-    FIST, OPEN_PALM, PINCH, POINT_UP, ROCK, THREE, THUMBS_UP, UNKNOWN, VICTORY,
-    GestureStabilizer, classify_landmarks,
+    FIST, OPEN_PALM, PINCH, PINKY_UP, POINT_UP, ROCK, THREE, THUMBS_UP, UNKNOWN,
+    VICTORY, GestureStabilizer, classify_landmarks, index_thumb_pinch,
 )
 
 WRIST_Y = 0.9  # normalized image coords, y grows downward
@@ -51,8 +51,9 @@ def pinch_hand(touching=True):
     (dict(), FIST),
     (dict(thumb=True), THUMBS_UP),
     (dict(index=True), POINT_UP),
+    (dict(pinky=True), PINKY_UP),         # pinky only = volume down in pointer mode
     (dict(index=True, middle=True), VICTORY),
-    (dict(ring=True), UNKNOWN),           # a single non-index finger => unknown
+    (dict(ring=True), UNKNOWN),           # a lone ring finger stays unknown
     # THREE: index+middle+ring up, pinky folded — thumb must not matter.
     (dict(index=True, middle=True, ring=True), THREE),
     (dict(thumb=True, index=True, middle=True, ring=True), THREE),
@@ -79,6 +80,34 @@ def test_spread_thumb_and_index_is_not_a_pinch():
 def test_too_few_landmarks_is_unknown():
     assert classify_landmarks([(0, 0)] * 5) == UNKNOWN
     assert classify_landmarks(None) == UNKNOWN
+
+
+def pointing_pinch(touching=True):
+    """Natural pointer-mode click: index extended (pointing), other fingers folded,
+    thumb tip brought to (or away from) the index tip. Crucially this is NOT the
+    classifier's PINCH (which needs middle/ring/pinky extended) — it's the pose a
+    user actually makes to click while pointing."""
+    p = hand(index=True)          # index extended, middle/ring/pinky folded
+    p[9] = (0.5, 0.60)            # middle MCP: palm length 0.30 -> threshold 0.084
+    if touching:
+        p[4] = (0.50, 0.50)      # thumb tip ─┐ dist 0.02 < 0.084
+        p[8] = (0.52, 0.50)      # index tip ─┘
+    else:
+        p[4] = (0.30, 0.50)      # spread apart
+        p[8] = (0.70, 0.20)
+    return p
+
+
+def test_pointer_click_pinch_fires_from_pointing_pose():
+    # The decoupled click detector must fire even though the pose is not PINCH.
+    assert classify_landmarks(pointing_pinch(touching=True)) != PINCH
+    assert index_thumb_pinch(pointing_pinch(touching=True)) is True
+    assert index_thumb_pinch(pointing_pinch(touching=False)) is False
+
+
+def test_pointer_click_needs_full_landmarks():
+    assert index_thumb_pinch(None) is False
+    assert index_thumb_pinch([(0, 0)] * 5) is False
 
 
 def test_stabilizer_fires_once_at_threshold_then_holds():

@@ -130,13 +130,37 @@ def build_hotwords(initial_prompt: str) -> str:
     return ", ".join(p for p in phrases if p)
 
 
+def _cuda_runtime_ok() -> bool:
+    """True when CUDA's math libraries are actually loadable, not just the driver.
+
+    ``get_cuda_device_count`` succeeds with only the display driver installed,
+    but encoding needs cuBLAS (``cublas64_12.dll``) — its absence surfaces as a
+    RuntimeError on the *first transcription*, which used to freeze a voice
+    session on "PROCESSING". Preflight it so auto-selection is honest.
+    """
+    import ctypes
+
+    try:
+        ctypes.WinDLL("cublas64_12")
+        return True
+    except OSError:
+        logger.info("CUDA present but cublas64_12.dll not loadable — using CPU for STT")
+        return False
+    except Exception:
+        return True  # non-Windows or unexpected: let ctranslate2 decide
+
+
 def _resolve_device(device: str, compute_type: str) -> tuple[str, str]:
     """Turn ``auto`` into concrete faster-whisper (device, compute_type) values."""
     if device == "auto":
         try:  # prefer CUDA only if a working GPU build is present
             import ctranslate2
 
-            device = "cuda" if ctranslate2.get_cuda_device_count() > 0 else "cpu"
+            device = (
+                "cuda"
+                if ctranslate2.get_cuda_device_count() > 0 and _cuda_runtime_ok()
+                else "cpu"
+            )
         except Exception:
             device = "cpu"
     if compute_type == "auto":
@@ -158,6 +182,7 @@ class Transcriber:
         logger.info(
             "loading faster-whisper %r on %s/%s", config.model, device, compute_type
         )
+        self._device = device
         self._model = WhisperModel(config.model, device=device, compute_type=compute_type)
         # Newer faster-whisper releases accept a `hotwords` decoder bias; pass
         # the command vocabulary through it when available.
@@ -199,7 +224,31 @@ class Transcriber:
         return (audio * np.float32(max(gain, 1.0))).astype(np.float32)
 
     def transcribe(self, audio: np.ndarray) -> str:
-        """Transcribe a mono 16 kHz float32 waveform to a stripped string."""
+        """Transcribe a mono 16 kHz float32 waveform to a stripped string.
+
+        Self-heals a broken GPU stack: CUDA can *enumerate* fine at load time
+        (driver present) while its math libraries are missing — e.g.
+        ``cublas64_12.dll`` — which only surfaces as a RuntimeError on the
+        FIRST encode. That used to kill the whole voice loop mid-"PROCESSING";
+        now the model is rebuilt on CPU/int8 once and the utterance retried.
+        """
+        try:
+            return self._transcribe(audio)
+        except RuntimeError as exc:
+            if self._device == "cpu":
+                raise
+            logger.warning(
+                "GPU transcription failed (%s) — rebuilding on CPU/int8", exc
+            )
+            from faster_whisper import WhisperModel
+
+            self._device = "cpu"
+            self._model = WhisperModel(
+                self._config.model, device="cpu", compute_type="int8"
+            )
+            return self._transcribe(audio)
+
+    def _transcribe(self, audio: np.ndarray) -> str:
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
         audio = self._normalize(audio)

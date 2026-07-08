@@ -20,12 +20,13 @@ import argparse
 import asyncio
 import logging
 import sys
+import threading
 
 from rich.console import Console
 
 from collections.abc import Awaitable
 
-from core.config import PROJECT_ROOT, Settings, load_settings
+from core.config import PROJECT_ROOT, Settings, apply_local_secrets, load_settings
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
 from core.facts import FactsStore
 from core.memory import NoteStore, ReminderStore
@@ -62,6 +63,17 @@ from skills.timers import TimerSkill
 from skills.vision_skill import SeeCameraSkill, SeeScreenSkill
 from skills.weather import WeatherSkill
 from skills.websearch import WebSearchSkill
+
+# Never let a pretty glyph kill the app: on legacy/cp1252 consoles (and
+# redirected stdout) rich's output hits charmap encoding, and one un-encodable
+# character (the "●" state chip took down a whole voice session) raises
+# UnicodeEncodeError mid-print. errors="replace" renders those as "?" instead.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass
 
 console = Console()
 
@@ -105,6 +117,7 @@ def build_registry(
     announcer: Announcer,
     summarize: "callable[[str, str], Awaitable[str]] | None" = None,
     reminder_store: ReminderStore | None = None,
+    doc_index=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -133,6 +146,12 @@ def build_registry(
     registry.register(AppsSkill(apps_table))
     registry.register(SeeCameraSkill(settings))
     registry.register(SeeScreenSkill(settings))
+    # Documents RAG before FilesSkill/WebSearch so "search my documents for X"
+    # isn't stolen by the filename search or the broad web "search for …".
+    if doc_index is not None:
+        from skills.documents import DocumentsSkill
+
+        registry.register(DocumentsSkill(doc_index))
     registry.register(FilesSkill(whitelist))
     registry.register(VolumeSkill())
     registry.register(MediaSkill())
@@ -144,7 +163,21 @@ def build_registry(
     registry.register(ScreenshotSkill(shots))
     registry.register(PointerControlSkill(settings.vision.stream_port))
     registry.register(PowerSkill())
-    # Web skills (network; degrade gracefully offline).
+    # Drop-in plugins load after the core skills (which keep fast-path
+    # precedence) but BEFORE the broad web skills — otherwise web_search's
+    # greedy "search … for …" pattern steals plugin triggers like
+    # "search obsidian for …". A broken plugin is skipped, never fatal.
+    from core.plugins import load_plugins
+
+    load_plugins(registry, {
+        "settings": settings,
+        "announcer": announcer,
+        "summarize": summarize,
+        "reminders": reminder_store,
+        "doc_index": doc_index,
+    })
+
+    # Web skills (network; degrade gracefully offline; broad patterns last).
     registry.register(WeatherSkill(settings.weather))
     registry.register(NewsSkill(settings.news))
     registry.register(WebSearchSkill(summarize))
@@ -260,7 +293,7 @@ async def run_repl(
 
 async def run_voice(
     settings: Settings, router: Router, sm: StateMachine, announcer: Announcer,
-    ui: ConsoleUI, log: LatencyLog,
+    ui: ConsoleUI, log: LatencyLog, wake_event: threading.Event | None = None,
 ) -> None:
     """Hands-free loop: wake word -> record -> STT -> route -> TTS.
 
@@ -268,65 +301,238 @@ async def run_voice(
     companion API, if serving) stays responsive. After a reply that asks for
     confirmation, we record again *without* the wake word so "yes" works
     naturally. Every stage is timed into a :class:`TurnTimings`.
+
+    ``wake_event`` (set by ``POST /wake``) is an escape hatch: while waiting for
+    the wake word we also poll it, so the HUD can start a turn without the phrase
+    — which is how you break out of STANDING BY when the pretrained wake word
+    doesn't match what you say.
     """
     import time
 
-    from voice.audio import Microphone, Speaker, record_until_silence
+    from voice.audio import (
+        Microphone,
+        frame_rms,
+        normalize_peak,
+        record_until_silence,
+        resolve_input_device,
+    )
     from voice.stt import Transcriber
-    from voice.tts import TextToSpeech
+    from voice.tts import EdgeTTS, TextToSpeech, contains_cyrillic, drain_sentences
     from voice.wakeword import WakeWord
 
-    with console.status("[dim]loading voice models…[/dim]"):
-        wake = WakeWord(settings.wakeword)
-        stt = Transcriber(settings.stt)
-        # A missing/broken Piper voice shouldn't sink the whole session — degrade
-        # to showing replies without speaking them (the HUD still renders them).
-        try:
-            tts: TextToSpeech | None = TextToSpeech(settings.tts)
-        except Exception as exc:
-            tts = None
-            console.print(
-                f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
-                f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
-            )
-    speaker = Speaker(settings.audio.output_device)
+    vlog = logging.getLogger("voice")
 
-    def wait_for_wake(mic: Microphone) -> None:
+    # Plain ASCII print, no rich Live/status spinner: with stdout redirected to
+    # a file (service/log launches) the spinner's buffer flush dies on cp1252
+    # encoding and takes ALL of voice mode down with it.
+    console.print("[dim]loading voice models...[/dim]")
+    wake = WakeWord(settings.wakeword)
+    stt = Transcriber(settings.stt)
+    # A missing/broken Piper voice shouldn't sink the whole session — degrade
+    # to showing replies without speaking them (the HUD still renders them).
+    try:
+        tts: TextToSpeech | None = TextToSpeech(settings.tts)
+    except Exception as exc:
+        tts = None
+        console.print(
+            f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
+            f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
+        )
+    # Macedonian neural voice (edge-tts, online) for Cyrillic replies; Piper
+    # remains the offline voice and the fallback when the network is down.
+    edge: EdgeTTS | None = None
+    if settings.tts.multilingual:
+        try:
+            edge = EdgeTTS(settings.tts.mk_voice)
+        except Exception as exc:
+            console.print(f"[dim]Macedonian voice unavailable ({exc}); "
+                          f"Cyrillic replies will use the English voice.[/dim]")
+    def wait_for_wake(mic: Microphone, opened_device) -> str:
+        """Block until something should end the wait; returns why.
+
+        ``"go"``     — wake word heard, or a manual /wake / barge-in carried over.
+        ``"reopen"`` — the input device changed in settings (HUD mic picker), or
+                       a higher-priority device in the configured chain came or
+                       went (e.g. Bluetooth headphones connected) — the caller
+                       must reopen the mic on the newly-resolved device.
+
+        NB: wake_event is NOT cleared on entry — a /wake or /interrupt fired
+        during the previous turn should carry over and start listening now.
+        """
         wake.reset()
-        while not wake.triggered(mic.read_frame()):
-            pass
+        # Report the peak wake score + mic level every few seconds so it's obvious
+        # whether the mic is even hearing you and how close the phrase gets to the
+        # threshold — the two things that keep it "stuck on STANDING BY".
+        peak_score = peak_rms = 0.0
+        last_report = time.monotonic()
+        frames = 0
+        while True:
+            if settings.audio.input_device != opened_device:
+                vlog.info("input device changed — reopening the microphone")
+                return "reopen"
+            frames += 1
+            if frames % 25 == 0:  # ~2 s: hot-swap when the chain resolves elsewhere
+                try:
+                    if resolve_input_device(settings.audio.input_device) != mic.resolved_index:
+                        vlog.info("a preferred microphone (dis)connected — switching")
+                        return "reopen"
+                except Exception:
+                    pass  # nothing usable right now — keep the mic we have
+            if wake_event is not None and wake_event.is_set():
+                wake_event.clear()
+                console.print("[dim](woken from the HUD)[/dim]")
+                return "go"
+            frame = mic.read_frame()               # ~80 ms/frame, so /wake lands fast
+            score = wake.predict(frame)
+            if score >= wake.threshold:
+                vlog.info("wake word detected (score %.2f)", score)
+                return "go"
+            peak_score = max(peak_score, score)
+            peak_rms = max(peak_rms, frame_rms(frame))
+            now = time.monotonic()
+            if now - last_report >= 4.0:
+                vlog.info("listening for wake word — peak score %.2f (need %.2f), mic level %.3f",
+                          peak_score, wake.threshold, peak_rms)
+                if peak_rms < 0.004:
+                    console.print("[yellow](microphone seems silent — check the input "
+                                  "device/mute, or pick a mic in the HUD CONFIG tab)[/yellow]")
+                peak_score = peak_rms = 0.0
+                last_report = now
+
+    # Set by the interruptible player when the user barges in mid-reply; the main
+    # loop reads it to skip the wake word and listen immediately.
+    barge_in = {"hit": False}
+
+    # Barge-in tuning (per the latency/leakage analysis): TTS leaking from the
+    # speakers into the open mic crushes the wake score, so 0.4 rarely fires
+    # while MEDO talks. During playback we run a LOWER wake threshold (barging
+    # in is low-risk — worst case the reply stops), plus an energy gate: mic
+    # level holding well above the playback's own leakage baseline means
+    # someone is talking over MEDO.
+    BARGE_WAKE_THRESHOLD = 0.25   # vs 0.4 when idle
+    BARGE_RMS_RATIO = 3.0         # mic level vs playback-leakage baseline
+    BARGE_MIN_RMS = 0.02          # absolute floor so silence can't ratio-trip
+    BARGE_HOLD_FRAMES = 4         # ~0.3 s sustained before it counts
+
+    def play_interruptible(wav, sr: int) -> bool:
+        """Play a reply while watching the mic; True if the user barged in.
+
+        Interrupts on any of: the HUD/watch interrupt signal (``wake_event``),
+        the wake phrase at a playback-lowered threshold, or sustained mic
+        energy well above the reply's own speaker-leakage baseline (measured
+        live during the first frames of playback). Falls back to blocking
+        playback if the mic can't be opened.
+        """
+        import sounddevice as sd
+
+        sd.play(wav, samplerate=sr, device=settings.audio.output_device)
+        stream = sd.get_stream()
+        interrupted = False
+        why = ""
+        try:
+            wake.reset()
+            baseline: float | None = None   # EMA of mic RMS incl. TTS leakage
+            loud_run = 0
+            frames = 0
+            with Microphone(settings.audio.sample_rate,
+                            device=settings.audio.input_device) as m:
+                while stream.active:
+                    frame = m.read_frame()  # 80 ms cadence paces this loop
+                    frames += 1
+                    if wake_event is not None and wake_event.is_set():
+                        wake_event.clear()
+                        interrupted, why = True, "interrupt signal"
+                        break
+                    if wake.predict(frame) >= BARGE_WAKE_THRESHOLD:
+                        interrupted, why = True, "wake word over playback"
+                        break
+                    rms = frame_rms(frame)
+                    if baseline is None:
+                        baseline = rms
+                    elif frames <= 6 or rms < baseline * 1.5:
+                        # Track the reply's own loudness only while nothing
+                        # shouts over it, so a talking user can't raise the bar.
+                        baseline += 0.2 * (rms - baseline)
+                    loud = rms >= max(baseline * BARGE_RMS_RATIO, BARGE_MIN_RMS)
+                    # Ignore the first frames: the baseline is still settling.
+                    loud_run = loud_run + 1 if (loud and frames > 6) else 0
+                    if loud_run >= BARGE_HOLD_FRAMES:
+                        interrupted, why = True, "voice over playback"
+                        break
+        except Exception:  # mic busy/unavailable — degrade to plain playback
+            logging.getLogger("voice").debug("barge-in watcher failed", exc_info=True)
+            sd.wait()
+            return False
+        finally:
+            wake.reset()
+        if interrupted:
+            sd.stop()
+            vlog.info("barge-in (%s): reply interrupted, listening", why)
+        return interrupted
 
     async def speak(text: str) -> float:
-        """Synthesize and play; returns synth time (ms) for instrumentation."""
-        if tts is None:  # TTS unavailable — reply is shown, not spoken.
+        """Synthesize and play (interruptibly); returns synth time (ms).
+
+        Cyrillic replies go to the Macedonian neural voice; anything else (and
+        any edge-tts failure — offline, service hiccup) uses local Piper.
+        """
+        if tts is None and edge is None:  # no voice at all — reply shown only
             return 0.0
         t0 = time.perf_counter()
-        wav, sr = await asyncio.to_thread(tts.synthesize, text)
+        wav = None
+        sr = 0
+        if edge is not None and contains_cyrillic(text):
+            try:
+                wav, sr = await edge.synthesize(text)
+            except Exception:
+                vlog.warning("edge-tts failed; falling back to Piper", exc_info=True)
+                wav = None
+        if wav is None or getattr(wav, "size", 0) == 0:
+            if tts is None:
+                return 0.0
+            wav, sr = await asyncio.to_thread(tts.synthesize, text)
         tts_ms = (time.perf_counter() - t0) * 1000
-        await asyncio.to_thread(speaker.play, wav, sr)
+        if await asyncio.to_thread(play_interruptible, wav, sr):
+            barge_in["hit"] = True
         return tts_ms
 
     async def capture(require_wake: bool) -> tuple[np.ndarray, float]:
         """Open the mic, optionally wait for the wake word, record a phrase.
 
-        Returns the audio plus the wake→listen latency (ms)."""
-        mic = Microphone(settings.audio.sample_rate, device=settings.audio.input_device)
-        try:
-            mic.open()
-            if require_wake:
-                await asyncio.to_thread(wait_for_wake, mic)
-            t_wake = time.perf_counter()
-            await sm.transition(AssistantState.LISTENING)
-            wake_to_listen_ms = (time.perf_counter() - t_wake) * 1000
-            audio = await asyncio.to_thread(
-                record_until_silence,
-                mic,
-                silence_threshold=settings.audio.silence_threshold,
-                silence_duration_s=settings.audio.silence_duration_s,
-            )
-            return audio, wake_to_listen_ms
-        finally:
-            mic.close()
+        Returns the audio plus the wake→listen latency (ms). Reopens on the new
+        device when the HUD mic picker changes settings mid-wait, and falls back
+        to the system default when a picked device can't be opened — so a bad
+        pick degrades instead of killing voice mode.
+        """
+        while True:
+            device = settings.audio.input_device
+            mic = Microphone(settings.audio.sample_rate, device=device)
+            try:
+                mic.open()
+            except Exception as exc:
+                if device is None:
+                    raise  # even the system default is broken — that's fatal
+                vlog.warning("mic %r failed (%s) — falling back to system default",
+                             device, exc)
+                settings.audio.input_device = None
+                continue
+            try:
+                if require_wake:
+                    why = await asyncio.to_thread(wait_for_wake, mic, device)
+                    if why == "reopen":
+                        continue  # device changed under us — reopen on the new one
+                t_wake = time.perf_counter()
+                await sm.transition(AssistantState.LISTENING)
+                wake_to_listen_ms = (time.perf_counter() - t_wake) * 1000
+                audio = await asyncio.to_thread(
+                    record_until_silence,
+                    mic,
+                    silence_threshold=settings.audio.silence_threshold,
+                    silence_duration_s=settings.audio.silence_duration_s,
+                )
+                return audio, wake_to_listen_ms
+            finally:
+                mic.close()
 
     # Timer/reminder announcements should be spoken, not just printed.
     announcer.speak = speak
@@ -343,32 +549,106 @@ async def run_voice(
             require_wake = True
             continue
 
-        await sm.transition(AssistantState.THINKING)
-        t0 = time.perf_counter()
-        text = await asyncio.to_thread(stt.transcribe, audio)
-        stt_ms = (time.perf_counter() - t0) * 1000
-        if not text.strip():
-            console.print("[dim](couldn't make that out)[/dim]")
+        # One failed turn must NEVER kill voice mode: an exception here used to
+        # propagate out of the loop, leaving the HUD stuck on "PROCESSING"
+        # forever (state frozen in THINKING, nothing consuming wake/interrupt)
+        # while typing kept working — the classic "voice is broken" state.
+        try:
+            await sm.transition(AssistantState.THINKING)
+            t0 = time.perf_counter()
+            # Quiet mics (webcam/onboard) record speech peaking at a few percent;
+            # normalizing before STT noticeably improves Whisper on those clips.
+            text = await asyncio.to_thread(stt.transcribe, normalize_peak(audio))
+            stt_ms = (time.perf_counter() - t0) * 1000
+            if not text.strip():
+                console.print("[dim](couldn't make that out)[/dim]")
+                require_wake = True
+                continue
+            ui.transcript(text)
+
+            # Sentence-streaming TTS: LLM content chunks arrive via on_delta,
+            # complete sentences are queued, and a speaker task voices them
+            # WHILE the rest of the reply is still generating — first audio
+            # after the first sentence, not after the whole reply. Fast-path
+            # and tool answers never stream (no deltas) and speak as before.
+            stream_buf = {"text": ""}
+            streamed = {"count": 0}
+            stream_q: asyncio.Queue = asyncio.Queue()
+
+            def on_delta(chunk: str) -> None:
+                stream_buf["text"] += chunk
+                sentences, stream_buf["text"] = drain_sentences(stream_buf["text"])
+                for s in sentences:
+                    streamed["count"] += 1
+                    stream_q.put_nowait(s)
+
+            async def stream_speaker() -> None:
+                while True:
+                    sentence = await stream_q.get()
+                    if sentence is None:
+                        return
+                    if barge_in["hit"]:
+                        continue  # user cut in — drop the remaining sentences
+                    await sm.transition(AssistantState.SPEAKING)
+                    await speak(sentence)
+
+            speaker_task = asyncio.create_task(stream_speaker())
+            try:
+                result = await router.route(text, on_delta=on_delta)
+            finally:
+                tail = stream_buf["text"].strip()
+                if streamed["count"] and tail:
+                    streamed["count"] += 1
+                    stream_q.put_nowait(tail)  # the last, unterminated sentence
+                stream_q.put_nowait(None)
+                await speaker_task
+
+            tts_ms = None
+            if streamed["count"] == 0:  # nothing streamed: speak the reply whole
+                await sm.transition(AssistantState.SPEAKING)
+                tts_ms = await speak(result.speech)
+            log.record(TurnTimings(
+                path=result.path.value,
+                wake_to_listen_ms=wake_to_listen_ms if require_wake else None,
+                stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
+            ))
+            ui.turn(result, log.turns[-1])
+            # Listen again right away (no wake word) when MEDO asked "are you
+            # sure?" or the user just interrupted — they clearly want to talk.
+            require_wake = not (router.awaiting_confirmation or barge_in["hit"])
+            barge_in["hit"] = False
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            raise
+        except Exception:
+            logging.getLogger("voice").exception("voice turn failed; back to standby")
+            console.print("[red]That one failed — say the wake word to try again.[/red]")
             require_wake = True
-            continue
-        ui.transcript(text)
+            barge_in["hit"] = False
 
-        result = await router.route(text)
 
-        await sm.transition(AssistantState.SPEAKING)
-        tts_ms = await speak(result.speech)
-        log.record(TurnTimings(
-            path=result.path.value,
-            wake_to_listen_ms=wake_to_listen_ms if require_wake else None,
-            stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
-        ))
-        ui.turn(result, log.turns[-1])
-        # If MEDO just asked "are you sure?", listen for the yes/no without a wake.
-        require_wake = not router.awaiting_confirmation
+def _trust_os_certificates() -> None:
+    """Make Python's TLS trust the Windows certificate store.
+
+    This network intercepts TLS with its own root CA; httpx/requests ship the
+    certifi bundle which doesn't contain it, so every https call to an online
+    LLM API (Groq/OpenAI/...), and even weather/news feeds, dies with
+    CERTIFICATE_VERIFY_FAILED. truststore patches ssl to use the OS store —
+    where that root actually lives — fixing all of them at once.
+    """
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception:  # pragma: no cover - best effort; local Ollama unaffected
+        logging.getLogger("main").debug("truststore unavailable", exc_info=True)
 
 
 async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> None:
+    _trust_os_certificates()
     settings = load_settings()
+    # Overlay any online API key / model saved via the HUD (git-ignored file), so
+    # an online provider chosen last session is restored without touching config.yaml.
+    apply_local_secrets(settings)
     setup_logging(settings.logging.level)
 
     announcer = Announcer()
@@ -391,7 +671,27 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         return (message.get("content") or "").strip() or "I couldn't summarize that."
 
     reminders = ReminderStore(settings.memory.db_path)
-    registry = build_registry(settings, announcer, summarize, reminders)
+
+    # Documents RAG index: same local embedder as semantic facts, same safety
+    # whitelist as the files skill. None when embeddings are disabled.
+    doc_index = None
+    if settings.memory.embed_model:
+        from core.docindex import DocumentIndex
+        from core.embeddings import embed_texts
+
+        _em, _eh = settings.memory.embed_model, settings.llm.host
+        # The Obsidian vault (docs/) is indexed FIRST: notes are the densest,
+        # most-asked-about content, and the whitelist walk could take a while
+        # (or hit the chunk cap) before reaching it otherwise.
+        _roots = [p for p in [PROJECT_ROOT / "docs"] if p.exists()]
+        _roots += PathWhitelist(settings.safety.whitelist_dirs).roots
+        doc_index = DocumentIndex(
+            settings.memory.db_path,
+            lambda texts: embed_texts(texts, _em, _eh),
+            _roots,
+        )
+
+    registry = build_registry(settings, announcer, summarize, reminders, doc_index)
     bus = EventBus()
     sm = StateMachine(bus)
     router = Router(settings, registry, llm, bus)
@@ -405,12 +705,50 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         await respond(router, sm, ui, log, once)
         return
 
+    # Preload the local model in the background: a cold 30B costs ~27 s on the
+    # first question otherwise, which users read as "it doesn't answer".
+    if settings.llm.provider == "ollama" and router.model:
+        asyncio.create_task(llm.warmup(router.model))
+    # Index the user's documents in the background so "what do my documents
+    # say about X" has something to search (incremental; skips unchanged files).
+    if doc_index is not None:
+        asyncio.create_task(asyncio.to_thread(doc_index.reindex))
+    # Proactive routines (morning briefing etc.): answers are announced —
+    # spoken in voice mode, printed otherwise, visible in the HUD either way.
+    if settings.routines:
+        from core.routines import RoutineScheduler
+
+        asyncio.create_task(
+            RoutineScheduler(settings.routines, router, announcer).run_forever()
+        )
+
+    # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
+    # returns immediately — so you can start a turn from the HUD without saying
+    # the "hey jarvis" phrase (fixes being stuck in STANDING BY). Only handed to
+    # the server when voice mode will actually consume it, so /wake correctly
+    # 409s in text-only sessions instead of pretending to listen.
+    wake_event = threading.Event()
+
     remote: RemoteServer | None = None
     # The vision sidecar POSTs gestures to the companion API, so enabling vision
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
-        remote = RemoteServer(settings, router, sm)
-        await remote.start()
+        remote = RemoteServer(settings, router, sm, persist_secrets=True,
+                              wake_event=wake_event if voice else None,
+                              doc_index=doc_index)
+        try:
+            await remote.start()
+        except OSError as exc:
+            # Port already bound = a previous MEDO is still running. Without
+            # this message the new launch just dies and the user keeps talking
+            # to the old build, wondering why nothing they changed works.
+            console.print(
+                f"[red]Another MEDO is already running (port "
+                f"{settings.remote.port} is busy): {exc}[/red]\n"
+                f"[yellow]Close the old MEDO window (or re-run run.bat, which "
+                f"now replaces it automatically) and try again.[/yellow]"
+            )
+            return
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "
             f"watch app + vision sidecar connect here.[/dim]"
@@ -429,7 +767,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         if voice:
             # Voice pipeline; the companion API (if started) serves alongside it.
             try:
-                await run_voice(settings, router, sm, announcer, ui, log)
+                await run_voice(settings, router, sm, announcer, ui, log, wake_event=wake_event)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 raise
             except Exception as exc:

@@ -8,6 +8,66 @@ vision/winmouse.py owns the OS calls — so tests run anywhere.
 
 from __future__ import annotations
 
+# Pointer-mode actions, decided purely from the recognized pose (+ pinch state)
+# so the mapping is unit-testable without a camera. The engine turns these into
+# OS calls (vision/winmouse.py).
+MOVE = "move"
+DRAG = "drag"
+SCROLL = "scroll"
+ZOOM = "zoom"
+RIGHT_CLICK = "right_click"
+VOLUME_UP = "volume_up"
+VOLUME_DOWN = "volume_down"
+IDLE = "idle"
+
+#: pose name -> action when the thumb/index are NOT pinched.
+_POSE_ACTION = {
+    "point_up": MOVE,
+    "victory": SCROLL,
+    "rock": ZOOM,
+    "three": RIGHT_CLICK,
+    "thumbs_up": VOLUME_UP,
+    "pinky_up": VOLUME_DOWN,
+    "fist": IDLE,
+}
+
+
+def pointer_action(gesture: str, is_pinch: bool) -> str:
+    """Map a recognized pose to a pointer-mode action.
+
+    A pinch (thumb tip on index tip) always means :data:`DRAG` — pressing/holding
+    the left button, which doubles as a click on a quick tap — regardless of the
+    classified pose. Otherwise the pose selects the action. Anything unmapped
+    (``unknown``, ``open_palm``, transitional poses) defaults to :data:`MOVE`, so
+    a briefly misread pointing hand keeps driving the cursor instead of freezing;
+    only a ``fist`` idles (it's the deliberate hold-to-exit pose).
+    """
+    if is_pinch:
+        return DRAG
+    return _POSE_ACTION.get(gesture, MOVE)
+
+
+class ScrollAccumulator:
+    """Turn continuous hand motion into discrete wheel notches.
+
+    Fed the per-frame vertical delta of the fingertip (normalized, y grows
+    downward), it accumulates ``-dy * gain`` — moving the hand *up* scrolls up —
+    and emits whole notches, carrying the remainder so slow drifts still register.
+    """
+
+    def __init__(self, gain: float) -> None:
+        self._gain = gain
+        self._acc = 0.0
+
+    def update(self, dy: float) -> int:
+        self._acc += -dy * self._gain
+        notches = int(self._acc)          # trunc toward zero keeps the sign
+        self._acc -= notches
+        return notches
+
+    def reset(self) -> None:
+        self._acc = 0.0
+
 
 def to_screen(
     nx: float,

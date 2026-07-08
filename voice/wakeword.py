@@ -63,3 +63,62 @@ class WakeWord:
     def reset(self) -> None:
         """Clear the model's internal audio buffer between activations."""
         self._model.reset()
+
+
+def _live_test() -> None:
+    """Live wake-word tester: ``python -m voice.wakeword``.
+
+    Opens the mic and prints the level + wake score every frame, so you can watch
+    what happens while you say the phrase — the fastest way to tell a silent mic
+    (``mic`` stays ~0) from a too-high threshold (``score`` peaks below it).
+    """
+    import time
+
+    from core.config import load_settings
+    from voice.audio import FRAME_SAMPLES, Microphone, frame_rms
+
+    logging.basicConfig(level=logging.INFO)
+    s = load_settings()
+
+    # Show the input devices so a wrong/low default mic is easy to spot and fix.
+    try:
+        import sounddevice as sd
+
+        print("Input devices (set audio.input_device in config.yaml to a number):")
+        default_in = sd.default.device[0]
+        for i, dev in enumerate(sd.query_devices()):
+            if dev["max_input_channels"] > 0:
+                # Windows consoles are often cp1252 — strip names to ASCII so a
+                # fancy device name can't crash the tester with UnicodeEncodeError.
+                name = str(dev["name"]).encode("ascii", "replace").decode("ascii")
+                mark = "  <- current default" if i == default_in else ""
+                print(f"  [{i}] {name}{mark}")
+        print()
+    except Exception as exc:
+        print(f"(could not list devices: {exc})\n")
+
+    wake = WakeWord(s.wakeword)
+    phrase = s.wakeword.phrase.replace("_", " ")
+    dev_note = "system default" if s.audio.input_device is None else f"device #{s.audio.input_device}"
+    print(f'Using {dev_note}. Say "{phrase}" (threshold {wake.threshold:.2f}). Ctrl-C to stop.\n')
+    peak = 0.0
+    with Microphone(s.audio.sample_rate, FRAME_SAMPLES, s.audio.input_device) as mic:
+        try:
+            while True:
+                frame = mic.read_frame()
+                score = wake.predict(frame)
+                rms = frame_rms(frame)
+                peak = max(peak, score)
+                bar = "#" * int(score * 40)
+                hit = "  <== WAKE" if score >= wake.threshold else ""
+                print(f"mic {rms:5.3f} | score {score:4.2f} |{bar:<40}|{hit}", end="\r", flush=True)
+                if score >= wake.threshold:
+                    print(f"\nTRIGGERED at {score:.2f}\n")
+                    wake.reset()
+        except KeyboardInterrupt:
+            print(f"\n\nPeak score seen: {peak:.2f} (threshold {wake.threshold:.2f}). "
+                  f"{'Lower wakeword.threshold in config.yaml.' if 0 < peak < wake.threshold else ''}")
+
+
+if __name__ == "__main__":
+    _live_test()

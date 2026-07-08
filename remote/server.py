@@ -13,6 +13,14 @@ Model/provider endpoints let clients switch the LLM at runtime.
     POST /model {"name": …}          -> {"ok", "model"}
     POST /provider {"provider": "ollama"|"openai", "api_key"?, "base_url"?,
                     "model"?}        -> {"ok", "provider", "model", "models"}
+    GET  /dirs            -> {"dirs": [{"key", "label", "path", "center"}, …]}
+    POST /open {"key"|"path": …} -> {"ok", "path"}   (opens a folder/file in explorer)
+    POST /wake            -> {"ok": true}      (start a voice turn without the wake word)
+    POST /interrupt       -> {"ok": true}      (stop TTS mid-sentence; barge-in)
+    GET  /audio/devices   -> {"devices": [{"index", "name"}], "current": …}
+    POST /audio/input {"device": int|str|null} -> {"ok", "device"}  (pick the mic)
+    GET  /search/files?q= -> {"results": [{"name", "path", "is_dir"}, …]}
+    GET  /search/web?q=   -> {"results": [{"title", "url", "snippet"}, …]}
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -27,11 +35,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 
 import psutil
 from aiohttp import web
 
-from core.config import Settings
+from core import dirs
+from core.config import Settings, save_llm_secrets
 from core.events import AssistantState, StateMachine
 from core.router import Router
 
@@ -66,10 +76,27 @@ async def cors_middleware(request: web.Request, handler) -> web.StreamResponse:
 class RemoteServer:
     """Serves the companion API on top of an existing :class:`Router`."""
 
-    def __init__(self, settings: Settings, router: Router, sm: StateMachine) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        router: Router,
+        sm: StateMachine,
+        *,
+        persist_secrets: bool = False,
+        wake_event: threading.Event | None = None,
+        doc_index=None,
+    ) -> None:
         self._settings = settings
         self._router = router
         self._sm = sm
+        # When True, a /provider switch writes the key/model to the git-ignored
+        # secrets file so it survives a restart. Off by default (and in tests).
+        self._persist_secrets = persist_secrets
+        # Set by POST /wake to break the voice loop out of STANDING BY without
+        # the wake word. None when voice mode isn't running.
+        self._wake_event = wake_event
+        # Documents RAG index (None when embeddings are disabled).
+        self._doc_index = doc_index
         self._runner: web.AppRunner | None = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
@@ -87,6 +114,19 @@ class RemoteServer:
         app.router.add_get("/models", self._handle_models)
         app.router.add_post("/model", self._handle_set_model)
         app.router.add_post("/provider", self._handle_set_provider)
+        app.router.add_get("/dirs", self._handle_dirs)
+        app.router.add_post("/open", self._handle_open)
+        app.router.add_post("/wake", self._handle_wake)
+        app.router.add_post("/interrupt", self._handle_interrupt)
+        app.router.add_get("/audio/devices", self._handle_audio_devices)
+        app.router.add_post("/audio/input", self._handle_set_audio_input)
+        app.router.add_get("/search/files", self._handle_search_files)
+        app.router.add_get("/search/web", self._handle_search_web)
+        app.router.add_get("/docs/stats", self._handle_docs_stats)
+        app.router.add_post("/docs/reindex", self._handle_docs_reindex)
+        app.router.add_get("/facts", self._handle_facts_list)
+        app.router.add_post("/facts", self._handle_facts_add)
+        app.router.add_post("/facts/delete", self._handle_facts_delete)
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
@@ -161,6 +201,15 @@ class RemoteServer:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             return None
+        except asyncio.CancelledError:
+            # Server shutdown cancelled us mid-communicate: reap the subprocess
+            # now, or its transport is finalized after the loop closes and
+            # spews "Event loop is closed" tracebacks on an otherwise clean exit.
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            raise
         parts = [p.strip() for p in out.decode(errors="replace").split(",")]
         if proc.returncode != 0 or len(parts) < 4:
             return None
@@ -205,6 +254,10 @@ class RemoteServer:
                 "model": self._router.model,
                 "models": models,
                 "state": self._sm.state.value,
+                # Let the HUD show what's remembered. The key itself is never
+                # returned — only whether one is stored locally.
+                "openai_base_url": self._settings.llm.openai_base_url,
+                "has_api_key": bool(self._settings.llm.api_key),
             }
         )
 
@@ -224,8 +277,19 @@ class RemoteServer:
         if not name:
             return _error(400, "missing or empty 'name'")
         self._router.model = name
+        self._warm_model(name)
         logger.info("active model set to %r via companion API", name)
         return web.json_response({"ok": True, "model": name})
+
+    def _warm_model(self, model: str | None) -> None:
+        """Preload a local model in the background after a switch (no-op online).
+
+        Without this the first question after picking a model pays the full
+        cold load (~27 s for the 30B) — which reads as "it doesn't answer".
+        """
+        warm = getattr(self._router.llm, "warmup", None)
+        if warm is not None and model:
+            asyncio.create_task(warm(model))
 
     async def _handle_set_provider(self, request: web.Request) -> web.Response:
         """Switch the LLM provider (and optionally key/base URL/model) live.
@@ -258,10 +322,197 @@ class RemoteServer:
         models = await asyncio.to_thread(self._router.llm.list_models)
         model = str(payload.get("model") or "").strip() or (models[0] if models else None)
         self._router.model = model
+        self._warm_model(model)  # local switch: load now, not on the first question
         logger.info("provider switched to %r (model %r) via companion API", provider, model)
+
+        if self._persist_secrets:
+            # Remember the choice across restarts (git-ignored file). Only write
+            # the key when one was supplied this request; leave any stored key
+            # untouched otherwise. Merges, so switching to ollama keeps the key.
+            save_llm_secrets(
+                provider=provider,
+                api_key=llm_cfg.api_key if api_key is not None else None,
+                openai_base_url=(llm_cfg.openai_base_url if base_url and provider == "openai" else None),
+                default_model=model,
+            )
+
         return web.json_response(
             {"ok": True, "provider": provider, "model": model, "models": models}
         )
+
+    async def _handle_wake(self, request: web.Request) -> web.Response:
+        """Start a voice turn without the wake word (HUD "wake" button).
+
+        Frees the assistant from STANDING BY when the pretrained wake phrase
+        doesn't match what the user says. 409 if voice mode isn't running.
+        """
+        if self._wake_event is None:
+            return _error(409, "voice mode is not running")
+        self._wake_event.set()
+        logger.info("manual wake requested via companion API")
+        return web.json_response({"ok": True})
+
+    async def _handle_audio_devices(self, request: web.Request) -> web.Response:
+        """List input devices (for the HUD mic picker) + the current selection."""
+        from voice.audio import list_input_devices
+
+        devices = await asyncio.to_thread(list_input_devices)
+        return web.json_response(
+            {"ok": True, "devices": devices, "current": self._settings.audio.input_device}
+        )
+
+    async def _handle_set_audio_input(self, request: web.Request) -> web.Response:
+        """Choose the microphone the wake word listens on, at runtime.
+
+        Accepts an int index, a name substring, or null (system default). The
+        voice loop's wake wait polls this setting every frame (~80 ms) and
+        reopens the mic itself — no wake/interrupt signal is abused for it, so
+        switching mics never cuts a reply or triggers a phantom listen.
+        """
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error(400, "body must be JSON like {\"device\": 4}")
+
+        device = payload.get("device")
+        if device is not None and not isinstance(device, (int, str)):
+            return _error(400, "'device' must be a number, a name, or null")
+        if isinstance(device, str) and not device.strip():
+            device = None
+
+        # Persist (and apply) the device NAME, not the raw index: PortAudio
+        # re-numbers devices across reboots, so a stored index silently lands
+        # on a different microphone next session. (Live-verified: a stored "1"
+        # pointed at a virtual cable one boot later.)
+        if isinstance(device, int):
+            from voice.audio import list_input_devices
+
+            devices = await asyncio.to_thread(list_input_devices)
+            name = next((d["name"] for d in devices if d["index"] == device), None)
+            if name:
+                device = name
+
+        self._settings.audio.input_device = device
+        if self._persist_secrets:
+            from core.config import save_audio_input
+
+            save_audio_input(device)
+        logger.info("audio input device set to %r via companion API", device)
+        return web.json_response({"ok": True, "device": device})
+
+    async def _handle_dirs(self, request: web.Request) -> web.Response:
+        """Folder shortcuts for the HUD sphere dots (labels + resolved paths)."""
+        return web.json_response({"dirs": await asyncio.to_thread(dirs.sphere_dirs)})
+
+    async def _handle_open(self, request: web.Request) -> web.Response:
+        """Open a whitelisted folder shortcut in the OS file explorer.
+
+        ``key`` must name an entry from :func:`core.dirs.user_dirs` — arbitrary
+        paths are never opened, so a stray request can't launch anything else.
+        """
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error(400, "body must be JSON like {\"key\": \"downloads\"}")
+
+        key = str(payload.get("key") or "").strip()
+        path_str = str(payload.get("path") or "").strip()
+        # to_thread: both validators hit the disk (exists / cold whitelist BFS).
+        if path_str:  # a search result: validate it's under an allowed root
+            path = await asyncio.to_thread(dirs.resolve_path, path_str)
+            if path is None:
+                return _error(403, "path not allowed or does not exist")
+        else:
+            path = await asyncio.to_thread(dirs.resolve, key)
+            if path is None:
+                return _error(404, f"unknown folder shortcut {key!r}")
+        opened = await asyncio.to_thread(dirs.open_path, path)
+        if not opened:
+            return _error(500, f"could not open {path}")
+        logger.info("opened %s via companion API", path)
+        return web.json_response({"ok": True, "path": str(path)})
+
+    async def _handle_interrupt(self, request: web.Request) -> web.Response:
+        """Barge-in: stop any TTS playback now, and (by default) start listening.
+
+        ``sounddevice.stop()`` is global, so it cuts the current Piper utterance
+        wherever the voice loop is blocked on playback. ``{"listen": false}`` just
+        silences it without opening the mic.
+        """
+        try:
+            import sounddevice as sd
+
+            await asyncio.to_thread(sd.stop)
+        except Exception:
+            logger.debug("interrupt: could not stop audio", exc_info=True)
+        listen = True
+        with contextlib.suppress(ValueError):
+            listen = bool((await request.json()).get("listen", True))
+        if listen and self._wake_event is not None:
+            self._wake_event.set()
+        logger.info("interrupt requested (listen=%s)", listen)
+        return web.json_response({"ok": True, "listening": listen and self._wake_event is not None})
+
+    async def _handle_facts_list(self, request: web.Request) -> web.Response:
+        """Remembered facts for the HUD memory manager."""
+        facts = await asyncio.to_thread(self._router.facts.list_all)
+        return web.json_response({"ok": True, "facts": facts})
+
+    async def _handle_facts_add(self, request: web.Request) -> web.Response:
+        """Remember a fact typed into the HUD."""
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error(400, "body must be JSON like {\"fact\": \"…\"}")
+        fact = str(payload.get("fact") or "").strip()
+        if not fact:
+            return _error(400, "missing or empty 'fact'")
+        added = await asyncio.to_thread(self._router.facts.add, fact)
+        return web.json_response({"ok": True, "added": added})
+
+    async def _handle_facts_delete(self, request: web.Request) -> web.Response:
+        """Forget one fact by id (HUD memory manager delete button)."""
+        try:
+            payload = await request.json()
+            fact_id = int(payload.get("id"))
+        except (ValueError, TypeError):
+            return _error(400, "body must be JSON like {\"id\": 3}")
+        deleted = await asyncio.to_thread(self._router.facts.delete, fact_id)
+        if not deleted:
+            return _error(404, f"no fact with id {fact_id}")
+        return web.json_response({"ok": True})
+
+    async def _handle_docs_stats(self, request: web.Request) -> web.Response:
+        """Documents-RAG index size (files/chunks) for UIs."""
+        if self._doc_index is None:
+            return web.json_response({"ok": True, "enabled": False, "files": 0, "chunks": 0})
+        stats = await asyncio.to_thread(self._doc_index.stats)
+        return web.json_response({"ok": True, **stats})
+
+    async def _handle_docs_reindex(self, request: web.Request) -> web.Response:
+        """Kick a background reindex of the user's documents."""
+        if self._doc_index is None:
+            return _error(409, "document indexing is disabled (no embed model)")
+        asyncio.create_task(asyncio.to_thread(self._doc_index.reindex))
+        return web.json_response({"ok": True, "started": True})
+
+    async def _handle_search_files(self, request: web.Request) -> web.Response:
+        """Filename/-folder substring search under the user's folders."""
+        query = request.query.get("q", "").strip()
+        results = await asyncio.to_thread(dirs.search_files, query, 40) if query else []
+        return web.json_response({"ok": True, "results": results})
+
+    async def _handle_search_web(self, request: web.Request) -> web.Response:
+        """Keyless DuckDuckGo web search (server-side, so the HUD dodges CORS)."""
+        query = request.query.get("q", "").strip()
+        if not query:
+            return web.json_response({"ok": True, "results": []})
+        results = await asyncio.to_thread(_web_search, query, 8)
+        if results is None:
+            return web.json_response(
+                {"ok": False, "results": [], "error": "web search unavailable (offline?)"}
+            )
+        return web.json_response({"ok": True, "results": results})
 
     async def _handle_ask(self, request: web.Request) -> web.Response:
         """Route one utterance and return the reply as JSON."""
@@ -290,6 +541,27 @@ class RemoteServer:
                 "latency_ms": round(result.latency_ms, 1),
             }
         )
+
+
+def _web_search(query: str, max_results: int = 8) -> list[dict] | None:
+    """DuckDuckGo results as ``[{"title","url","snippet"}]`` (None if unreachable).
+
+    Delegates to the web_search skill's shared ddgs accessor — one place to fix
+    when the ddgs API changes — and just maps fields for the HUD.
+    """
+    from skills.websearch import ddg_text_search
+
+    results = ddg_text_search(query, max_results)
+    if results is None:
+        return None
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("href", "") or r.get("url", ""),
+            "snippet": r.get("body", ""),
+        }
+        for r in results
+    ]
 
 
 def _error(status: int, message: str) -> web.Response:

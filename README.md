@@ -2,8 +2,10 @@
 
 The super project: **MEDO v1** (jarvis-web — React/Express/nut-js gesture & voice
 assistant) and **MEDO v2** (Python rearchitecture) merged into one codebase.
-Fully local: Ollama for the brain, Whisper for ears, Piper for the voice,
-MediaPipe for the eyes. No cloud APIs, no keys, nothing leaves the machine.
+Local-first: Ollama for the brain, Whisper for ears, Piper for the voice,
+MediaPipe for the eyes. Optionally switch the brain to any OpenAI-compatible
+cloud API from the HUD — the key is stored in a git-ignored local file and
+never committed or echoed back.
 
 ## One-click run (Windows)
 
@@ -19,6 +21,11 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
 - **Voice**: openWakeWord → faster-whisper (auto-detects **Macedonian and
   English** per utterance) → Intent Router → Piper TTS. Replies match your
   language (spoken audio uses the English voice — see Limitations).
+  **Barge-in**: say the wake word while MEDO is talking to cut it off and be
+  heard immediately; the HUD mic button interrupts too. The microphone is a
+  **priority list** (`audio.input_device`) — e.g. Bluetooth headset first,
+  webcam fallback — hot-swapped within ~2 s of a device (dis)connecting, and
+  also selectable live from the HUD CONFIG tab.
 - **Brain**: `qwen3:30b` by default via Ollama tool-calling with 24 tools.
   It's a thinking model — its `</think>` reasoning is stripped before anything
   is spoken, remembered, or shown. `keep_alive: 30m` prevents reload stalls.
@@ -27,18 +34,31 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
   time, timers, notes, volume (real Core Audio on Windows), media keys, apps,
   files, screenshots, window management, typing, clipboard, brightness, power.
 - **Long-term memory**: "remember that …", "what do you remember about me",
-  "forget …" — stored in sqlite, injected into the LLM's system prompt.
-- **Gestures** (webcam sidecar): 👍 yes · ✋ no · ✌ screenshot · ☝ volume up ·
-  three volume down · ✊ mute · 🤏 lock · 🤘 play/pause.
-- **Pointer mode** — say "pointer on" (or toggle in the HUD): your index
-  finger drives the mouse cursor, **pinch = left click**, **three fingers =
-  right click**, **fist = exit**. Discrete gestures pause while it's on.
+  "forget …" — stored in sqlite and recalled **semantically** (local
+  embeddings: "when is my tooth appointment" finds the dentist fact).
+- **Ask your documents (RAG)**: "what do my documents say about the lease?" —
+  .txt/.md/.pdf files in the whitelisted folders are chunked, embedded
+  locally, and searched by meaning; answers quote the source file.
+- **Pointer mode** (webcam sidecar; pointer-only build — say "pointer on" or
+  toggle in the HUD): your index finger drives the mouse cursor ·
+  **🤏 pinch = drag / quick-tap click** · **✌ two fingers = scroll** ·
+  **🤘 index+pinky = zoom (Ctrl+wheel)** · **three fingers = right click** ·
+  **👍 = volume up** · **pinky = volume down** · **✊ held ~1 s = exit**
+  (brief fist misreads while pointing don't kick you out; unrecognized poses
+  keep moving the cursor). Always boots OFF.
 - **Sight**: "what do you see" (camera) and "read my screen" (display) go to a
   local **moondream** vision model.
 - **HUD** (<http://localhost:8730>): the *Medo AI Assistant Interface* design
   (see `docs/design/`) — CORE (live diagnostics, environment, activity log,
   cosmic-web orb, routing, subsystems, optical feed), COMMS (secure-channel
-  chat), CONFIG (toggles + model picker). Server-sent events, zero build step.
+  chat), CONFIG (toggles, model/provider + API key, microphone picker, accent
+  color themes). Server-sent events, zero build step. The orb carries **~300
+  real folder dots** — hover shows the path, click opens it in Explorer — and
+  the top **search box** searches your files and the web side by side
+  (results open in Explorer / the browser, or hand the query to MEDO).
+- **Plugins**: drop a `.py` file in `plugins/` and restart — your skill works
+  by voice AND as an LLM tool, no core changes (see `plugins/README.md`; a
+  broken plugin is skipped, never fatal).
 - **Watch app** (`watch/`): Wear OS companion that talks to the same API.
 
 ## Ports (LAN only — never forward these)
@@ -46,7 +66,7 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
 | Port | What |
 |------|------|
 | 8730 | HUD (127.0.0.1) |
-| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider` (no auth **by design**; LAN only) |
+| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web` (no auth **by design**; LAN only) |
 | 8731 | Vision sidecar — MJPEG `/video`, `/frame.jpg`, `POST /pointer` |
 | 11434 | Ollama |
 
@@ -54,9 +74,12 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
 
 Everything lives in **`config.yaml`** (env-overridable, prefix `MEDO_`,
 nested with `__`, e.g. `MEDO_LLM__DEFAULT_MODEL=qwen3:14b`). Highlights:
-`llm.default_model`, `stt.language` (null = auto-detect), `vision.pointer.*`
-(sensitivity, smoothing, debounce), `vision.gestures` (gesture → utterance),
-`memory.max_facts`, `weather.default_city`.
+`llm.default_model`, `stt.language` (null = auto-detect),
+`audio.input_device` (mic priority list — first available wins, hot-swapped),
+`vision.pointer.*` (sensitivity, smoothing, scroll/zoom gains, fist exit hold),
+`hud.max_dir_dots`, `memory.max_facts`, `weather.default_city`. Per-machine
+secrets (online API key, picked mic) persist in the git-ignored
+`secrets.local.yaml`.
 
 ## Tests
 
@@ -74,8 +97,8 @@ handoff is preserved in `docs/design/`.
 
 ## Known limitations
 
-- Piper has **no Macedonian voice**: Macedonian replies are correct as text in
-  the HUD but are spoken with the English voice. Roadmap: optional edge-tts.
+- Macedonian replies are spoken with a **neural mk-MK voice via edge-tts**
+  (free, needs internet); offline they fall back to the English Piper voice.
 - The wake word is openWakeWord's pretrained **"hey jarvis"** — a custom
   "hey MEDO" model is on the roadmap.
 - Brightness control needs a laptop-class display (external monitors usually

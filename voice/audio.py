@@ -21,6 +21,108 @@ logger = logging.getLogger(__name__)
 FRAME_SAMPLES = 1280
 
 
+# Host API whose devices sounddevice can't read with the blocking API — a name
+# match landing on one of these would "resolve" and then fail to open.
+_UNUSABLE_HOSTAPI = "Windows WDM-KS"
+
+
+def _usable_inputs() -> list[tuple[int, str, str]]:
+    """(index, name, hostapi_name) for every input device we can actually read."""
+    import sounddevice as sd
+
+    apis = [a["name"] for a in sd.query_hostapis()]
+    out = []
+    for i, dev in enumerate(sd.query_devices()):
+        if dev.get("max_input_channels", 0) <= 0:
+            continue
+        api = apis[dev["hostapi"]] if dev["hostapi"] < len(apis) else "?"
+        if api == _UNUSABLE_HOSTAPI:
+            continue
+        out.append((i, str(dev["name"]), api))
+    return out
+
+
+def list_input_devices() -> list[dict]:
+    """``[{"index", "name"}]`` for the HUD microphone picker (``[]`` on error).
+
+    Windows enumerates every endpoint once per host API (MME, DirectSound,
+    WASAPI, WDM-KS) — a raw dump shows each mic four times, and the WDM-KS
+    copies can't be opened at all. Return just the MME set: names are truncated
+    to 31 chars, but MME resamples to any rate, whereas WASAPI endpoints refuse
+    our 16 kHz outright (PaErrorCode -9997, verified on this machine). Never
+    raises.
+    """
+    try:
+        usable = _usable_inputs()
+        for preferred in ("MME", "Windows WASAPI"):
+            subset = [(i, n) for i, n, api in usable if api == preferred]
+            if subset:
+                return [{"index": i, "name": n} for i, n in subset]
+        return [{"index": i, "name": n} for i, n, _ in usable]
+    except Exception:
+        logger.debug("could not list input devices", exc_info=True)
+        return []
+
+
+def resolve_input_device(device):
+    """Resolve ``audio.input_device`` to a PortAudio index (or None = default).
+
+    Accepts an int index (passed through), ``None`` (system default), a
+    case-insensitive name substring like ``"FHD Webcam"`` (stable across the
+    re-indexing PortAudio does on every reboot), or a **priority list** of any
+    of those — e.g. ``["A25", "FHD Webcam"]`` means "the headphones' mic
+    whenever they're connected, the webcam otherwise". Only endpoints on host
+    APIs we can actually read are matched (WDM-KS pins enumerate even for
+    disconnected devices and don't support blocking reads). Raises with a
+    helpful hint when nothing usable matches so a typo doesn't silently fall
+    back to a dead default.
+    """
+    if isinstance(device, (list, tuple)):
+        for entry in device:
+            try:
+                return resolve_input_device(entry)
+            except RuntimeError:
+                continue
+        raise RuntimeError(
+            f"none of the preferred input devices {list(device)!r} is currently "
+            f"available; pick one in the HUD CONFIG tab or list them with "
+            f"'python -m voice.wakeword'"
+        )
+    if not isinstance(device, str):
+        return device
+    want = device.strip().lower()
+    for i, name, _api in _usable_inputs():
+        if want in name.lower():
+            return i
+    raise RuntimeError(
+        f"no usable input device name contains {device!r}; pick one in the HUD "
+        f"CONFIG tab or list them with 'python -m voice.wakeword'"
+    )
+
+
+def normalize_peak(
+    audio: np.ndarray,
+    target: float = 0.6,
+    min_peak: float = 1e-4,
+    max_gain: float = 25.0,
+) -> np.ndarray:
+    """Scale a float waveform so its peak sits at ``target`` (quiet-mic rescue).
+
+    Webcam/onboard mics often record speech peaking at 0.01–0.05, which hurts
+    Whisper accuracy. Boosting the clip to a healthy peak costs nothing when the
+    audio is already loud (it can also attenuate). ``min_peak`` skips silent
+    clips entirely, and ``max_gain`` (~+28 dB) caps the boost so a clip that
+    barely crossed the recording gate — a cough, a chair squeak — can't be
+    amplified into loud garbage that Whisper hallucinates words from.
+    """
+    if audio.size == 0:
+        return audio
+    peak = float(np.max(np.abs(audio)))
+    if peak < min_peak:
+        return audio
+    return (audio * min(target / peak, max_gain)).astype(np.float32)
+
+
 def frame_rms(frame: np.ndarray) -> float:
     """Root-mean-square level of an int16 frame, normalized to 0.0–1.0."""
     if frame.size == 0:
@@ -42,22 +144,27 @@ class Microphone:
         self,
         sample_rate: int = 16000,
         frame_samples: int = FRAME_SAMPLES,
-        device: int | None = None,
+        device: int | str | list | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.frame_samples = frame_samples
         self.device = device
+        # The concrete PortAudio index open() resolved to (None = default).
+        # The voice loop compares this against a fresh resolve to hot-swap when
+        # a higher-priority device (e.g. headphones) appears or disappears.
+        self.resolved_index: int | None = None
         self._stream = None  # sounddevice.InputStream, created on open()
 
     def open(self) -> "Microphone":
         import sounddevice as sd
 
+        self.resolved_index = resolve_input_device(self.device)
         self._stream = sd.InputStream(
             samplerate=self.sample_rate,
             blocksize=self.frame_samples,
             channels=1,
             dtype="int16",
-            device=self.device,
+            device=self.resolved_index,
         )
         self._stream.start()
         return self

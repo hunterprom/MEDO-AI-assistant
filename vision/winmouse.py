@@ -12,6 +12,12 @@ import ctypes
 
 _LEFTDOWN, _LEFTUP = 0x0002, 0x0004
 _RIGHTDOWN, _RIGHTUP = 0x0008, 0x0010
+_WHEEL = 0x0800                 # MOUSEEVENTF_WHEEL
+_WHEEL_DELTA = 120             # one notch
+_KEYUP = 0x0002                # KEYEVENTF_KEYUP
+_VK_CONTROL = 0x11
+_VK_VOLUME_DOWN, _VK_VOLUME_UP = 0xAE, 0xAF
+_VK_MEDIA_PLAY_PAUSE = 0xB3
 
 
 def _user32():
@@ -37,3 +43,52 @@ def click_right() -> None:
     u = _user32()
     u.mouse_event(_RIGHTDOWN, 0, 0, 0, 0)
     u.mouse_event(_RIGHTUP, 0, 0, 0, 0)
+
+
+def press_left() -> None:
+    """Hold the left button down (for click-and-drag)."""
+    _user32().mouse_event(_LEFTDOWN, 0, 0, 0, 0)
+
+
+def release_left() -> None:
+    """Release the left button (ends a drag; a quick press+release is a click)."""
+    _user32().mouse_event(_LEFTUP, 0, 0, 0, 0)
+
+
+def scroll(notches: int) -> None:
+    """Turn the mouse wheel. Positive = up/away from the user, negative = down."""
+    if notches:
+        # mouse_event's wheel delta is signed; ctypes needs an unsigned c_ulong,
+        # so wrap negatives into 32-bit two's complement.
+        _user32().mouse_event(_WHEEL, 0, 0, ctypes.c_int(int(notches) * _WHEEL_DELTA).value & 0xFFFFFFFF, 0)
+
+
+def zoom(notches: int) -> None:
+    """Ctrl + wheel — the near-universal zoom shortcut (browsers, editors, maps)."""
+    if not notches:
+        return
+    u = _user32()
+    u.keybd_event(_VK_CONTROL, 0, 0, 0)
+    try:
+        scroll(notches)
+    finally:
+        u.keybd_event(_VK_CONTROL, 0, _KEYUP, 0)
+
+
+def _tap(vk: int) -> None:
+    u = _user32()
+    u.keybd_event(vk, 0, 0, 0)
+    u.keybd_event(vk, 0, _KEYUP, 0)
+
+
+def volume_up() -> None:
+    _tap(_VK_VOLUME_UP)
+
+
+def volume_down() -> None:
+    _tap(_VK_VOLUME_DOWN)
+
+
+def play_pause() -> None:
+    """Media play/pause key — toggles Spotify/YouTube/whatever has media focus."""
+    _tap(_VK_MEDIA_PLAY_PAUSE)

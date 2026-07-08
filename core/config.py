@@ -8,6 +8,7 @@ tests and CI without editing the file.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Literal
@@ -23,6 +24,14 @@ from pydantic_settings import (
 # Resolved once so every module agrees on where the project root is.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+
+# Online API keys live here, NOT in config.yaml (which is committed to git). This
+# file is git-ignored; it is written by the HUD's "connect online model" flow and
+# read at startup by apply_local_secrets(). Fields mirror LLMConfig.
+SECRETS_PATH = PROJECT_ROOT / "secrets.local.yaml"
+
+# Only these LLM fields may be persisted to / loaded from the secrets file.
+_SECRET_LLM_FIELDS = ("provider", "api_key", "openai_base_url", "default_model")
 
 
 def expand_path(path: str | Path) -> Path:
@@ -71,8 +80,12 @@ class PointerConfig(BaseModel):
     enabled: bool = True
     sensitivity: float = 2.5            # hand range → screen range amplification
     ema_alpha: float = 0.4              # 0..1 smoothing (higher = snappier)
-    click_debounce_ms: int = 600        # min gap between gesture clicks
-    hold_frames: int = 3                # frames a click pose must hold to fire
+    click_debounce_ms: int = 600        # min gap between gesture right-clicks
+    hold_frames: int = 3                # frames a right-click pose must hold to fire
+    scroll_gain: float = 45.0           # hand vertical motion → wheel notches (victory)
+    zoom_gain: float = 25.0             # hand vertical motion → ctrl+wheel zoom (rock)
+    volume_interval_ms: int = 180       # min gap between volume steps while held
+    exit_hold_frames: int = 18          # frames a fist must HOLD to exit (~1.2 s @15fps)
 
 
 class VisionConfig(BaseModel):
@@ -109,6 +122,7 @@ class HudConfig(BaseModel):
     enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 8730
+    max_dir_dots: int = 300             # how many folder dots to scatter on the orb
 
 
 class STTConfig(BaseModel):
@@ -136,6 +150,10 @@ class TTSConfig(BaseModel):
     engine: str = "piper"
     voice_model: str = ""
     speed: float = 1.0
+    # Cyrillic replies are spoken with a Macedonian neural voice via edge-tts
+    # (free, online); Piper stays the offline voice for everything else.
+    multilingual: bool = True
+    mk_voice: str = "mk-MK-MarijaNeural"
 
 
 class WakeWordConfig(BaseModel):
@@ -145,7 +163,11 @@ class WakeWordConfig(BaseModel):
 
 
 class AudioConfig(BaseModel):
-    input_device: int | None = None
+    # int index, a case-insensitive name substring (e.g. "FHD Webcam") that
+    # survives device re-indexing across reboots, or a PRIORITY LIST of those —
+    # the first currently-available entry wins and the voice loop hot-swaps
+    # (~2 s) when a higher-priority device connects. null = system default.
+    input_device: int | str | list[int | str] | None = None
     output_device: int | None = None
     sample_rate: int = 16000
     silence_threshold: float = 0.015
@@ -181,7 +203,20 @@ class VisionLLMConfig(BaseModel):
 class MemoryConfig(BaseModel):
     db_path: str = "jarvis.db"
     max_turns: int = 10
-    max_facts: int = 20                 # newest facts injected into the system prompt
+    max_facts: int = 20                 # facts injected into the system prompt
+    # Local Ollama embedding model for semantic fact recall ("dentist" finds
+    # "my dentist is Dr. ..."). Empty string disables -> newest-N as before.
+    embed_model: str = "nomic-embed-text"
+
+
+class RoutineItem(BaseModel):
+    """One proactive routine (see core/routines.py)."""
+
+    name: str = "routine"
+    at: str = "08:00"                   # HH:MM local time
+    days: list[str] = Field(default_factory=list)  # empty = daily; [mon, tue, ...]
+    ask: list[str] = Field(default_factory=list)   # utterances routed + announced
+    enabled: bool = True
 
 
 class LoggingConfig(BaseModel):
@@ -215,6 +250,7 @@ class Settings(BaseSettings):
     news: NewsConfig = Field(default_factory=NewsConfig)
     vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    routines: list[RoutineItem] = Field(default_factory=list)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
     skills: dict = Field(default_factory=dict)
@@ -253,3 +289,87 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
         )
 
     return _FileSettings()
+
+
+# --- local overrides (online API key + chosen mic) --------------------------
+#
+# A single git-ignored file holds per-machine settings that must not be committed
+# to config.yaml: the online API key/model (``llm:``) and the chosen microphone
+# (``audio:``). Deliberately kept out of load_settings() so tests that call
+# load_settings() stay isolated from the developer's machine; main.py opts in by
+# calling apply_local_secrets() at startup and the companion API opts in to writes.
+
+
+def _read_local(path: Path = SECRETS_PATH) -> dict:
+    """Whole local-overrides document (``{}`` if missing/corrupt). Never raises."""
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # a corrupt file must never crash startup
+        return {}
+
+
+def _write_local(data: dict, path: Path = SECRETS_PATH) -> None:
+    import yaml
+
+    path.write_text(
+        "# MEDO local overrides — git-ignored, do not commit.\n"
+        + yaml.safe_dump(data, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def load_llm_secrets(path: Path = SECRETS_PATH) -> dict:
+    """Return the persisted llm secrets ``{field: value}`` (``{}`` if none)."""
+    llm = _read_local(path).get("llm", {}) or {}
+    return {k: llm[k] for k in _SECRET_LLM_FIELDS if k in llm}
+
+
+def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settings:
+    """Overlay locally-saved llm secrets + chosen mic onto ``settings`` in place.
+
+    Lets an online API key/model and the picked microphone survive a restart
+    without ever being written to the git-tracked config.yaml. Returns the same
+    settings for convenience.
+    """
+    data = _read_local(path)
+    llm = data.get("llm", {}) or {}
+    for field in _SECRET_LLM_FIELDS:
+        value = llm.get(field)
+        if value not in (None, ""):
+            setattr(settings.llm, field, value)
+    audio = data.get("audio", {}) or {}
+    if "input_device" in audio:  # may be int, name, or None (= system default)
+        settings.audio.input_device = audio["input_device"]
+    return settings
+
+
+def save_llm_secrets(path: Path = SECRETS_PATH, **fields: object) -> None:
+    """Merge the given llm fields into the git-ignored overrides file.
+
+    Merging (not overwriting) means switching provider to "ollama" keeps the
+    stored key so the next switch back to online needs no re-entry. Only
+    whitelisted fields are written; unknown kwargs are ignored. Best-effort.
+    """
+    payload = {k: v for k, v in fields.items() if k in _SECRET_LLM_FIELDS and v is not None}
+    if not payload:
+        return
+    try:
+        data = _read_local(path)
+        data.setdefault("llm", {}).update(payload)
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist llm secrets")
+
+
+def save_audio_input(device: int | str | None, path: Path = SECRETS_PATH) -> None:
+    """Persist the chosen microphone (index/name/None) to the overrides file."""
+    try:
+        data = _read_local(path)
+        data.setdefault("audio", {})["input_device"] = device
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist audio input device")

@@ -32,6 +32,9 @@ ollama list 2>nul | findstr /i /c:"qwen3" >nul
 if %errorlevel%==0 goto ollama_ready
 if not exist "D:\OllamaModels\manifests" goto ollama_ready
 echo [medo] Ollama is running without the D: model store - restarting it...
+REM Kill the tray app FIRST: it silently respawns ollama.exe without
+REM OLLAMA_MODELS, which is exactly the zero-models state we're fixing.
+taskkill /im "ollama app.exe" /f >nul 2>&1
 taskkill /im ollama.exe /f >nul 2>&1
 timeout /t 2 >nul
 :ollama_start
@@ -74,6 +77,9 @@ if not exist ".venv-vision\" (
 )
 
 REM 4. Launch ---------------------------------------------------------------------
+REM A previous MEDO still holding the ports makes the new one crash at startup
+REM (bind error 10048) - and you end up talking to the OLD build. Replace it.
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":8710 :8730 :8731" ^| findstr LISTENING') do taskkill /pid %%p /f >nul 2>&1
 echo [medo] starting vision sidecar ^(gestures, pointer mode, camera stream^)...
 start "MEDO Vision" .venv-vision\Scripts\python -m vision.run
 REM Open the HUD once the app has had a moment to bind the port.
