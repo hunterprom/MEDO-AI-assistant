@@ -58,7 +58,7 @@ CORS_HEADERS = {
 }
 
 #: Providers accepted by ``POST /provider`` (mirrors LLMConfig.provider).
-VALID_PROVIDERS = ("ollama", "openai")
+VALID_PROVIDERS = ("ollama", "openai", "anthropic", "claude-code", "codex")
 
 
 @web.middleware
@@ -85,10 +85,13 @@ class RemoteServer:
         persist_secrets: bool = False,
         wake_event: threading.Event | None = None,
         doc_index=None,
+        mcp_manager=None,
     ) -> None:
         self._settings = settings
         self._router = router
         self._sm = sm
+        # MCP client manager (None when MCP is disabled/unconfigured).
+        self._mcp = mcp_manager
         # When True, a /provider switch writes the key/model to the git-ignored
         # secrets file so it survives a restart. Off by default (and in tests).
         self._persist_secrets = persist_secrets
@@ -124,6 +127,7 @@ class RemoteServer:
         app.router.add_get("/search/web", self._handle_search_web)
         app.router.add_get("/docs/stats", self._handle_docs_stats)
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
+        app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_get("/facts", self._handle_facts_list)
         app.router.add_post("/facts", self._handle_facts_add)
         app.router.add_post("/facts/delete", self._handle_facts_delete)
@@ -254,11 +258,32 @@ class RemoteServer:
                 "model": self._router.model,
                 "models": models,
                 "state": self._sm.state.value,
-                # Let the HUD show what's remembered. The key itself is never
-                # returned — only whether one is stored locally.
+                # Let the HUD show what's remembered. The keys themselves are
+                # never returned — only whether one is stored locally.
                 "openai_base_url": self._settings.llm.openai_base_url,
                 "has_api_key": bool(self._settings.llm.api_key),
+                "anthropic_base_url": self._settings.llm.anthropic_base_url,
+                "has_anthropic_key": bool(self._settings.llm.anthropic_api_key),
+                # Which local CLI agents exist on this machine (for the HUD).
+                "cli_available": await asyncio.to_thread(self._cli_availability),
             }
+        )
+
+    def _cli_availability(self) -> dict[str, bool]:
+        import shutil
+
+        return {
+            "claude-code": shutil.which(self._settings.llm.claude_cmd) is not None,
+            "codex": shutil.which(self._settings.llm.codex_cmd) is not None,
+        }
+
+    async def _handle_mcp_status(self, request: web.Request) -> web.Response:
+        """Connected MCP servers + their tools (HUD CONFIG tab)."""
+        configured = bool(self._settings.mcp.servers)
+        servers = self._mcp.status() if self._mcp is not None else []
+        return web.json_response(
+            {"ok": True, "enabled": self._settings.mcp.enabled,
+             "configured": configured, "servers": servers}
         )
 
     async def _handle_models(self, request: web.Request) -> web.Response:
@@ -309,14 +334,21 @@ class RemoteServer:
 
         llm_cfg = self._settings.llm
         llm_cfg.provider = provider
+        # The key/base URL land in the field belonging to the chosen provider,
+        # so GPT and Claude credentials are remembered independently.
         api_key = payload.get("api_key")
         if api_key is not None:
-            llm_cfg.api_key = str(api_key)
+            if provider == "anthropic":
+                llm_cfg.anthropic_api_key = str(api_key)
+            else:
+                llm_cfg.api_key = str(api_key)
         base_url = str(payload.get("base_url") or "").strip()
         if base_url:
             if provider == "openai":
                 llm_cfg.openai_base_url = base_url
-            else:
+            elif provider == "anthropic":
+                llm_cfg.anthropic_base_url = base_url
+            elif provider == "ollama":
                 llm_cfg.host = base_url
 
         models = await asyncio.to_thread(self._router.llm.list_models)
@@ -331,8 +363,12 @@ class RemoteServer:
             # untouched otherwise. Merges, so switching to ollama keeps the key.
             save_llm_secrets(
                 provider=provider,
-                api_key=llm_cfg.api_key if api_key is not None else None,
+                api_key=(llm_cfg.api_key
+                         if api_key is not None and provider != "anthropic" else None),
+                anthropic_api_key=(llm_cfg.anthropic_api_key
+                                   if api_key is not None and provider == "anthropic" else None),
                 openai_base_url=(llm_cfg.openai_base_url if base_url and provider == "openai" else None),
+                anthropic_base_url=(llm_cfg.anthropic_base_url if base_url and provider == "anthropic" else None),
                 default_model=model,
             )
 

@@ -31,7 +31,14 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 SECRETS_PATH = PROJECT_ROOT / "secrets.local.yaml"
 
 # Only these LLM fields may be persisted to / loaded from the secrets file.
-_SECRET_LLM_FIELDS = ("provider", "api_key", "openai_base_url", "default_model")
+_SECRET_LLM_FIELDS = (
+    "provider",
+    "api_key",
+    "openai_base_url",
+    "anthropic_api_key",
+    "anthropic_base_url",
+    "default_model",
+)
 
 
 def expand_path(path: str | Path) -> Path:
@@ -40,10 +47,24 @@ def expand_path(path: str | Path) -> Path:
 
 
 class LLMConfig(BaseModel):
-    provider: Literal["ollama", "openai"] = "ollama"
+    # ollama       — local Ollama server
+    # openai       — any OpenAI-compatible cloud API (GPT, Groq, …)
+    # anthropic    — the Claude API (api.anthropic.com)
+    # claude-code  — the locally installed `claude` CLI agent (Claude Code)
+    # codex        — the locally installed `codex` CLI agent (OpenAI Codex)
+    provider: Literal["ollama", "openai", "anthropic", "claude-code", "codex"] = "ollama"
     host: str = "http://localhost:11434"
     api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
+    # Claude API: separate key so switching between GPT and Claude keeps both.
+    anthropic_api_key: str = ""
+    anthropic_base_url: str = "https://api.anthropic.com"
+    # Claude's /v1/messages requires an output cap (also a sane spoken-reply cap).
+    anthropic_max_tokens: int = 1024
+    # CLI agents: the executable to run (absolute path or on $PATH).
+    claude_cmd: str = "claude"
+    codex_cmd: str = "codex"
+    cli_timeout_s: float = 180.0
     default_model: str | None = None
     fallback_model: str = "llama3.2:3b"
     temperature: float = 0.6
@@ -209,6 +230,30 @@ class MemoryConfig(BaseModel):
     embed_model: str = "nomic-embed-text"
 
 
+class MCPServerConfig(BaseModel):
+    """One MCP server MEDO connects to (see core/mcp.py).
+
+    Two transports: a local process (``command`` + ``args``, stdio) or a remote
+    endpoint (``url``, Streamable HTTP/SSE). Exactly one of command/url should
+    be set; each of the server's tools becomes a MEDO skill the LLM can call.
+    """
+
+    enabled: bool = True
+    command: str = ""                   # e.g. "npx" (stdio transport)
+    args: list[str] = Field(default_factory=list)  # e.g. ["-y", "@modelcontextprotocol/server-filesystem", "~"]
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""                       # e.g. "http://localhost:3000/mcp" (HTTP transport)
+
+
+class MCPConfig(BaseModel):
+    """Model Context Protocol client — connect any app that speaks MCP."""
+
+    enabled: bool = True
+    connect_timeout_s: float = 15.0
+    call_timeout_s: float = 60.0
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+
 class RoutineItem(BaseModel):
     """One proactive routine (see core/routines.py)."""
 
@@ -250,6 +295,7 @@ class Settings(BaseSettings):
     news: NewsConfig = Field(default_factory=NewsConfig)
     vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
     routines: list[RoutineItem] = Field(default_factory=list)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).

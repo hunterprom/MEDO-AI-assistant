@@ -43,6 +43,10 @@ OFFLINE_CLOUD_REPLY = (
     "I can't reach the cloud model. Check your API key, the base URL, and your "
     "internet connection — or switch back to the local provider."
 )
+OFFLINE_CLI_REPLY = (
+    "I can't reach the {name} command-line agent. Make sure it is installed, "
+    "logged in, and on your PATH — or switch provider in the HUD."
+)
 CANCELLED_REPLY = "Okay, cancelled."
 #: Spoken when the model returns nothing usable (e.g. reasoning truncated mid-think).
 EMPTY_REPLY = "Sorry — I lost my train of thought. Ask me that again?"
@@ -202,8 +206,13 @@ class Router:
     @property
     def _offline_reply(self) -> str:
         """The provider-appropriate 'can't reach the model' message."""
-        if self._settings.llm.provider == "openai":
+        provider = self._settings.llm.provider
+        if provider in ("openai", "anthropic"):
             return OFFLINE_CLOUD_REPLY
+        if provider == "claude-code":
+            return OFFLINE_CLI_REPLY.format(name="Claude Code")
+        if provider == "codex":
+            return OFFLINE_CLI_REPLY.format(name="Codex")
         return OFFLINE_LLM_REPLY
 
     async def _llm_reply(
@@ -258,7 +267,7 @@ class Router:
             )
         except LLMUnavailableError as exc:
             logger.warning("LLM path unavailable: %s", exc)
-            return RouteResult(path=RoutePath.LLM, speech=OFFLINE_LLM_REPLY)
+            return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
     async def _run_tool_calls(
         self,

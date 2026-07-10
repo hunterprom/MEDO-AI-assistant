@@ -692,6 +692,18 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         )
 
     registry = build_registry(settings, announcer, summarize, reminders, doc_index)
+
+    # MCP: connect configured servers and register their tools as skills, so
+    # any application that speaks the Model Context Protocol becomes callable
+    # by the LLM path. A bad server (or missing `mcp` package) never blocks
+    # startup — it's logged and skipped.
+    from core.mcp import MCPManager
+
+    mcp_manager = MCPManager(settings.mcp)
+    mcp_tools = await mcp_manager.start(registry)
+    if mcp_tools:
+        console.print(f"[dim]MCP: {mcp_tools} tool(s) from connected servers.[/dim]")
+
     bus = EventBus()
     sm = StateMachine(bus)
     router = Router(settings, registry, llm, bus)
@@ -735,7 +747,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     if serve or settings.remote.enabled or settings.vision.enabled:
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
                               wake_event=wake_event if voice else None,
-                              doc_index=doc_index)
+                              doc_index=doc_index, mcp_manager=mcp_manager)
         try:
             await remote.start()
         except OSError as exc:
@@ -796,6 +808,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             await remote.stop()
         if hud_server is not None:
             await hud_server.stop()
+        await mcp_manager.stop()
 
 
 def main() -> None:

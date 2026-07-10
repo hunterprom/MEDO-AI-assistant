@@ -114,11 +114,10 @@
   #orbcol { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 0; }
   #orbwrap {
     --orb: clamp(320px, 74vh, 880px);
-    /* barrier rings sit well outside the sphere (1.35× the orb, was 1.045×);
-       margins absorb the extra so the column layout doesn't grow. */
-    position: relative; width: calc(var(--orb) * 1.35); height: calc(var(--orb) * 1.35);
+    /* barrier rings hug the sphere (1x geometry: 1.045× the orb). */
+    position: relative; width: calc(var(--orb) * 1.045); height: calc(var(--orb) * 1.045);
     flex: none; display: flex; align-items: center; justify-content: center;
-    margin: calc(var(--orb) * -0.333) 0 calc(var(--orb) * -0.298);
+    margin: calc(var(--orb) * -0.18) 0 calc(var(--orb) * -0.145);
   }
   #orbwrap .ring0 { position: absolute; inset: 0; border: 1px dashed rgba(56,168,255,.22); border-radius: 50%; animation: medo-spin 80s linear infinite; }
   #orbwrap .ring1 { position: absolute; inset: 4.8%; border: 1px solid transparent; border-top-color: rgba(127,208,255,.5); border-right-color: rgba(56,168,255,.18); border-radius: 50%; animation: medo-spin 16s linear infinite; }
@@ -245,7 +244,7 @@
   #swatches .customwrap .lbl { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: #4a6d94; letter-spacing: .1em; }
 
   /* ---- provider / model controls ---- */
-  .seg { display: inline-flex; border: 1px solid rgba(56,168,255,.3); }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid rgba(56,168,255,.3); }
   .seg button {
     background: rgba(8,18,34,.5); border: none; color: #7fa8cf;
     font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 12px; letter-spacing: .16em;
@@ -536,16 +535,19 @@
       <div class="setting col-layout">
         <div class="info"><span class="name">Brain</span><span class="desc" id="model-desc">ACTIVE BRAIN · VIA OLLAMA</span></div>
         <div class="seg" id="provider-seg">
-          <button data-prov="ollama" class="active">LOCAL · OLLAMA</button>
-          <button data-prov="openai">ONLINE · API</button>
+          <button data-prov="ollama" class="active">OLLAMA</button>
+          <button data-prov="openai">GPT · API</button>
+          <button data-prov="anthropic">CLAUDE · API</button>
+          <button data-prov="claude-code">CLAUDE CODE</button>
+          <button data-prov="codex">CODEX</button>
         </div>
         <div id="online-fields">
           <div class="field">
-            <label>API KEY — stored locally on this machine, never committed</label>
+            <label id="key-label">API KEY — stored locally on this machine, never committed</label>
             <input id="api-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
           </div>
           <div class="field">
-            <label>BASE URL — any OpenAI-compatible API</label>
+            <label id="base-label">BASE URL — any OpenAI-compatible API</label>
             <input id="api-base" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" />
           </div>
         </div>
@@ -575,6 +577,14 @@
       <div class="setting">
         <div class="info"><span class="name">File map</span><span class="desc" id="dirs-desc">FOLDER BEACONS ON THE SPHERE · RESCAN AFTER MOVING TO A NEW MACHINE</span></div>
         <button class="btn-sm" id="dirs-rescan">SCAN THIS PC</button>
+      </div>
+      <div class="head" style="margin-top:8px">CONNECTED APPS · MCP</div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">MCP servers</span><span class="desc" id="mcp-desc">PLUG ANY APP INTO MEDO · LOADING…</span></div>
+        <div id="mcp-list" class="sr-list"></div>
+        <div id="mcp-hint" style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.06em">
+          ADD SERVERS IN config.yaml → mcp.servers (COMMAND OR URL) · THEIR TOOLS BECOME SKILLS THE BRAIN CAN CALL · DROP-IN PYTHON SKILLS GO IN plugins/
+        </div>
       </div>
     </div>
   </div>
@@ -614,7 +624,7 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'comms') { scrollChat(); $('draft').focus(); }
-    if (screen === 'config') { loadFacts(); loadDocsStats(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); }
   }
   $('tab-core').onclick = () => go('core');
   $('tab-comms').onclick = () => go('comms');
@@ -1020,26 +1030,61 @@
   const connectBtn = $('connect-btn');
   let curProvider = 'ollama';
   let firstStatus = true;
-  let keySaved = false;       // is an online API key remembered on this PC?
-  let savedBaseUrl = '';      // the remembered OpenAI-compatible base URL
+  let keySaved = false;        // is an OpenAI-compatible key remembered on this PC?
+  let anthKeySaved = false;    // is a Claude API key remembered on this PC?
+  let savedBaseUrl = '';       // the remembered OpenAI-compatible base URL
+  let savedAnthBaseUrl = '';   // the remembered Claude API base URL
+  let cliAvail = {};           // {'claude-code': bool, 'codex': bool} from /status
 
-  const PLACEHOLDER_RE = /^(loading|no models|connect|api offline|—)/i;
+  /* Five brains. `key` providers show the key/base fields; `hint` providers
+     show install/run guidance instead. */
+  const PROVIDERS = {
+    'ollama': { btn: 'APPLY', hint: 'REQUIRES OLLAMA RUNNING · PULL A MODEL FIRST, e.g. ollama pull llama3.2:3b' },
+    'openai': {
+      btn: 'CONNECT', key: true, keyPh: 'sk-…', basePh: 'https://api.openai.com/v1',
+      keyLabel: 'API KEY — stored locally on this machine, never committed',
+      baseLabel: 'BASE URL — any OpenAI-compatible API (GPT, Groq, …)',
+    },
+    'anthropic': {
+      btn: 'CONNECT', key: true, keyPh: 'sk-ant-…', basePh: 'https://api.anthropic.com',
+      keyLabel: 'CLAUDE API KEY — stored locally on this machine, never committed',
+      baseLabel: 'BASE URL — the Claude API',
+    },
+    'claude-code': { btn: 'APPLY', cli: true, hint: 'RUNS THE LOCAL claude CLI (CLAUDE CODE) — INSTALL: npm i -g @anthropic-ai/claude-code · LOG IN ONCE BY RUNNING claude' },
+    'codex': { btn: 'APPLY', cli: true, hint: 'RUNS THE LOCAL codex CLI (OPENAI CODEX) — INSTALL: npm i -g @openai/codex · LOG IN ONCE BY RUNNING codex' },
+  };
+
+  const PLACEHOLDER_RE = /^(loading|no models|connect|api offline|cli not|—)/i;
 
   function reflectProvider(prov) {
-    curProvider = prov === 'openai' ? 'openai' : 'ollama';
+    curProvider = PROVIDERS[prov] ? prov : 'ollama';
+    const meta = PROVIDERS[curProvider];
     for (const b of providerSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.prov === curProvider);
-    onlineFields.classList.toggle('show', curProvider === 'openai');
-    localHint.style.display = curProvider === 'ollama' ? '' : 'none';
-    connectBtn.textContent = curProvider === 'openai' ? 'CONNECT' : 'APPLY';
-    if (curProvider === 'openai') {
-      apiKeyInput.placeholder = keySaved ? '•••••••••• saved on this PC — leave blank to keep' : 'sk-…';
-      if (savedBaseUrl && !apiBaseInput.value) apiBaseInput.value = savedBaseUrl;
+    onlineFields.classList.toggle('show', !!meta.key);
+    localHint.style.display = meta.hint ? '' : 'none';
+    connectBtn.textContent = meta.btn;
+    if (meta.hint) {
+      let hint = meta.hint;
+      if (meta.cli && cliAvail[curProvider] === false) hint = 'NOT DETECTED ON THIS PC · ' + hint;
+      if (meta.cli && cliAvail[curProvider] === true) hint = 'DETECTED ON THIS PC ✓ · ' + hint;
+      localHint.textContent = hint;
+    }
+    if (meta.key) {
+      const saved = curProvider === 'anthropic' ? anthKeySaved : keySaved;
+      $('key-label').textContent = meta.keyLabel;
+      $('base-label').textContent = meta.baseLabel;
+      apiKeyInput.placeholder = saved ? '•••••••••• saved on this PC — leave blank to keep' : meta.keyPh;
+      apiBaseInput.placeholder = meta.basePh;
+      apiBaseInput.value = (curProvider === 'anthropic' ? savedAnthBaseUrl : savedBaseUrl) || '';
     }
   }
   function fillModels(models, active) {
     modelSel.innerHTML = '';
     if (!(models || []).length) {
-      modelSel.innerHTML = `<option>${curProvider === 'openai' ? 'connect to list models' : 'no models — is ollama up?'}</option>`;
+      const empty = PROVIDERS[curProvider].cli ? 'cli not detected — see hint below'
+        : PROVIDERS[curProvider].key ? 'connect to list models'
+        : 'no models — is ollama up?';
+      modelSel.innerHTML = `<option>${empty}</option>`;
       return;
     }
     for (const m of models) {
@@ -1053,12 +1098,17 @@
     try {
       const d = await (await fetch(`${API}/status`)).json();
       keySaved = !!d.has_api_key;
+      anthKeySaved = !!d.has_anthropic_key;
       savedBaseUrl = d.openai_base_url || '';
-      if (savedBaseUrl && document.activeElement !== apiBaseInput) apiBaseInput.value = savedBaseUrl;
+      savedAnthBaseUrl = d.anthropic_base_url || '';
+      cliAvail = d.cli_available || {};
       if (firstStatus) {
         reflectProvider(d.provider || 'ollama');
-        if (keySaved && (d.provider || 'ollama') === 'openai') { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED'; }
+        const savedNow = curProvider === 'anthropic' ? anthKeySaved : keySaved;
+        if (savedNow && PROVIDERS[curProvider].key) { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED'; }
         firstStatus = false;
+      } else if (PROVIDERS[curProvider].hint) {
+        reflectProvider(curProvider);   // refresh the DETECTED ✓ marker
       }
       if (document.activeElement !== modelSel) fillModels(d.models, d.model);  // don't yank an open dropdown
       $('model-desc').textContent = `ACTIVE BRAIN · ${(d.provider || 'ollama').toUpperCase()}`;
@@ -1074,11 +1124,12 @@
   for (const b of providerSeg.querySelectorAll('button')) b.onclick = () => {
     reflectProvider(b.dataset.prov);
     connStatus.className = ''; connStatus.textContent = '';
-    if (curProvider === 'openai' && keySaved) { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED · LEAVE BLANK TO KEEP'; }
+    const saved = curProvider === 'anthropic' ? anthKeySaved : keySaved;
+    if (PROVIDERS[curProvider].key && saved) { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED · LEAVE BLANK TO KEEP'; }
   };
   connectBtn.onclick = async () => {
     const body = { provider: curProvider };
-    if (curProvider === 'openai') {
+    if (PROVIDERS[curProvider].key) {
       const key = apiKeyInput.value.trim(), base = apiBaseInput.value.trim();
       if (key) body.api_key = key;
       if (base) body.base_url = base;
@@ -1095,12 +1146,50 @@
       connStatus.className = 'ok';
       connStatus.textContent = (d.models && d.models.length)
         ? `CONNECTED · ${d.model || ''}`
-        : (curProvider === 'openai' ? 'SAVED — no models listed (check key / URL)' : 'APPLIED');
+        : (PROVIDERS[curProvider].key ? 'SAVED — no models listed (check key / URL)'
+           : PROVIDERS[curProvider].cli ? 'SAVED — cli not detected (see hint below)'
+           : 'APPLIED');
       apiKeyInput.value = '';   // never leave the key sitting in the DOM
       log(`PROVIDER → ${d.provider}${d.model ? ' · ' + d.model : ''}`);
     } catch { connStatus.className = 'err'; connStatus.textContent = 'API OFFLINE'; }
   };
   loadModels(); setInterval(loadModels, 60000);
+
+  /* ---- MCP connectors (CONFIG tab) ----
+     Read-only status of the servers declared in config.yaml → mcp.servers:
+     connected servers list their tools; failed ones show why. */
+  async function loadMcp() {
+    const list = $('mcp-list'), desc = $('mcp-desc');
+    try {
+      const d = await (await fetch(`${API}/mcp`)).json();
+      const servers = d.servers || [];
+      if (!servers.length) {
+        desc.textContent = d.enabled
+          ? 'PLUG ANY APP INTO MEDO · NO SERVERS CONFIGURED YET'
+          : 'PLUG ANY APP INTO MEDO · DISABLED IN config.yaml';
+        list.innerHTML = '';
+        return;
+      }
+      const connected = servers.filter(s => s.state === 'connected');
+      const toolCount = connected.reduce((n, s) => n + (s.tools || []).length, 0);
+      desc.textContent = `${connected.length}/${servers.length} SERVER(S) CONNECTED · ${toolCount} TOOL(S) AVAILABLE TO THE BRAIN`;
+      list.innerHTML = '';
+      for (const s of servers) {
+        const row = document.createElement('div');
+        const dot = s.state === 'connected' ? '●' : s.state === 'disabled' ? '○' : '✕';
+        const color = s.state === 'connected' ? '#6ee7a8' : s.state === 'disabled' ? '#4a6d94' : '#ff7a6b';
+        const info = s.state === 'connected'
+          ? (s.tools || []).slice(0, 8).join(', ') + ((s.tools || []).length > 8 ? ', …' : '')
+          : (s.error || s.state);
+        row.style.cssText = 'display:flex;gap:10px;align-items:baseline;padding:4px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
+        const b = document.createElement('span'); b.textContent = dot; b.style.color = color;
+        const n = document.createElement('span'); n.textContent = s.name; n.style.color = '#c9e6ff';
+        const t = document.createElement('span'); t.textContent = info; t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        row.append(b, n, t);
+        list.appendChild(row);
+      }
+    } catch { desc.textContent = 'PLUG ANY APP INTO MEDO · API OFFLINE'; }
+  }
 
   /* ---- microphone picker ---- */
   const micSel = $('cfg-mic');
@@ -1306,18 +1395,45 @@
       z = p.y * sinX + z * cosX;
       return { x, y, z };
     };
-    // Zoom: mouse wheel over the orb (and a gentle bump while hovering it)
-    // smoothly magnifies the sphere so the unlabeled dots spread out and
-    // reveal their folder names. Eased every frame; rotation slows when
-    // zoomed so labels are readable.
+    // Zoom + fly-through: the mouse wheel magnifies the sphere TOWARD THE
+    // CURSOR (the dot you point at stays put while everything spreads around
+    // it), and once zoomed in you can grab-drag to move through the cluster —
+    // the view pans, labels reveal, and dots stay clickable. Zooming back out
+    // glides the view home. Eased every frame; rotation slows when zoomed.
     let zoom = 1, zoomTarget = 1, hoverBump = 0;
+    let panX = 0, panY = 0, panTX = 0, panTY = 0;      // eased + target pan (canvas px)
+    let dragging = false, dragMoved = false, lastMX = 0, lastMY = 0;
+    const clientToCanvas = e => {
+      const r = cv.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+    };
+    const panLimit = z => R * Math.max(0, z - 1) * 1.15;  // can't lose the sphere
     cv.addEventListener('wheel', e => {
       e.preventDefault();
-      zoomTarget = Math.min(3.2, Math.max(1, zoomTarget * (e.deltaY < 0 ? 1.15 : 0.87)));
+      const prev = zoomTarget;
+      zoomTarget = Math.min(4.5, Math.max(1, zoomTarget * (e.deltaY < 0 ? 1.15 : 0.87)));
+      // Anchor the zoom on the cursor: keep the pointed-at spot stationary.
+      const m = clientToCanvas(e), ratio = zoomTarget / prev;
+      panTX = (m.x - cx) - ((m.x - cx) - panTX) * ratio;
+      panTY = (m.y - cy) - ((m.y - cy) - panTY) * ratio;
+      const lim = panLimit(zoomTarget);
+      panTX = Math.max(-lim, Math.min(lim, panTX));
+      panTY = Math.max(-lim, Math.min(lim, panTY));
     }, { passive: false });
     cv.addEventListener('mouseenter', () => { hoverBump = 0.18; });
-    cv.addEventListener('mouseleave', () => { hoverBump = 0; if (zoomTarget < 1.2) zoomTarget = 1; });
-    cv.addEventListener('dblclick', () => { zoomTarget = zoomTarget > 1.4 ? 1 : 2.2; });
+    cv.addEventListener('mouseleave', () => {
+      hoverBump = 0; dragging = false;
+      if (zoomTarget < 1.2) { zoomTarget = 1; panTX = panTY = 0; }
+    });
+    cv.addEventListener('dblclick', () => {
+      if (zoomTarget > 1.4) { zoomTarget = 1; panTX = panTY = 0; }
+      else zoomTarget = 2.2;
+    });
+    cv.addEventListener('mousedown', e => {
+      if (e.button !== 0 || zoomTarget <= 1.05) return;
+      dragging = true; dragMoved = false; lastMX = e.clientX; lastMY = e.clientY;
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
 
     // Pre-rendered halo sprite: one radial gradient built once, stamped with
     // drawImage + globalAlpha — replaces ~350 createRadialGradient calls per
@@ -1351,6 +1467,12 @@
       speed += (orbSpeedTarget - speed) * 0.06;   // ease between states
       glow += (orbGlowTarget - glow) * 0.06;
       zoom += (Math.max(zoomTarget, 1 + hoverBump) - zoom) * 0.08;
+      // Glide the pan toward its target, always inside the reachable bubble
+      // for the CURRENT zoom — zooming out therefore pulls the view home.
+      const lim = panLimit(zoom);
+      panX += (Math.max(-lim, Math.min(lim, panTX)) - panX) * 0.12;
+      panY += (Math.max(-lim, Math.min(lim, panTY)) - panY) * 0.12;
+      const ox = cx + panX, oy = cy + panY;       // panned projection centre
       t += dt * speed / (0.4 + 0.6 * zoom);       // rotate slower when zoomed in
       // Skip all drawing while the orb is hidden (COMMS/CONFIG tab): no point
       // animating a full-screen canvas — and hue-rotate — behind another screen.
@@ -1358,12 +1480,12 @@
       const frameDirs = [];   // directory beacons visible this frame (screen coords)
       ctx.clearRect(0, 0, W, H);
       ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.22);
+      const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, R * 1.22);
       g.addColorStop(0, `rgba(120,200,255,${0.28 * glow})`);
       g.addColorStop(0.4, `rgba(40,120,230,${0.1 * glow})`);
       g.addColorStop(1, 'rgba(10,40,120,0)');
       ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(cx, cy, R * 1.22, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(ox, oy, R * 1.22, 0, Math.PI * 2); ctx.fill();
       const RZ = R * zoom;   // magnified projection radius (zoom = 1 when idle)
       const ry = t * 0.32, rx = 0.42 + Math.sin(t * 0.09) * 0.22;
       const cosY = Math.cos(ry), sinY = Math.sin(ry), cosX = Math.cos(rx), sinX = Math.sin(rx);
@@ -1372,7 +1494,7 @@
         const depth = (q.z + 1.05) / 2.1;
         const a = (0.03 + depth * 0.16) * (0.6 + 0.4 * Math.sin(t * 2 + p.tw)) * glow;
         ctx.fillStyle = dustStyle(q255(a));
-        ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, p.sz, p.sz);
+        ctx.fillRect(ox + q.x * RZ, oy + q.y * RZ, p.sz, p.sz);
       }
       for (const p of fil) {
         const q = rot(p, cosY, sinY, cosX, sinX);
@@ -1381,13 +1503,13 @@
         const a = (0.1 + depth * 0.6) * flick * glow;
         const sz = p.sz * (0.5 + depth * 0.9);
         ctx.fillStyle = (depth > 0.7 ? filNear : filFar)(q255(a));
-        ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, sz, sz);
+        ctx.fillRect(ox + q.x * RZ, oy + q.y * RZ, sz, sz);
       }
       for (let i = 0; i < nodes.length; i++) {
         const p = nodes[i];
         const q = rot(p, cosY, sinY, cosX, sinX);
         const depth = (q.z + 1.05) / 2.1;
-        const px = cx + q.x * RZ, py = cy + q.y * RZ;
+        const px = ox + q.x * RZ, py = oy + q.y * RZ;
         const rad = p.sz * (0.55 + depth * 0.75) * (i === 0 ? 2.6 : 1);
         const pulse = i === 0 ? 0.85 + 0.15 * Math.sin(t * 1.6) : 0.7 + 0.3 * Math.sin(t * 2 + p.sz);
         ctx.globalAlpha = Math.min(1, p.br * pulse * (0.25 + depth * 0.65) * glow);
@@ -1464,13 +1586,27 @@
       return null;
     }
     cv.addEventListener('mousemove', e => {
+      if (dragging) {
+        // Fly through the cluster: the view follows the grab 1:1.
+        const r = cv.getBoundingClientRect();
+        panTX += (e.clientX - lastMX) * (W / r.width);
+        panTY += (e.clientY - lastMY) * (H / r.height);
+        const lim = panLimit(zoomTarget);
+        panTX = Math.max(-lim, Math.min(lim, panTX));
+        panTY = Math.max(-lim, Math.min(lim, panTY));
+        if (Math.abs(e.clientX - lastMX) + Math.abs(e.clientY - lastMY) > 2) dragMoved = true;
+        lastMX = e.clientX; lastMY = e.clientY;
+        hoveredDir = null; hideTip(); cv.style.cursor = 'grabbing';
+        return;
+      }
       const h = hitTest(e.clientX, e.clientY);
       hoveredDir = h;
       if (h) { showTip(h, e.clientX, e.clientY); cv.style.cursor = 'pointer'; }
-      else { hideTip(); cv.style.cursor = 'default'; }
+      else { hideTip(); cv.style.cursor = zoomTarget > 1.05 ? 'grab' : 'default'; }
     });
     cv.addEventListener('mouseleave', () => { hoveredDir = null; hideTip(); });
     cv.addEventListener('click', async () => {
+      if (dragMoved) { dragMoved = false; return; }   // a drag isn't a click
       if (!hoveredDir) return;
       const h = hoveredDir;
       log(`OPEN → ${h.label} · ${h.path}`);

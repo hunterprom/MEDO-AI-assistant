@@ -26,10 +26,21 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
   **priority list** (`audio.input_device`) — e.g. Bluetooth headset first,
   webcam fallback — hot-swapped within ~2 s of a device (dis)connecting, and
   also selectable live from the HUD CONFIG tab.
-- **Brain**: `qwen3:30b` by default via Ollama tool-calling with 24 tools.
-  It's a thinking model — its `</think>` reasoning is stripped before anything
-  is spoken, remembered, or shown. `keep_alive: 30m` prevents reload stalls.
-  Runtime-switchable model/provider (any OpenAI-compatible API) from the HUD.
+- **Brain — five interchangeable providers**, switchable live from the HUD
+  CONFIG tab (`llm.provider`): **Ollama** (local), **GPT / any
+  OpenAI-compatible API**, the **Claude API** (its own key, so GPT + Claude
+  coexist), and two local CLI agents — **Claude Code** (`claude -p`) and
+  **Codex** (`codex exec`). The CLI agents use their own login, need no key in
+  MEDO, and bring their own tools. Default local brain is `qwen3:30b` via
+  Ollama tool-calling with 24 tools; `</think>` reasoning is stripped before
+  anything is spoken, remembered, or shown; `keep_alive: 30m` prevents reload
+  stalls.
+- **MCP — plug in any application**: declare servers in `config.yaml →
+  mcp.servers` (a local command over stdio, or a URL over Streamable HTTP) and
+  every tool they expose automatically becomes a MEDO skill the brain can call
+  — filesystem, browsers, Spotify, home automation, anything that speaks the
+  Model Context Protocol. Connection status + tool lists show in the HUD
+  CONFIG tab (`GET /mcp`).
 - **Fast path**: ~30 regex-matched commands run deterministically in <1 ms —
   time, timers, notes, volume (real Core Audio on Windows), media keys, apps,
   files, screenshots, window management, typing, clipboard, brightness, power.
@@ -52,10 +63,13 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
   (see `docs/design/`) — CORE (live diagnostics, environment, activity log,
   cosmic-web orb, routing, subsystems, optical feed), COMMS (secure-channel
   chat), CONFIG (toggles, model/provider + API key, microphone picker, accent
-  color themes). Server-sent events, zero build step. The orb carries **~300
-  real folder dots** — hover shows the path, click opens it in Explorer — and
-  the top **search box** searches your files and the web side by side
-  (results open in Explorer / the browser, or hand the query to MEDO).
+  color themes, MCP status). Server-sent events, zero build step. The orb
+  carries **~300 real folder dots** — hover shows the path, click opens it in
+  Explorer — and it's navigable: the **wheel zooms toward your cursor**, and
+  once zoomed you **grab-drag to move through the cluster** (labels reveal,
+  dots stay clickable; zooming out glides the view home). The top **search
+  box** searches your files and the web side by side (results open in
+  Explorer / the browser, or hand the query to MEDO).
 - **Plugins**: drop a `.py` file in `plugins/` and restart — your skill works
   by voice AND as an LLM tool, no core changes (see `plugins/README.md`; a
   broken plugin is skipped, never fatal).

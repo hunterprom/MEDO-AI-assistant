@@ -23,6 +23,9 @@ pyperclip>=1.8       # clipboard skills + Cyrillic-safe typing (paste path)
 pycaw>=20230407; sys_platform == "win32"   # precise Windows volume (get/set/mute); media-key fallback if absent
 comtypes>=1.2; sys_platform == "win32"     # COM backend pycaw talks to Core Audio through
 
+# --- integrations ---
+mcp>=1.0             # Model Context Protocol client — connect any app's MCP server
+
 # --- M3: web skills ---
 ddgs>=6.0            # DuckDuckGo web search (no key)
 edge-tts>=6.1        # Macedonian neural voice (free MS voices; Cyrillic replies)

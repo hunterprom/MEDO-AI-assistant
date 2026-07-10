@@ -5,11 +5,27 @@
 # =============================================================================
 
 llm:
-  provider: "ollama"               # "ollama" (local) | "openai" (any OpenAI-compatible API)
+  # The brain MEDO thinks with. Switch here or live from the HUD CONFIG tab:
+  #   ollama       local Ollama server
+  #   openai       any OpenAI-compatible cloud API (GPT, Groq, ...)
+  #   anthropic    the Claude API (api.anthropic.com)
+  #   claude-code  the locally installed `claude` CLI agent (Claude Code)
+  #   codex        the locally installed `codex` CLI agent (OpenAI Codex)
+  provider: "ollama"
   host: "http://localhost:11434"   # Ollama server
   # api_key: leave empty for local Ollama; set to use any OpenAI-compatible cloud model
   api_key: ""
   openai_base_url: "https://api.openai.com/v1"   # base URL of the OpenAI-compatible API
+  # Claude API (provider: anthropic) — its own key, so GPT + Claude coexist.
+  # Prefer entering keys in the HUD: they land in git-ignored secrets.local.yaml.
+  anthropic_api_key: ""
+  anthropic_base_url: "https://api.anthropic.com"
+  anthropic_max_tokens: 1024       # Claude requires an output cap (spoken replies are short)
+  # CLI agents (provider: claude-code | codex): executable name or full path.
+  # They use their own login (`claude login` / `codex login`) — no key here.
+  claude_cmd: "claude"
+  codex_cmd: "codex"
+  cli_timeout_s: 180               # CLI agents think longer than a bare model call
   # The brain. qwen3:30b is a thinking model — its </think> reasoning is
   # stripped in llm/client.py. Falls back to the first installed model if absent.
   default_model: "qwen3:30b"
@@ -179,6 +195,27 @@ memory:                             # M4
   max_facts: 20                     # remembered facts injected into the system prompt
   embed_model: "nomic-embed-text"   # semantic fact recall via local Ollama embeddings
                                     # ("" disables -> newest-N only)
+
+mcp:                                # Model Context Protocol client (core/mcp.py)
+  # Connect ANY application that exposes an MCP server: its tools automatically
+  # become MEDO skills the LLM can call — no per-app code. Two transports:
+  #   command/args  spawn a local server over stdio (npx/uvx/binary)
+  #   url           connect to a running server over Streamable HTTP
+  # Requires `pip install mcp` (in requirements.txt). Examples:
+  #
+  #   servers:
+  #     filesystem:                 # give MEDO file tools over ~/Documents
+  #       command: "npx"
+  #       args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Documents"]
+  #     fetch:                      # web page fetching
+  #       command: "uvx"
+  #       args: ["mcp-server-fetch"]
+  #     my-app:                     # anything already serving MCP over HTTP
+  #       url: "http://localhost:3000/mcp"
+  enabled: true
+  connect_timeout_s: 15
+  call_timeout_s: 60
+  servers: {}
 
 routines:                           # proactive briefings (core/routines.py)
   - name: "morning briefing"
