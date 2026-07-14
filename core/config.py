@@ -96,6 +96,9 @@ class RemoteConfig(BaseModel):
     # The token itself never lives in config.yaml (committed); it is generated
     # on first serve and persisted to the git-ignored secrets.local.yaml.
     token: str = ""
+    # Answer UDP "who is MEDO?" broadcasts so the watch app can find this
+    # machine and start pairing without typing an IP (same port, UDP).
+    discovery_enabled: bool = True
 
 
 class PointerConfig(BaseModel):

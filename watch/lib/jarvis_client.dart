@@ -92,6 +92,27 @@ class JarvisClient {
     return JarvisReply.fromJson(body);
   }
 
+  /// Ask the server to show a pairing code on its own screen.
+  Future<void> pairStart() async {
+    await _request(
+      () => http.post(_uri('/pair/start')).timeout(_pingTimeout),
+    );
+  }
+
+  /// Exchange the code the user read off the PC for the API token.
+  Future<String> pairConfirm(String code) async {
+    final body = await _request(
+      () => http
+          .post(
+            _uri('/pair/confirm'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'code': code}),
+          )
+          .timeout(_pingTimeout),
+    );
+    return body['token'] as String? ?? '';
+  }
+
   Future<Map<String, dynamic>> _request(
     Future<http.Response> Function() send,
   ) async {
