@@ -49,6 +49,15 @@ Why the super project is shaped the way it is.
   mechanical move — same log lines, timings, and error handling; heavy
   engines still load in `run()`, so constructing the class stays
   dependency-free for tests. `main.py` drops from ~36 KB to ~21 KB of wiring.
+- **Watch pairing = UDP discovery + a 6-digit code on the PC screen, never a
+  token handout.** Discovery answers "where is MEDO" (name + port — what a
+  LAN scan sees anyway); it must not answer "may I have the token", or M1's
+  auth would be theater. The code flashed on the PC console is the trust
+  anchor: typing it on the watch proves the person can see this machine's
+  screen (same model as Bluetooth/TV pairing). Codes are single-use, expire
+  in 2 minutes, and 5 wrong guesses kill the session — and `/pair/start`
+  deliberately returns no secret, so an unattended spam of it only flashes
+  codes on the owner's screen.
 - **Bearer token + localhost exemption on :8710, not TLS.** The companion API
   can type, screenshot, and power off the PC, so "no auth by design" had to
   die. A random token minted into git-ignored `secrets.local.yaml` on first

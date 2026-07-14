@@ -160,6 +160,82 @@ async def test_options_preflight_never_needs_token(lan_client: TestClient):
     assert resp.status == 204
 
 
+# --- watch pairing -------------------------------------------------------
+
+
+async def _start_pairing(lan_client: TestClient) -> str:
+    """Kick off pairing and return the code the PC screen would show."""
+    resp = await lan_client.post("/pair/start")
+    assert resp.status == 200
+    return lan_client.medo_server._pair["code"]
+
+
+@pytest.mark.asyncio
+async def test_pairing_is_reachable_without_a_token(lan_client: TestClient):
+    # The whole point: a not-yet-paired watch has no token.
+    resp = await lan_client.post("/pair/start")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["ok"] is True and "token" not in body  # code goes to the PC only
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_right_code_returns_token(lan_client: TestClient):
+    code = await _start_pairing(lan_client)
+    resp = await lan_client.post("/pair/confirm", json={"code": code})
+    assert resp.status == 200
+    assert (await resp.json())["token"] == "watch-secret"
+    # single use: the same code can't be redeemed twice
+    resp = await lan_client.post("/pair/confirm", json={"code": code})
+    assert resp.status == 409
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_wrong_code_401_then_lockout(lan_client: TestClient):
+    code = await _start_pairing(lan_client)
+    for _ in range(5):
+        resp = await lan_client.post("/pair/confirm", json={"code": "000000"})
+        assert resp.status == 401
+    resp = await lan_client.post("/pair/confirm", json={"code": code})
+    assert resp.status == 429  # brute-forced session is dead, even with the code
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_expired_code(lan_client: TestClient):
+    await _start_pairing(lan_client)
+    lan_client.medo_server._pair["expires"] = 0.0  # long past
+    resp = await lan_client.post("/pair/confirm", json={"code": "123456"})
+    assert resp.status == 410
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_without_start_is_409(lan_client: TestClient):
+    resp = await lan_client.post("/pair/confirm", json={"code": "123456"})
+    assert resp.status == 409
+
+
+def test_discovery_protocol_answers_probe():
+    from remote.server import DISCOVERY_PROBE, _DiscoveryProtocol
+
+    sent: list[tuple[bytes, tuple]] = []
+
+    class _FakeTransport:
+        def sendto(self, data: bytes, addr) -> None:
+            sent.append((data, addr))
+
+    proto = _DiscoveryProtocol("MEDO", 8710)
+    proto.connection_made(_FakeTransport())
+    proto.datagram_received(b"garbage", ("10.0.0.9", 5000))
+    assert sent == []  # ignores anything but the probe
+    proto.datagram_received(DISCOVERY_PROBE, ("10.0.0.9", 5000))
+    assert len(sent) == 1
+    import json
+
+    payload = json.loads(sent[0][0])
+    assert payload == {"service": "medo", "name": "MEDO", "port": 8710}
+    assert sent[0][1] == ("10.0.0.9", 5000)
+
+
 def test_ensure_remote_token_mints_once_and_persists(tmp_path):
     from core.config import apply_local_secrets, ensure_remote_token
 

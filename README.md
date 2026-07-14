@@ -90,7 +90,9 @@ orders of magnitude below it.
   toward the cursor, grab-drag through the cluster, click opens the folder.
   The search box searches files and the web side by side.
 - **Extensible**: drop a `.py` in `plugins/` → it works by voice AND as an LLM
-  tool; a Wear OS **watch app** (`watch/`) talks to the same API.
+  tool; a Wear OS **watch app** (`watch/`) talks to the same API — one tap on
+  **"Pair with MEDO"** finds the PC by UDP broadcast and swaps a 6-digit
+  on-screen code for the auth token, so nothing is typed but the code.
 
 ## How I built this
 

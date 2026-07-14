@@ -49,11 +49,17 @@ remote:
   host: "0.0.0.0"                   # bind address (0.0.0.0 = every interface)
   port: 8710
   # Bearer-token auth for LAN clients. The token is generated on first serve
-  # and stored in git-ignored secrets.local.yaml (remote.token) — enter it in
-  # the watch app's settings. Requests from this machine (127.0.0.1: the HUD,
-  # the vision sidecar) never need it. false = old open behavior (UNSAFE:
-  # anyone on your network can type, screenshot, and power off this PC).
+  # and stored in git-ignored secrets.local.yaml (remote.token). Easiest setup:
+  # tap "Pair with MEDO" on the watch — it finds this PC (UDP discovery below),
+  # MEDO flashes a 6-digit code on this screen, and typing that code on the
+  # watch delivers the token automatically. Requests from this machine
+  # (127.0.0.1: the HUD, the vision sidecar) never need a token. false = old
+  # open behavior (UNSAFE: anyone on your network can type, screenshot, and
+  # power off this PC).
   auth_enabled: true
+  # Answer "who is MEDO?" UDP broadcasts (same port) so the watch can find
+  # this machine without anyone typing an IP. Reveals only name + port.
+  discovery_enabled: true
 
 vision:                             # camera hand-gesture control (sidecar process)
   enabled: true                     # auto-serve the API so the gesture sidecar connects

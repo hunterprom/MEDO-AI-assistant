@@ -1,12 +1,17 @@
-/// Server address editor with a live connection test, plus the
-/// gesture-activation toggle and sensitivity slider.
+/// Server address editor with a live connection test, one-tap pairing
+/// (LAN discovery + 6-digit code), plus the gesture-activation toggle and
+/// sensitivity slider.
 ///
 /// The address is the LAN `host:port` of the machine running
 /// `python main.py --serve` (port 8710 by default, see config.yaml).
+/// "Pair with MEDO" fills the address AND the auth token automatically:
+/// MEDO is found by UDP broadcast, shows a 6-digit code on the PC screen,
+/// and typing that code here proves you're at the machine.
 library;
 
 import 'package:flutter/material.dart';
 
+import 'discovery.dart';
 import 'jarvis_client.dart';
 import 'settings.dart';
 
@@ -20,9 +25,12 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final _controller = TextEditingController();
   final _tokenController = TextEditingController();
+  final _codeController = TextEditingController();
   String? _status;
   Color _statusColor = Colors.white54;
   bool _testing = false;
+  bool _pairing = false;       // discovery/pair-start in flight
+  bool _awaitingCode = false;  // code flashed on the PC; waiting for input
   bool _gestureEnabled = AppSettings.defaultGestureEnabled;
   double _gestureThreshold = AppSettings.defaultGestureThreshold;
 
@@ -47,7 +55,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _controller.dispose();
     _tokenController.dispose();
+    _codeController.dispose();
     super.dispose();
+  }
+
+  void _setStatus(String text, Color color) {
+    setState(() {
+      _status = text;
+      _statusColor = color;
+    });
+  }
+
+  /// One-tap pairing: discover MEDO on the LAN, have it flash a code on the
+  /// PC, and swap that code for the token — no typing of IPs or tokens.
+  Future<void> _pairWithMedo() async {
+    setState(() {
+      _pairing = true;
+      _awaitingCode = false;
+    });
+    _setStatus('Looking for MEDO…', Colors.white54);
+    try {
+      final found = await MedoDiscovery.discover();
+      if (found == null) {
+        _setStatus("No MEDO found — same Wi-Fi as the PC?", Colors.orangeAccent);
+        return;
+      }
+      _controller.text = found.address;
+      await JarvisClient(found.address).pairStart();
+      setState(() => _awaitingCode = true);
+      _setStatus('Found ${found.name} ✓ — enter the code shown on the PC',
+          Colors.cyanAccent);
+    } on JarvisException catch (e) {
+      _setStatus(e.message, Colors.orangeAccent);
+    } finally {
+      setState(() => _pairing = false);
+    }
+  }
+
+  Future<void> _confirmPairCode() async {
+    final code = _codeController.text.trim();
+    if (code.length != 6) {
+      _setStatus('The code has 6 digits.', Colors.orangeAccent);
+      return;
+    }
+    setState(() => _pairing = true);
+    try {
+      final address = _controller.text.trim();
+      final token = await JarvisClient(address).pairConfirm(code);
+      _tokenController.text = token;
+      await AppSettings.saveAddress(address);
+      await AppSettings.saveToken(token);
+      _codeController.clear();
+      setState(() => _awaitingCode = false);
+      final name = await JarvisClient(address, token).ping();
+      _setStatus('Paired with $name ✓', Colors.greenAccent);
+    } on JarvisException catch (e) {
+      _setStatus(e.message, Colors.orangeAccent); // wrong code → try again
+    } finally {
+      setState(() => _pairing = false);
+    }
   }
 
   Future<void> _saveAndTest() async {
@@ -110,7 +176,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     letterSpacing: 2,
                   ),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
+                // The happy path: find MEDO + fetch the token, zero typing
+                // (besides the 6-digit code MEDO shows on the PC screen).
+                FilledButton.icon(
+                  onPressed: _pairing ? null : _pairWithMedo,
+                  icon: const Icon(Icons.wifi_tethering, size: 14),
+                  label: const Text('Pair with MEDO',
+                      style: TextStyle(fontSize: 12)),
+                  style: FilledButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    backgroundColor: Colors.cyan.shade700,
+                  ),
+                ),
+                if (_awaitingCode) ...[
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _codeController,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 18, letterSpacing: 6),
+                    keyboardType: TextInputType.number,
+                    textAlign: TextAlign.center,
+                    maxLength: 6,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      counterText: '',
+                      hintText: '••••••',
+                      hintStyle: TextStyle(color: Colors.white24, fontSize: 18),
+                      enabledBorder: UnderlineInputBorder(
+                        borderSide: BorderSide(color: Colors.cyanAccent),
+                      ),
+                    ),
+                    onSubmitted: (_) => _confirmPairCode(),
+                  ),
+                  const SizedBox(height: 6),
+                  FilledButton(
+                    onPressed: _pairing ? null : _confirmPairCode,
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      backgroundColor: Colors.cyan.shade800,
+                    ),
+                    child:
+                        const Text('Confirm code', style: TextStyle(fontSize: 12)),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                const Text(
+                  'or set up manually:',
+                  style: TextStyle(color: Colors.white24, fontSize: 9),
+                ),
+                const SizedBox(height: 6),
                 TextField(
                   controller: _controller,
                   style: const TextStyle(color: Colors.white, fontSize: 13),

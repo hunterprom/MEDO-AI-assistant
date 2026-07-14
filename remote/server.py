@@ -21,6 +21,12 @@ Model/provider endpoints let clients switch the LLM at runtime.
     POST /audio/input {"device": int|str|null} -> {"ok", "device"}  (pick the mic)
     GET  /search/files?q= -> {"results": [{"name", "path", "is_dir"}, …]}
     GET  /search/web?q=   -> {"results": [{"title", "url", "snippet"}, …]}
+    POST /pair/start      -> {"ok", "expires_in", "name"}   (code shown on THIS pc)
+    POST /pair/confirm {"code": …} -> {"ok", "token", "name"}   (watch pairing)
+
+A UDP responder on the same port answers ``MEDO_DISCOVER_V1`` broadcasts with
+``{"service": "medo", "name", "port"}`` so the watch finds this machine
+without anyone typing an IP (``remote.discovery_enabled``).
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -40,8 +46,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import json
 import logging
+import secrets as secrets_mod
 import threading
+import time
 
 import psutil
 from aiohttp import web
@@ -65,6 +74,44 @@ CORS_HEADERS = {
 
 #: Peer addresses that skip token auth (the HUD + sidecar run on this machine).
 _LOCAL_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+#: Paths reachable WITHOUT a token: the pairing bootstrap. /pair/start only
+#: flashes a code on this PC's screen; /pair/confirm needs that code — so
+#: neither leaks anything to a LAN peer who can't see the screen.
+_AUTH_EXEMPT_PATHS = ("/pair/start", "/pair/confirm")
+
+#: Watch pairing: code lifetime and how many wrong guesses invalidate it.
+PAIR_CODE_TTL_S = 120.0
+PAIR_MAX_ATTEMPTS = 5
+
+#: UDP discovery probe the watch broadcasts; anything else is ignored.
+DISCOVERY_PROBE = b"MEDO_DISCOVER_V1"
+
+
+class _DiscoveryProtocol(asyncio.DatagramProtocol):
+    """Answers "who is MEDO?" UDP broadcasts with our name + API port.
+
+    Deliberately reveals nothing sensitive: the reply carries what a port
+    scan of the LAN would find anyway (the service exists, its port, its
+    display name) — never the token.
+    """
+
+    def __init__(self, name: str, port: int) -> None:
+        self._name = name
+        self._port = port
+        self._transport: asyncio.DatagramTransport | None = None
+
+    def connection_made(self, transport) -> None:  # type: ignore[override]
+        self._transport = transport
+
+    def datagram_received(self, data: bytes, addr) -> None:
+        if data.strip() != DISCOVERY_PROBE or self._transport is None:
+            return
+        payload = json.dumps(
+            {"service": "medo", "name": self._name, "port": self._port}
+        ).encode()
+        self._transport.sendto(payload, addr)
+        logger.info("discovery probe answered for %s", addr[0])
 
 #: Providers accepted by ``POST /provider`` (mirrors LLMConfig.provider).
 VALID_PROVIDERS = ("ollama", "openai", "anthropic", "claude-code", "codex")
@@ -110,6 +157,10 @@ class RemoteServer:
         # Documents RAG index (None when embeddings are disabled).
         self._doc_index = doc_index
         self._runner: web.AppRunner | None = None
+        # Active watch-pairing session: {"code", "expires", "attempts"}.
+        # None when no pairing is in progress.
+        self._pair: dict | None = None
+        self._udp_transport: asyncio.DatagramTransport | None = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
         self._sys: dict = {"cpu": None, "ram": None, "gpu": None}
@@ -145,6 +196,8 @@ class RemoteServer:
         app.router.add_get("/docs/stats", self._handle_docs_stats)
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
         app.router.add_get("/mcp", self._handle_mcp_status)
+        app.router.add_post("/pair/start", self._handle_pair_start)
+        app.router.add_post("/pair/confirm", self._handle_pair_confirm)
         app.router.add_get("/facts", self._handle_facts_list)
         app.router.add_post("/facts", self._handle_facts_add)
         app.router.add_post("/facts/delete", self._handle_facts_delete)
@@ -169,6 +222,8 @@ class RemoteServer:
         remote_cfg = self._settings.remote
         if not remote_cfg.auth_enabled or request.method == "OPTIONS":
             return True
+        if request.path in _AUTH_EXEMPT_PATHS:  # pairing bootstrap (see above)
+            return True
         if self._is_local(request):
             return True
         expected = remote_cfg.token
@@ -187,9 +242,24 @@ class RemoteServer:
         await web.TCPSite(self._runner, host, port).start()
         self._sys_task = asyncio.create_task(self._collect_sys_forever())
         logger.info("remote API listening on http://%s:%d", host, port)
+        if self._settings.remote.discovery_enabled:
+            # Same port number over UDP; bind 0.0.0.0 so broadcasts arrive.
+            # Best-effort: discovery failing must never take the API down.
+            try:
+                loop = asyncio.get_running_loop()
+                self._udp_transport, _ = await loop.create_datagram_endpoint(
+                    lambda: _DiscoveryProtocol(self._settings.personality.name, port),
+                    local_addr=("0.0.0.0", port),
+                )
+                logger.info("watch discovery answering on udp/%d", port)
+            except Exception:
+                logger.warning("discovery responder unavailable", exc_info=True)
 
     async def stop(self) -> None:
         """Shut the server down cleanly (no-op if never started)."""
+        if self._udp_transport is not None:
+            self._udp_transport.close()
+            self._udp_transport = None
         if self._sys_task is not None:
             self._sys_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -319,6 +389,70 @@ class RemoteServer:
             "claude-code": shutil.which(self._settings.llm.claude_cmd) is not None,
             "codex": shutil.which(self._settings.llm.codex_cmd) is not None,
         }
+
+    # --- watch pairing (auth bootstrap) ---
+
+    async def _handle_pair_start(self, request: web.Request) -> web.Response:
+        """Begin pairing: flash a 6-digit code on THIS PC, never in the reply.
+
+        The watch (or any LAN client) calls this, the human reads the code off
+        the MEDO console and types it into the watch — proving they're at the
+        machine. Restarting pairing invalidates any previous code.
+        """
+        code = f"{secrets_mod.randbelow(1_000_000):06d}"
+        self._pair = {
+            "code": code,
+            "expires": time.monotonic() + PAIR_CODE_TTL_S,
+            "attempts": 0,
+        }
+        # The code goes to the PC screen only (console; visible in the MEDO
+        # window). Kept out of the HTTP response and the shared log line.
+        try:
+            from rich.console import Console
+
+            Console().print(
+                f"\n[bold cyan]⌚ Watch pairing code: {code}[/bold cyan]  "
+                f"[dim](valid {int(PAIR_CODE_TTL_S // 60)} min — type it on the watch)[/dim]\n"
+            )
+        except Exception:  # rich missing/odd console — plain print still works
+            print(f"\nWatch pairing code: {code} (valid 2 min)\n")
+        logger.info("pairing started by %s — code shown on this PC", request.remote)
+        return web.json_response(
+            {"ok": True, "expires_in": int(PAIR_CODE_TTL_S), "name": self._settings.personality.name}
+        )
+
+    async def _handle_pair_confirm(self, request: web.Request) -> web.Response:
+        """Exchange the on-screen code for the API token (attempt-limited)."""
+        try:
+            payload = await request.json()
+        except ValueError:
+            return _error(400, "body must be JSON like {\"code\": \"123456\"}")
+        supplied = str(payload.get("code") or "").strip()
+
+        pair = self._pair
+        if pair is None:
+            return _error(409, "no pairing in progress — start pairing first")
+        if time.monotonic() > pair["expires"]:
+            self._pair = None
+            return _error(410, "pairing code expired — start again")
+        pair["attempts"] += 1
+        if pair["attempts"] > PAIR_MAX_ATTEMPTS:
+            self._pair = None
+            logger.warning("pairing aborted: too many wrong codes from %s", request.remote)
+            return _error(429, "too many attempts — start pairing again")
+        if not supplied or not hmac.compare_digest(supplied, pair["code"]):
+            return _error(401, "wrong code")
+
+        self._pair = None  # single use
+        token = self._settings.remote.token
+        if not token:  # auth disabled or first run — mint one so pairing still works
+            from core.config import ensure_remote_token
+
+            token = ensure_remote_token(self._settings)
+        logger.info("watch paired from %s", request.remote)
+        return web.json_response(
+            {"ok": True, "token": token, "name": self._settings.personality.name}
+        )
 
     async def _handle_mcp_status(self, request: web.Request) -> web.Response:
         """Connected MCP servers + their tools (HUD CONFIG tab)."""
