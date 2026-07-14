@@ -40,6 +40,15 @@ Why the super project is shaped the way it is.
 - **Deletion protocol.** The two source projects are deleted only after the
   merged app passes tests + live smoke checks, jarvis-web first, the v2
   Downloads folder (the copy source) last.
+- **`run_voice` extracted to `voice/loop.py` as a class, not split into free
+  functions.** The 335-line function shared seven pieces of state through
+  closures (models, barge-in flag, wake event…); as free functions that state
+  would have become parameter soup. `VoiceLoop` names each phase
+  (`_wait_for_wake`, `_capture`, `_run_turn`, `_speak`,
+  `_play_interruptible`) and the phases share state as attributes. Pure
+  mechanical move — same log lines, timings, and error handling; heavy
+  engines still load in `run()`, so constructing the class stays
+  dependency-free for tests. `main.py` drops from ~36 KB to ~21 KB of wiring.
 - **Bearer token + localhost exemption on :8710, not TLS.** The companion API
   can type, screenshot, and power off the PC, so "no auth by design" had to
   die. A random token minted into git-ignored `secrets.local.yaml` on first
