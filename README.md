@@ -1,79 +1,44 @@
 # MEDO — Local AI Desktop Assistant
 
-The super project: **MEDO v1** (jarvis-web — React/Express/nut-js gesture & voice
-assistant) and **MEDO v2** (Python rearchitecture) merged into one codebase.
-Local-first: Ollama for the brain, Whisper for ears, Piper for the voice,
-MediaPipe for the eyes. Optionally switch the brain to any OpenAI-compatible
-cloud API from the HUD — the key is stored in a git-ignored local file and
-never committed or echoed back.
+**MEDO is a bilingual (English/Macedonian) voice + gesture assistant that runs
+entirely on my own hardware — wake word, Whisper ears, a swappable LLM brain,
+Piper voice, MediaPipe hand-tracking, and a sci-fi HUD — in one Python codebase.**
 
-## One-click run (Windows)
+> 🎥 [2-minute demo](docs/demo.md) — TODO: link
 
-Double-click **`run.bat`**. First launch creates two virtualenvs, installs
-dependencies, downloads the wake-word + Piper voice models, starts Ollama with
-the right environment (`OLLAMA_MODELS=D:\OllamaModels`, `GGML_CUDA_NO_PINNED=1`),
-launches the vision sidecar, and opens the HUD at <http://localhost:8730>.
+<!-- TODO(Matej): record the demo in this order — it shows breadth in 2 minutes:
+     1. "hey jarvis" wake → "what time is it" (HUD CORE tab visible: FAST path,
+        single-digit ms latency chip)
+     2. a Macedonian question, answered in Macedonian
+     3. "read my screen" (moondream vision)
+     4. "pointer on" → drive the cursor by hand, pinch-click, fist to exit -->
 
-Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.)
+| ![HUD — CORE tab](docs/img/hud-core.png) | ![Pointer mode](docs/img/pointer-mode.png) |
+|---|---|
+| *HUD CORE tab — drop screenshot at `docs/img/hud-core.png`* | *Pointer mode — drop screenshot at `docs/img/pointer-mode.png`* |
 
-## What it does
+## Architecture at a glance
 
-- **Voice**: openWakeWord → faster-whisper (auto-detects **Macedonian and
-  English** per utterance) → Intent Router → Piper TTS. Replies match your
-  language (spoken audio uses the English voice — see Limitations).
-  **Barge-in**: say the wake word while MEDO is talking to cut it off and be
-  heard immediately; the HUD mic button interrupts too. The microphone is a
-  **priority list** (`audio.input_device`) — e.g. Bluetooth headset first,
-  webcam fallback — hot-swapped within ~2 s of a device (dis)connecting, and
-  also selectable live from the HUD CONFIG tab.
-- **Brain — five interchangeable providers**, switchable live from the HUD
-  CONFIG tab (`llm.provider`): **Ollama** (local), **GPT / any
-  OpenAI-compatible API**, the **Claude API** (its own key, so GPT + Claude
-  coexist), and two local CLI agents — **Claude Code** (`claude -p`) and
-  **Codex** (`codex exec`). The CLI agents use their own login, need no key in
-  MEDO, and bring their own tools. Default local brain is `qwen3:30b` via
-  Ollama tool-calling with 24 tools; `</think>` reasoning is stripped before
-  anything is spoken, remembered, or shown; `keep_alive: 30m` prevents reload
-  stalls.
-- **MCP — plug in any application**: declare servers in `config.yaml →
-  mcp.servers` (a local command over stdio, or a URL over Streamable HTTP) and
-  every tool they expose automatically becomes a MEDO skill the brain can call
-  — filesystem, browsers, Spotify, home automation, anything that speaks the
-  Model Context Protocol. Connection status + tool lists show in the HUD
-  CONFIG tab (`GET /mcp`).
-- **Fast path**: ~30 regex-matched commands run deterministically in <1 ms —
-  time, timers, notes, volume (real Core Audio on Windows), media keys, apps,
-  files, screenshots, window management, typing, clipboard, brightness, power.
-- **Long-term memory**: "remember that …", "what do you remember about me",
-  "forget …" — stored in sqlite and recalled **semantically** (local
-  embeddings: "when is my tooth appointment" finds the dentist fact).
-- **Ask your documents (RAG)**: "what do my documents say about the lease?" —
-  .txt/.md/.pdf files in the whitelisted folders are chunked, embedded
-  locally, and searched by meaning; answers quote the source file.
-- **Pointer mode** (webcam sidecar; pointer-only build — say "pointer on" or
-  toggle in the HUD): your index finger drives the mouse cursor ·
-  **🤏 pinch = drag / quick-tap click** · **✌ two fingers = scroll** ·
-  **🤘 index+pinky = zoom (Ctrl+wheel)** · **three fingers = right click** ·
-  **👍 = volume up** · **pinky = volume down** · **✊ held ~1 s = exit**
-  (brief fist misreads while pointing don't kick you out; unrecognized poses
-  keep moving the cursor). Always boots OFF.
-- **Sight**: "what do you see" (camera) and "read my screen" (display) go to a
-  local **moondream** vision model.
-- **HUD** (<http://localhost:8730>): the *Medo AI Assistant Interface* design
-  (see `docs/design/`) — CORE (live diagnostics, environment, activity log,
-  cosmic-web orb, routing, subsystems, optical feed), COMMS (secure-channel
-  chat), CONFIG (toggles, model/provider + API key, microphone picker, accent
-  color themes, MCP status). Server-sent events, zero build step. The orb
-  carries **~300 real folder dots** — hover shows the path, click opens it in
-  Explorer — and it's navigable: the **wheel zooms toward your cursor**, and
-  once zoomed you **grab-drag to move through the cluster** (labels reveal,
-  dots stay clickable; zooming out glides the view home). The top **search
-  box** searches your files and the web side by side (results open in
-  Explorer / the browser, or hand the query to MEDO).
-- **Plugins**: drop a `.py` file in `plugins/` and restart — your skill works
-  by voice AND as an LLM tool, no core changes (see `plugins/README.md`; a
-  broken plugin is skipped, never fatal).
-- **Watch app** (`watch/`): Wear OS companion that talks to the same API.
+```
+mic ──► openWakeWord ──► record until silence ──► faster-whisper (auto mk/en)
+                                                        │
+             HUD :8730 (SSE observer) ◄── EventBus ◄────┤
+                                                        ▼
+  watch app ──► companion API :8710 /ask ──────► Intent Router
+  vision sidecar gestures ──► POST /ask ────────►   │
+                                                    ├─ FAST: regex skill (<1 ms)
+                                                    └─ LLM: Ollama tool loop
+                                                        (strip_think, ≤4 rounds,
+                                                         confirmation gate)
+                                                        │
+                                              Piper TTS ──► speakers
+```
+
+Three processes, isolated on purpose: the main app (`.venv`), the MediaPipe
+vision sidecar (`.venv-vision` — numpy<2 pin stays quarantined), and Ollama.
+Every input — voice, watch, HUD text, hand gesture — converges on the same
+Intent Router; every UI renders from the same event stream. Full details in
+[`docs/Architecture.md`](docs/Architecture.md).
 
 ## Performance
 
@@ -93,14 +58,72 @@ ready), on my machine — RTX 3060 12 GB, `qwen3:30b` via Ollama for the LLM
 path. Fast-path commands never touch the model, which is why they sit three
 orders of magnitude below it.
 
-## Ports (LAN only — never forward these)
+## What it does
 
-| Port | What |
-|------|------|
-| 8730 | HUD (127.0.0.1) |
-| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web` — **bearer-token auth** for LAN clients (token minted into `secrets.local.yaml` on first serve; localhost exempt; no TLS — LAN only) |
-| 8731 | Vision sidecar — MJPEG `/video`, `/frame.jpg`, `POST /pointer` |
-| 11434 | Ollama |
+- **Voice**: openWakeWord → faster-whisper (auto-detects **Macedonian and
+  English** per utterance) → Intent Router → Piper TTS. **Barge-in**: say the
+  wake word (or tap the HUD mic) while MEDO talks to cut it off. The mic is a
+  **priority list** (`audio.input_device`) — headset first, webcam fallback —
+  hot-swapped within ~2 s and switchable live from the HUD.
+- **Brain — five interchangeable providers**, switchable live from the HUD:
+  **Ollama** (local, default `qwen3:30b` with 24 tools), **GPT / any
+  OpenAI-compatible API**, the **Claude API**, and two local CLI agents —
+  **Claude Code** and **Codex** (their own login, no key in MEDO).
+  `</think>` reasoning is stripped before anything is spoken or remembered.
+- **MCP — plug in any application**: declare servers in `config.yaml →
+  mcp.servers` (stdio command or Streamable HTTP URL) and every tool they
+  expose becomes a MEDO skill automatically — filesystem, Spotify, home
+  automation, anything speaking the Model Context Protocol.
+- **Fast path**: ~30 regex commands run deterministically in <1 ms — time,
+  timers, notes, volume, media, apps, files, screenshots, windows, typing,
+  clipboard, brightness, power.
+- **Memory + RAG**: "remember that…" facts recalled **semantically** (local
+  embeddings), and "what do my documents say about the lease?" searches
+  whitelisted .txt/.md/.pdf by meaning, quoting the source file.
+- **Pointer mode** (webcam): index finger drives the cursor · 🤏 pinch =
+  drag/click · ✌ scroll · 🤘 zoom · three fingers = right-click · ✊ held ≈1 s
+  = exit. Always boots OFF.
+- **Sight**: "what do you see" / "read my screen" → local **moondream**.
+- **HUD** (<http://localhost:8730>): live diagnostics, chat, config (provider
+  + key, mic picker, themes, MCP status) over server-sent events, zero build
+  step. The cosmic-web orb carries **~300 real folder dots** — wheel-zoom
+  toward the cursor, grab-drag through the cluster, click opens the folder.
+  The search box searches files and the web side by side.
+- **Extensible**: drop a `.py` in `plugins/` → it works by voice AND as an LLM
+  tool; a Wear OS **watch app** (`watch/`) talks to the same API.
+
+## How I built this
+
+<!-- TODO(Matej): fill the specifics marked TODO, keep it honest -->
+
+- **v1** was Java/Node (jarvis-web): React HUD, Express, nut-js gestures. It
+  proved the ideas but the stack fought me — two runtimes, a build step, and
+  an unauditable "100% local" claim (browser Web-Speech STT actually sent
+  audio to Google — bug #14).
+- **v2** was a ground-up Python rearchitecture: event bus, one-implementation
+  skill contract (regex pattern + LLM tool schema from the same class), safety
+  confirmation gate, real tests.
+- The **merge** ported v1's best features (pointer mode, think-stripping,
+  facts, screen vision) onto v2's architecture — and deleted the Node stack.
+- Hardest three problems (full war stories in [`docs/Bug Log.md`](docs/Bug%20Log.md)):
+  qwen3's `<think>` reasoning **leaking into TTS and the yes/no safety gate**
+  (fixed once at the `chat()` choke point); **MediaPipe's numpy<2 pin**
+  colliding with the voice stack (solved with a quarantined sidecar venv that
+  talks only HTTP); and **auditing the "local" claim** until it was true.
+- **AI-assistance disclosure**: <!-- TODO(Matej): fill in specifics — e.g.
+  "Pair-programmed with Claude (architecture reviews, test scaffolding, the
+  HUD's canvas math); independently designed/decided X, Y, Z; every line
+  reviewed by me and defended in docs/Decisions.md." Don't overclaim either
+  direction. -->
+
+## One-click run (Windows)
+
+Double-click **`run.bat`**. First launch creates two virtualenvs, installs
+dependencies, downloads the wake-word + Piper voice models, starts Ollama with
+the right environment (`OLLAMA_MODELS=D:\OllamaModels`, `GGML_CUDA_NO_PINNED=1`),
+launches the vision sidecar, and opens the HUD at <http://localhost:8730>.
+
+Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.)
 
 ## Configuration
 
@@ -112,6 +135,15 @@ nested with `__`, e.g. `MEDO_LLM__DEFAULT_MODEL=qwen3:14b`). Highlights:
 `hud.max_dir_dots`, `memory.max_facts`, `weather.default_city`. Per-machine
 secrets (online API key, picked mic, the companion-API token) persist in the
 git-ignored `secrets.local.yaml`.
+
+## Ports (LAN only — never forward these)
+
+| Port | What |
+|------|------|
+| 8730 | HUD (127.0.0.1) |
+| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web` — **bearer-token auth** for LAN clients (token minted into `secrets.local.yaml` on first serve; localhost exempt; no TLS — LAN only) |
+| 8731 | Vision sidecar — MJPEG `/video`, `/frame.jpg`, `POST /pointer` |
+| 11434 | Ollama |
 
 ## Tests
 
