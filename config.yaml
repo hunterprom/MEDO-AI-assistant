@@ -123,6 +123,11 @@ tts:                                # M1
 
 wakeword:                           # M1
   engine: "openwakeword"
+  # Either a bundled openWakeWord model name ("hey_jarvis") or a PATH to your
+  # own trained model, .onnx or .tflite — absolute, ~, or relative to the
+  # project root, e.g. "models/wakeword/hey_medo.onnx". Training a custom
+  # "hey MEDO" model takes ~1 h on a free Colab GPU:
+  # see docs/Wake Word Training.md for the full runbook.
   phrase: "hey_jarvis"              # built-in model name (say "hey jarvis")
   # Lower = easier to trigger (0.5 is openWakeWord's default; 0.4 helps a
   # non-native "hey jarvis"). Watch your live score with:

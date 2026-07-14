@@ -2,7 +2,12 @@
 
 Runs continuously on the mic stream while the assistant is IDLE. Each 80 ms frame
 is scored; when the score for the configured phrase crosses the threshold we hand
-off to STT. onnxruntime is the inference backend (no tflite on this platform).
+off to STT.
+
+``wakeword.phrase`` accepts either a bundled openWakeWord model name
+("hey_jarvis") or a path to your own trained model — ``.onnx`` (onnxruntime)
+or ``.tflite`` (tflite-runtime), picked by extension. Training runbook:
+``docs/Wake Word Training.md``.
 """
 
 from __future__ import annotations
@@ -10,20 +15,31 @@ from __future__ import annotations
 import glob
 import logging
 import os
+from pathlib import Path
 
 import numpy as np
 
-from core.config import WakeWordConfig
+from core.config import PROJECT_ROOT, WakeWordConfig
 
 logger = logging.getLogger(__name__)
 
 
 def _resolve_model_path(phrase: str) -> str:
-    """Map a phrase like ``"hey_jarvis"`` to its bundled ``.onnx`` file.
+    """Map ``wakeword.phrase`` to a model file.
 
-    Falls back to returning the phrase unchanged so a user can point the config
-    at a custom model path.
+    A ``.onnx``/``.tflite`` value is treated as a custom model path — absolute,
+    ``~``-expanded, or relative to the project root (e.g.
+    ``models/wakeword/hey_medo.onnx``). Anything else is looked up among the
+    bundled openWakeWord models, falling back to the raw value.
     """
+    if phrase.endswith((".onnx", ".tflite")):
+        candidate = Path(os.path.expanduser(phrase))
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        if candidate.exists():
+            return str(candidate)
+        logger.warning("custom wake model %s not found — trying bundled models", phrase)
+
     import openwakeword
 
     models_dir = os.path.join(
@@ -41,9 +57,12 @@ class WakeWord:
 
         self.threshold = config.threshold
         model_path = _resolve_model_path(config.phrase)
+        # Framework follows the model file: .tflite needs tflite-runtime,
+        # everything else (bundled + custom .onnx) runs on onnxruntime.
+        framework = "tflite" if model_path.endswith(".tflite") else "onnx"
         self._model = Model(
             wakeword_models=[model_path],
-            inference_framework="onnx",
+            inference_framework=framework,
         )
         # openWakeWord keys predictions by model name (e.g. "hey_jarvis_v0.1").
         keys = list(self._model.models.keys())

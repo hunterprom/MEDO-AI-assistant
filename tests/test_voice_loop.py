@@ -52,3 +52,15 @@ def test_main_delegates_to_voice_loop():
 
     assert not hasattr(main, "run_voice")
     assert main.VoiceLoop is VoiceLoop
+
+
+def test_custom_wake_model_path_resolves(tmp_path):
+    """M6 scaffolding: wakeword.phrase may be a path to a trained model."""
+    from voice.wakeword import _resolve_model_path
+
+    onnx = tmp_path / "hey_medo.onnx"
+    onnx.write_bytes(b"fake")
+    assert _resolve_model_path(str(onnx)) == str(onnx)
+    tflite = tmp_path / "hey_medo.tflite"
+    tflite.write_bytes(b"fake")
+    assert _resolve_model_path(str(tflite)) == str(tflite)
