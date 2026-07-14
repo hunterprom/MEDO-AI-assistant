@@ -20,6 +20,7 @@ from core.config import Settings
 from core.events import Event, EventBus, EventType, RoutePath
 from core.facts import FactsStore
 from core.memory import ConversationMemory
+from core.metrics import MetricsStore
 from core.safety import is_affirmative, is_negative
 from llm.client import LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
@@ -87,8 +88,13 @@ class Router:
         self._bus = bus
         #: Active model for the LLM path; set by the app / model picker.
         self.model: str | None = settings.llm.default_model
-        #: Routing tallies for the README.
+        #: Routing tallies (this session) + persisted per-request metrics that
+        #: feed the README's Performance table (python -m core.metrics --report).
         self.stats: dict[RoutePath, int] = {RoutePath.FAST: 0, RoutePath.LLM: 0}
+        self.metrics: MetricsStore | None = (
+            MetricsStore(settings.memory.db_path)
+            if settings.logging.routing_stats else None
+        )
         #: A destructive action awaiting a spoken yes/no, if any.
         self._pending: tuple[Skill, SkillRequest] | None = None
         #: Rolling context so follow-ups ("and tomorrow?") resolve.
@@ -135,6 +141,12 @@ class Router:
         result.latency_ms = (time.perf_counter() - started) * 1000.0
 
         self.stats[result.path] += 1
+        if self.metrics is not None:
+            # to_thread: a slow disk must never delay the spoken reply's caller.
+            await asyncio.to_thread(
+                self.metrics.record, result.path.value, result.skill_name,
+                result.latency_ms,
+            )
         # Remember the turn (unless we're mid-confirmation, where the follow-up is
         # a yes/no that shouldn't pollute conversational context).
         if not self.awaiting_confirmation:

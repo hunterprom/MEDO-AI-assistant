@@ -75,6 +75,24 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
   broken plugin is skipped, never fatal).
 - **Watch app** (`watch/`): Wear OS companion that talks to the same API.
 
+## Performance
+
+Every routed request is measured on the machine itself (`metrics` table in the
+assistant's sqlite DB, `logging.routing_stats: true`) and this table is
+generated from it — not estimated:
+
+<!-- run: python -m core.metrics --report  and paste its output below -->
+
+| Path | Requests | Share | p50 | p95 |
+|------|---------:|------:|--------:|--------:|
+| FAST | *(run the report)* | | | |
+| LLM  | *(run the report)* | | | |
+
+Method: measured end-to-end inside the Intent Router (utterance in → reply
+ready), on my machine — RTX 3060 12 GB, `qwen3:30b` via Ollama for the LLM
+path. Fast-path commands never touch the model, which is why they sit three
+orders of magnitude below it.
+
 ## Ports (LAN only — never forward these)
 
 | Port | What |
