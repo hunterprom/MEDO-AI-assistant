@@ -14,29 +14,51 @@ module provides the mechanism, not the policy.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from core.config import expand_path
 
-# Kept small and unambiguous; matched against the whole (lowercased) reply.
+# Kept small and unambiguous; matched against the WHOLE normalized reply —
+# never substrings, so "не знам" ("I don't know") is neither yes nor no and
+# the router just asks again. Macedonian entries cover both Cyrillic and the
+# Latin transliterations Whisper sometimes produces for spoken Macedonian.
 _AFFIRMATIVE = {
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "confirmed",
     "do it", "go ahead", "affirmative", "please do", "yes please",
+    # Macedonian (Cyrillic)
+    "да", "може", "секако", "ајде", "важи", "потврди", "потврдувам",
+    "да те молам",
+    # Latin transliterations (Whisper occasionally latinizes Macedonian)
+    "da", "moze", "ajde", "vazi",
 }
 _NEGATIVE = {
     "no", "nope", "nah", "cancel", "stop", "don't", "dont", "abort", "never mind",
     "nevermind", "negative", "no thanks",
+    # Macedonian (Cyrillic)
+    "не", "откажи", "стоп", "прекини", "немој", "заборави", "не сакам",
+    # Latin transliterations
+    "ne", "otkazi",
 }
+
+# Whisper decorates short utterances ("Да.", "не,") — strip punctuation and
+# collapse whitespace before matching. Apostrophes survive ("don't").
+_PUNCT = re.compile(r"[.!,?…]+")
+_SPACES = re.compile(r"\s+")
+
+
+def _normalize(text: str) -> str:
+    return _SPACES.sub(" ", _PUNCT.sub(" ", text.lower())).strip()
 
 
 def is_affirmative(text: str) -> bool:
-    """True if ``text`` reads as a yes."""
-    return text.strip().lower().strip(".!") in _AFFIRMATIVE
+    """True if ``text`` reads as a yes (English or Macedonian)."""
+    return _normalize(text) in _AFFIRMATIVE
 
 
 def is_negative(text: str) -> bool:
-    """True if ``text`` reads as a no."""
-    return text.strip().lower().strip(".!") in _NEGATIVE
+    """True if ``text`` reads as a no (English or Macedonian)."""
+    return _normalize(text) in _NEGATIVE
 
 
 class PathWhitelist:

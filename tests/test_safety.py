@@ -45,6 +45,53 @@ def test_negations(word):
     assert not is_affirmative(word)
 
 
+# --- bilingual gate: Macedonian yes/no (Cyrillic + Latin transliterations) ----
+@pytest.mark.parametrize("word", ["да", "може", "секако", "ајде", "важи",
+                                  "потврди", "потврдувам", "да те молам"])
+def test_macedonian_affirmations(word):
+    assert is_affirmative(word)
+    assert not is_negative(word)
+
+
+@pytest.mark.parametrize("word", ["не", "откажи", "стоп", "прекини", "немој",
+                                  "заборави", "не сакам"])
+def test_macedonian_negations(word):
+    assert is_negative(word)
+    assert not is_affirmative(word)
+
+
+@pytest.mark.parametrize("word", ["da", "moze", "ajde", "vazi"])
+def test_transliterated_affirmations(word):
+    assert is_affirmative(word)
+
+
+@pytest.mark.parametrize("word", ["ne", "otkazi"])
+def test_transliterated_negations(word):
+    assert is_negative(word)
+
+
+@pytest.mark.parametrize("messy,expect_yes", [
+    ("Да.", True),          # Whisper adds a period + capital
+    ("Да!", True),
+    ("може…", True),
+    ("Да, те молам.", True),  # comma dropped by normalization
+    ("НЕ", False),
+    ("Не!", False),
+])
+def test_whisper_punctuation_and_case(messy, expect_yes):
+    assert is_affirmative(messy) is expect_yes
+    if not expect_yes:
+        assert is_negative(messy)
+
+
+def test_ambiguous_reply_is_neither_yes_nor_no():
+    # "не знам" = "I don't know" — contains "не" but must NOT count as a no
+    # (whole-reply matching, never substring). The router then asks again.
+    for phrase in ("не знам", "не баш", "yes and no", "не сум сигурен"):
+        assert not is_affirmative(phrase)
+        assert not is_negative(phrase)
+
+
 # --- confirmation gate (with a safe dummy skill, never a real action) --------
 class DummyDangerSkill(Skill):
     name = "danger"

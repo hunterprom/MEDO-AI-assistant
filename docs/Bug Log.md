@@ -28,6 +28,13 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 | 19 | "close browser" killed a nonexistent `browser.exe` | image name derived from the launch command (session fix, carried over) |
 | 20 | Missing Piper voice crashed `--voice` and took the HUD+API down with it | launcher downloads the voice; TTS optional; servers survive voice-stack failure (session fixes, carried over) |
 
+## Fixed in the evaluator-hardening pass (2026-07-14)
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 21 | Companion API on `0.0.0.0:8710` was fully unauthenticated — any LAN device could type, screenshot, or power off the PC | bearer-token auth on every endpoint (token minted into `secrets.local.yaml` on first serve); 127.0.0.1 exempt so HUD/sidecar stay zero-config; fails closed; `remote.auth_enabled: false` restores old behavior |
+| 22 | Confirmation gate was **English-only** — the bilingual assistant could not confirm or cancel a destructive action in Macedonian ("да" fell through to "ask again", "не"/"откажи" could never cancel) | Cyrillic + Latin-transliteration yes/no sets in `core/safety.py`; Whisper-proof normalization (case, `.!,?…`, whitespace); still whole-reply matching, so "не знам" stays ambiguous and re-asks |
+
 ## Known limitations (open, by design or deferred)
 
 - Macedonian replies are **spoken with an English Piper voice** (no mk voice
@@ -35,7 +42,7 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 - Wake word is pretrained **"hey jarvis"**, not "MEDO". → [[Roadmap]]
 - Brightness: external monitors don't expose WMI brightness — graceful error.
 - moondream↔qwen3 VRAM contention on 12 GB: one reload after vision calls.
-- Companion API is deliberately unauthenticated — **LAN only, never forward
-  port 8710.**
+- Companion API has token auth but **no TLS** — still LAN only, never forward
+  port 8710.
 - v1's two-finger chat scroll and open-palm-wake/fist-barge-in gestures are
   not carried over yet (need voice-loop integration). → [[Roadmap]]
