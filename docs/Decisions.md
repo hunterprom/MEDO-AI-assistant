@@ -40,3 +40,14 @@ Why the super project is shaped the way it is.
 - **Deletion protocol.** The two source projects are deleted only after the
   merged app passes tests + live smoke checks, jarvis-web first, the v2
   Downloads folder (the copy source) last.
+- **Bearer token + localhost exemption on :8710, not TLS.** The companion API
+  can type, screenshot, and power off the PC, so "no auth by design" had to
+  die. A random token minted into git-ignored `secrets.local.yaml` on first
+  serve stops any LAN device from driving the machine; requests from
+  127.0.0.1 skip it so the HUD and vision sidecar keep zero-config startup.
+  Full TLS was rejected: self-signed certs break the browser HUD and the
+  watch's Dart client for no gain on a home LAN — the port still must never
+  be forwarded. `?token=` is accepted alongside the header for clients that
+  can't set one (EventSource/MJPEG-style embeds); auth fails CLOSED when a
+  LAN request arrives before a token exists. `remote.auth_enabled: false`
+  restores the old behavior, documented as unsafe.

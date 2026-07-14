@@ -64,6 +64,10 @@ class HudServer:
             "visionEnabled": self._settings.vision.enabled,
             "streamPort": self._settings.vision.stream_port,
             "apiPort": self._settings.remote.port,
+            # Companion-API auth token. Needed only when this page is opened
+            # from another device (localhost requests are exempt); the HUD is
+            # already the trust boundary — it serves folder paths and config.
+            "apiToken": self._settings.remote.token,
             "wakePhrase": self._settings.wakeword.phrase.replace("_", " "),
             "weather": {
                 "city": self._settings.weather.default_city,

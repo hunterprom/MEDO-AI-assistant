@@ -745,6 +745,12 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     # The vision sidecar POSTs gestures to the companion API, so enabling vision
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
+        # First serve mints the LAN auth token into secrets.local.yaml; later
+        # runs just load it. Localhost clients (HUD, sidecar) never need it.
+        if settings.remote.auth_enabled:
+            from core.config import ensure_remote_token
+
+            ensure_remote_token(settings)
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
                               wake_event=wake_event if voice else None,
                               doc_index=doc_index, mcp_manager=mcp_manager)
@@ -765,6 +771,11 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             f"[dim]Companion API on port {settings.remote.port} — "
             f"watch app + vision sidecar connect here.[/dim]"
         )
+        if settings.remote.auth_enabled:
+            console.print(
+                "[dim]LAN clients need the token from secrets.local.yaml "
+                "(remote.token); localhost is exempt.[/dim]"
+            )
 
     hud_server: HudServer | None = None
     if hud or settings.hud.enabled:

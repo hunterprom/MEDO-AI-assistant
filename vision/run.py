@@ -116,6 +116,23 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
     return cfg, api_url
 
 
+def load_api_token(config_path: Path) -> str:
+    """Companion-API auth token from secrets.local.yaml (next to config.yaml).
+
+    Localhost requests are exempt server-side, so a missing token (e.g. the
+    sidecar started before MEDO's first serve minted one) is not an error —
+    it only matters when --api points at another machine.
+    """
+    import yaml
+
+    path = config_path.parent / "secrets.local.yaml"
+    try:
+        data = yaml.safe_load(path.read_text()) if path.exists() else {}
+        return str((data.get("remote", {}) or {}).get("token") or "")
+    except Exception:
+        return ""
+
+
 def _make_video_handler(engine: GestureEngine):
     """An HTTP handler: MJPEG stream, latest-frame JPEG, pointer toggle."""
     import time
@@ -193,14 +210,16 @@ def _make_video_handler(engine: GestureEngine):
     return Handler
 
 
-def make_gesture_poster(api_url: str):
+def make_gesture_poster(api_url: str, token: str = ""):
     """A gesture handler that POSTs the mapped utterance to the companion API."""
 
     def handler(gesture: str, utterance: str) -> None:
         payload = json.dumps({"text": utterance}).encode()
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(
-            f"{api_url}/ask", data=payload,
-            headers={"Content-Type": "application/json"}, method="POST",
+            f"{api_url}/ask", data=payload, headers=headers, method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -223,7 +242,7 @@ def main() -> None:
     if args.api:
         api_url = args.api.rstrip("/")
 
-    engine = GestureEngine(cfg, make_gesture_poster(api_url))
+    engine = GestureEngine(cfg, make_gesture_poster(api_url, load_api_token(Path(args.config))))
     engine.start()
 
     server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port), _make_video_handler(engine))

@@ -80,7 +80,7 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
 | Port | What |
 |------|------|
 | 8730 | HUD (127.0.0.1) |
-| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web` (no auth **by design**; LAN only) |
+| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web` — **bearer-token auth** for LAN clients (token minted into `secrets.local.yaml` on first serve; localhost exempt; no TLS — LAN only) |
 | 8731 | Vision sidecar — MJPEG `/video`, `/frame.jpg`, `POST /pointer` |
 | 11434 | Ollama |
 
@@ -92,8 +92,8 @@ nested with `__`, e.g. `MEDO_LLM__DEFAULT_MODEL=qwen3:14b`). Highlights:
 `audio.input_device` (mic priority list — first available wins, hot-swapped),
 `vision.pointer.*` (sensitivity, smoothing, scroll/zoom gains, fist exit hold),
 `hud.max_dir_dots`, `memory.max_facts`, `weather.default_city`. Per-machine
-secrets (online API key, picked mic) persist in the git-ignored
-`secrets.local.yaml`.
+secrets (online API key, picked mic, the companion-API token) persist in the
+git-ignored `secrets.local.yaml`.
 
 ## Tests
 

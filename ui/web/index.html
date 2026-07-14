@@ -596,6 +596,20 @@
   const CFG = __MEDO_CONFIG__;
   const API = `http://${location.hostname}:${CFG.apiPort}`;
   const STREAM = `http://${location.hostname}:${CFG.streamPort}`;
+
+  // Companion-API auth: attach the injected bearer token to every :8710 fetch.
+  // Only matters when the HUD is opened from another device — localhost
+  // requests are exempt server-side — so all call sites stay untouched.
+  if (CFG.apiToken) {
+    const _fetch = window.fetch.bind(window);
+    window.fetch = (url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith(API)) {
+        opts.headers = Object.assign({}, opts.headers,
+          { 'Authorization': `Bearer ${CFG.apiToken}` });
+      }
+      return _fetch(url, opts);
+    };
+  }
   const $ = id => document.getElementById(id);
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 

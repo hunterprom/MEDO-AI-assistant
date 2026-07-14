@@ -26,14 +26,20 @@ Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
 ``POST /provider`` is stored in settings but never echoed back or logged.
 
-No auth by design: the assistant is 100 % local and the server binds to the
-local network. Do not expose this port beyond your LAN.
+Auth: every endpoint requires ``Authorization: Bearer <token>`` (or a
+``?token=`` query parameter for clients that can't set headers). The token is
+generated on first serve and stored in the git-ignored secrets.local.yaml.
+Requests from 127.0.0.1 are exempt so the HUD and vision sidecar keep their
+zero-config startup; LAN clients (the watch app) must present the token.
+``remote.auth_enabled: false`` restores the old open behavior (unsafe).
+Still LAN-only: there is no TLS — do not forward this port beyond your LAN.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import logging
 import threading
 
@@ -53,9 +59,12 @@ MAX_TEXT_CHARS = 2000
 #: Permissive CORS for the browser HUD; the API is LAN-only anyway.
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 }
+
+#: Peer addresses that skip token auth (the HUD + sidecar run on this machine).
+_LOCAL_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 #: Providers accepted by ``POST /provider`` (mirrors LLMConfig.provider).
 VALID_PROVIDERS = ("ollama", "openai", "anthropic", "claude-code", "codex")
@@ -109,7 +118,15 @@ class RemoteServer:
 
     def build_app(self) -> web.Application:
         """Create the aiohttp application (separated out for tests)."""
-        app = web.Application(middlewares=[cors_middleware])
+
+        @web.middleware
+        async def auth_middleware(request: web.Request, handler) -> web.StreamResponse:
+            if self._authorized(request):
+                return await handler(request)
+            return _error(401, "missing or invalid token")
+
+        # cors first so even 401s carry the headers the browser HUD needs.
+        app = web.Application(middlewares=[cors_middleware, auth_middleware])
         app.router.add_get("/ping", self._handle_ping)
         app.router.add_post("/ask", self._handle_ask)
         app.router.add_get("/status", self._handle_status)
@@ -134,6 +151,32 @@ class RemoteServer:
         # CORS preflight for any path (the HUD's fetch() sends OPTIONS first).
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
+
+    # --- auth ---
+
+    def _is_local(self, request: web.Request) -> bool:
+        """True when the request comes from this machine (auth-exempt)."""
+        return request.remote in _LOCAL_PEERS
+
+    def _authorized(self, request: web.Request) -> bool:
+        """Token gate for LAN clients.
+
+        OPTIONS passes because browsers never attach Authorization to a CORS
+        preflight — the actual request that follows is still checked. With
+        auth on and no token configured, LAN requests are refused (fail
+        closed) rather than silently open.
+        """
+        remote_cfg = self._settings.remote
+        if not remote_cfg.auth_enabled or request.method == "OPTIONS":
+            return True
+        if self._is_local(request):
+            return True
+        expected = remote_cfg.token
+        if not expected:
+            return False
+        header = request.headers.get("Authorization", "")
+        supplied = header[7:] if header.startswith("Bearer ") else request.query.get("token", "")
+        return bool(supplied) and hmac.compare_digest(supplied, expected)
 
     async def start(self) -> None:
         """Bind and start serving; returns once the socket is listening."""

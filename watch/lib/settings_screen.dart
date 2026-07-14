@@ -19,6 +19,7 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _controller = TextEditingController();
+  final _tokenController = TextEditingController();
   String? _status;
   Color _statusColor = Colors.white54;
   bool _testing = false;
@@ -31,6 +32,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     AppSettings.loadAddress().then((address) {
       if (mounted) _controller.text = address;
     });
+    AppSettings.loadToken().then((token) {
+      if (mounted) _tokenController.text = token;
+    });
     AppSettings.loadGestureEnabled().then((enabled) {
       if (mounted) setState(() => _gestureEnabled = enabled);
     });
@@ -42,20 +46,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void dispose() {
     _controller.dispose();
+    _tokenController.dispose();
     super.dispose();
   }
 
   Future<void> _saveAndTest() async {
     final address = _controller.text.trim();
     if (address.isEmpty) return;
+    final token = _tokenController.text.trim();
     await AppSettings.saveAddress(address);
+    await AppSettings.saveToken(token);
     setState(() {
       _testing = true;
       _status = 'Connecting…';
       _statusColor = Colors.white54;
     });
     try {
-      final name = await JarvisClient(address).ping();
+      final name = await JarvisClient(address, token).ping();
       setState(() {
         _status = 'Connected to $name ✓';
         _statusColor = Colors.greenAccent;
@@ -111,6 +118,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   decoration: const InputDecoration(
                     isDense: true,
                     hintText: AppSettings.defaultAddress,
+                    hintStyle: TextStyle(color: Colors.white24, fontSize: 13),
+                    enabledBorder: UnderlineInputBorder(
+                      borderSide: BorderSide(color: Colors.white24),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                // Auth token from the server's secrets.local.yaml
+                // (remote.token). Leave empty if server auth is disabled.
+                TextField(
+                  controller: _tokenController,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: 'auth token (remote.token)',
                     hintStyle: TextStyle(color: Colors.white24, fontSize: 13),
                     enabledBorder: UnderlineInputBorder(
                       borderSide: BorderSide(color: Colors.white24),
