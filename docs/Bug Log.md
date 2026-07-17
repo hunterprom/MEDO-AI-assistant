@@ -34,6 +34,7 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 |---|-----|-----|
 | 21 | Companion API on `0.0.0.0:8710` was fully unauthenticated — any LAN device could type, screenshot, or power off the PC | bearer-token auth on every endpoint (token minted into `secrets.local.yaml` on first serve); 127.0.0.1 exempt so HUD/sidecar stay zero-config; fails closed; `remote.auth_enabled: false` restores old behavior |
 | 22 | Confirmation gate was **English-only** — the bilingual assistant could not confirm or cancel a destructive action in Macedonian ("да" fell through to "ask again", "не"/"откажи" could never cancel) | Cyrillic + Latin-transliteration yes/no sets in `core/safety.py`; Whisper-proof normalization (case, `.!,?…`, whitespace); still whole-reply matching, so "не знам" stays ambiguous and re-asks |
+| 23 | Pointer mode was **Windows-only**: the engine's backend was raw user32 (`vision/winmouse.py`), so on macOS/Linux `ctypes.windll` raised and pointer mode silently reported "unavailable on this system" (2026-07-17) | platform dispatcher `vision/mouse.py` → `winmouse` (win32) / new `macmouse` (raw CoreGraphics via ctypes + osascript volume/media; drags post `LeftMouseDragged`) / new `anymouse` (pyautogui, pause + fail-safe disabled). macOS additionally needs the Accessibility permission — the sidecar log now says exactly that instead of nothing moving in silence |
 
 ## Known limitations (open, by design or deferred)
 
