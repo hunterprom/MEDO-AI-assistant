@@ -154,7 +154,7 @@ class MetricsStore:
                 f"| {path} | {n} | {n / total * 100:.1f}% "
                 f"| {_percentile(lat, 50):,.0f} ms | {_percentile(lat, 95):,.0f} ms |"
             )
-        out = [f"{total} routed requests measured.", "", *lines]
+        out = [f"{total} routed request{'s' if total != 1 else ''} measured.", "", *lines]
 
         if top_skills:
             out += ["", "Top skills by usage:", "",

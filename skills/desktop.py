@@ -13,7 +13,7 @@ import asyncio
 import re
 from typing import Any
 
-from core.platform import IS_WINDOWS
+from core.platform import IS_MACOS, IS_WINDOWS
 from skills.base import Skill, SkillRequest, SkillResult
 
 #: v1 jarvis-web's KEY_MAP, translated to pyautogui key names.
@@ -27,7 +27,10 @@ KEY_MAP: dict[str, str] = {
     "pageup": "pageup", "page up": "pageup",
     "pagedown": "pagedown", "page down": "pagedown",
     "control": "ctrl", "ctrl": "ctrl", "alt": "alt", "shift": "shift",
-    "windows": "win", "win": "win", "command": "win", "cmd": "win",
+    # The OS "super" key: the Windows key there, ⌘ on a Mac — saying either
+    # name lands on whatever this machine actually has.
+    **dict.fromkeys(("windows", "win", "command", "cmd"),
+                    "command" if IS_MACOS else "win"),
     "play": "playpause", "pause": "playpause", "play pause": "playpause",
     "next": "nexttrack", "previous": "prevtrack", "prev": "prevtrack",
     "mute": "volumemute", "volume up": "volumeup", "volume down": "volumedown",
@@ -101,7 +104,13 @@ class TypeTextSkill(Skill):
                 except Exception:
                     previous = ""
                 pyperclip.copy(body)
-                await asyncio.to_thread(gui.hotkey, "ctrl", "v")
+                # Paste is Cmd+V on macOS; Ctrl+V there does nothing, which
+                # made "type <Cyrillic>" silently type nothing on a Mac.
+                from core.platform import IS_MACOS
+
+                await asyncio.to_thread(
+                    gui.hotkey, "command" if IS_MACOS else "ctrl", "v"
+                )
                 await asyncio.sleep(0.15)  # let the paste land before restoring
                 pyperclip.copy(previous)
         except Exception as exc:
@@ -177,14 +186,26 @@ class WindowActionSkill(Skill):
     name = "window_action"
     description = "Minimize, maximize, or close the focused window; show desktop; switch apps."
 
-    #: action -> key chord (v1 jarvis-web mapping).
-    ACTIONS: dict[str, tuple[str, ...]] = {
-        "minimize": ("win", "down"),
-        "maximize": ("win", "up"),
-        "close": ("alt", "f4"),
-        "show_desktop": ("win", "d"),
-        "switch": ("alt", "tab"),
-    }
+    #: action -> key chord. The v1 jarvis-web mapping was Windows-only —
+    #: Alt+F4/Win+Down are dead keys on a Mac, so macOS gets its own chords
+    #: (Cmd+M / full-screen toggle / Cmd+W / F11 / Cmd+Tab).
+    ACTIONS: dict[str, tuple[str, ...]] = (
+        {
+            "minimize": ("command", "m"),
+            "maximize": ("ctrl", "command", "f"),  # full-screen toggle — the mac "maximize"
+            "close": ("command", "w"),
+            "show_desktop": ("f11",),  # needs "use F-keys as standard" — best effort
+            "switch": ("command", "tab"),
+        }
+        if IS_MACOS
+        else {
+            "minimize": ("win", "down"),
+            "maximize": ("win", "up"),
+            "close": ("alt", "f4"),
+            "show_desktop": ("win", "d"),
+            "switch": ("alt", "tab"),
+        }
+    )
 
     patterns = [
         re.compile(r"\b(?P<mm>minimi[sz]e|maximi[sz]e)\s+(?:the\s+|this\s+)?window\b", re.IGNORECASE),

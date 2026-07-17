@@ -100,7 +100,7 @@ async def test_router_persists_metrics(tmp_path, monkeypatch):
     await router.route("hello there")
 
     report = router.metrics.report()
-    assert "1 routed requests measured." in report
+    assert "1 routed request measured." in report
     assert "| hello | 1 |" in report
 
 
