@@ -118,7 +118,13 @@ def _live_test() -> None:
 
     wake = WakeWord(s.wakeword)
     phrase = s.wakeword.phrase.replace("_", " ")
-    dev_note = "system default" if s.audio.input_device is None else f"device #{s.audio.input_device}"
+    dev = s.audio.input_device
+    if dev is None:
+        dev_note = "system default"
+    elif isinstance(dev, list):  # priority list: first available wins
+        dev_note = "first available of " + " > ".join(str(d) for d in dev)
+    else:
+        dev_note = f"device {dev!r}"
     print(f'Using {dev_note}. Say "{phrase}" (threshold {wake.threshold:.2f}). Ctrl-C to stop.\n')
     peak = 0.0
     with Microphone(s.audio.sample_rate, FRAME_SAMPLES, s.audio.input_device) as mic:
