@@ -12,7 +12,12 @@ Why the super project is shaped the way it is.
 - **ctypes instead of pyautogui in the sidecar.** The sidecar must stay
   dependency-light (numpy<2 pin) and move the cursor 15×/s; pyautogui adds a
   default 0.1 s pause per call and a FAILSAFE corner trap. Raw
-  `SetCursorPos`/`mouse_event` is 30 lines.
+  `SetCursorPos`/`mouse_event` is 30 lines. The same philosophy carried to
+  macOS: `vision/macmouse.py` is raw CoreGraphics via ctypes (CGEvents,
+  CFRelease'd — 15 fps would leak otherwise), with osascript only for
+  volume/media where the HID media keys would need AppKit. pyautogui exists
+  solely as the last-resort `anymouse` backend for other platforms, with its
+  pause and corner trap disabled.
 - **`/sys` instead of extending `/status`.** `/status` does a live Ollama
   round-trip per hit (model listing) and its shape is pinned by the watch app
   and tests. Telemetry is a cached dict refreshed by a background task.

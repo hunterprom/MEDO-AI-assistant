@@ -169,5 +169,9 @@ handoff is preserved in `docs/design/`.
   "hey MEDO" model is on the roadmap.
 - Brightness control needs a laptop-class display (external monitors usually
   don't support WMI brightness).
+- On macOS, pointer mode needs the **Accessibility** permission for whatever
+  launches the sidecar (Terminal / `run.command`): System Settings → Privacy
+  & Security → Accessibility. Until granted, the sidecar log says so and the
+  cursor stays put.
 - Loading moondream temporarily evicts the 30B from VRAM (12 GB GPU) — the
   next chat pays a one-time reload.
