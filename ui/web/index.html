@@ -1463,7 +1463,7 @@
     // it), and once zoomed in you can grab-drag to move through the cluster —
     // the view pans, labels reveal, and dots stay clickable. Zooming back out
     // glides the view home. Eased every frame; rotation slows when zoomed.
-    let zoom = 1, zoomTarget = 1, hoverBump = 0;
+    let zoom = 1, zoomTarget = 1;
     let panX = 0, panY = 0, panTX = 0, panTY = 0;      // eased + target pan (canvas px)
     let dragging = false, dragMoved = false, lastMX = 0, lastMY = 0;
     const clientToCanvas = e => {
@@ -1471,26 +1471,33 @@
       return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
     };
     const panLimit = z => R * Math.max(0, z - 1) * 1.15;  // can't lose the sphere
-    cv.addEventListener('wheel', e => {
-      e.preventDefault();
+    // Zoom TOWARD a canvas point (the cursor): re-solve pan so that point
+    // stays put while everything magnifies around it — a rectangular camera
+    // zoom into the region under the cursor, not a centre inflate. Shared by
+    // the wheel and double-click so both anchor identically.
+    function zoomAt(m, target) {
       const prev = zoomTarget;
-      zoomTarget = Math.min(4.5, Math.max(1, zoomTarget * (e.deltaY < 0 ? 1.15 : 0.87)));
-      // Anchor the zoom on the cursor: keep the pointed-at spot stationary.
-      const m = clientToCanvas(e), ratio = zoomTarget / prev;
+      zoomTarget = Math.min(9, Math.max(1, target));
+      const ratio = zoomTarget / prev;
       panTX = (m.x - cx) - ((m.x - cx) - panTX) * ratio;
       panTY = (m.y - cy) - ((m.y - cy) - panTY) * ratio;
+      if (zoomTarget <= 1.02) { zoomTarget = 1; panTX = panTY = 0; }
       const lim = panLimit(zoomTarget);
       panTX = Math.max(-lim, Math.min(lim, panTX));
       panTY = Math.max(-lim, Math.min(lim, panTY));
+    }
+    cv.addEventListener('wheel', e => {
+      e.preventDefault();
+      zoomAt(clientToCanvas(e), zoomTarget * (e.deltaY < 0 ? 1.2 : 0.83));
     }, { passive: false });
-    cv.addEventListener('mouseenter', () => { hoverBump = 0.18; });
-    cv.addEventListener('mouseleave', () => {
-      hoverBump = 0; dragging = false;
-      if (zoomTarget < 1.2) { zoomTarget = 1; panTX = panTY = 0; }
-    });
-    cv.addEventListener('dblclick', () => {
-      if (zoomTarget > 1.4) { zoomTarget = 1; panTX = panTY = 0; }
-      else zoomTarget = 2.2;
+    // Hover no longer auto-zooms: it used to nudge the whole sphere to 1.18x
+    // toward its OWN centre, which both slowed the rotation and rounded the
+    // view against the outer shell. Rotation now stays full speed on hover;
+    // zoom happens only when you actually scroll or double-click.
+    cv.addEventListener('mouseleave', () => { dragging = false; });
+    cv.addEventListener('dblclick', e => {
+      // Toggle: zoomed -> home; idle -> magnify into the double-clicked spot.
+      zoomAt(clientToCanvas(e), zoomTarget > 1.4 ? 1 : 2.6);
     });
     cv.addEventListener('mousedown', e => {
       if (e.button !== 0 || zoomTarget <= 1.05) return;
@@ -1529,26 +1536,25 @@
       const dt = Math.min(0.05, (now - last) / 1000); last = now;
       speed += (orbSpeedTarget - speed) * 0.06;   // ease between states
       glow += (orbGlowTarget - glow) * 0.06;
-      zoom += (Math.max(zoomTarget, 1 + hoverBump) - zoom) * 0.08;
+      zoom += (zoomTarget - zoom) * 0.12;         // ease toward the wheel target
       // Glide the pan toward its target, always inside the reachable bubble
       // for the CURRENT zoom — zooming out therefore pulls the view home.
       const lim = panLimit(zoom);
       panX += (Math.max(-lim, Math.min(lim, panTX)) - panX) * 0.12;
       panY += (Math.max(-lim, Math.min(lim, panTY)) - panY) * 0.12;
       const ox = cx + panX, oy = cy + panY;       // panned projection centre
-      t += dt * speed / (0.4 + 0.6 * zoom);       // rotate slower when zoomed in
+      // Rotation eases off only with REAL zoom (so labels are readable), and
+      // gently. Hovering alone must NOT brake the sphere: the committed
+      // zoomTarget drives the damping, and it's 1 (full speed) until you
+      // actually scroll or double-click to zoom in.
+      t += dt * speed / (0.7 + 0.3 * Math.max(zoomTarget, 1));
       // Skip all drawing while the orb is hidden (COMMS/CONFIG tab): no point
       // animating a full-screen canvas — and hue-rotate — behind another screen.
       if (document.body.dataset.screen !== 'core') { if (!reduced) requestAnimationFrame(frame); return; }
       const frameDirs = [];   // directory beacons visible this frame (screen coords)
       ctx.clearRect(0, 0, W, H);
       ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, R * 1.22);
-      g.addColorStop(0, `rgba(120,200,255,${0.28 * glow})`);
-      g.addColorStop(0.4, `rgba(40,120,230,${0.1 * glow})`);
-      g.addColorStop(1, 'rgba(10,40,120,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(ox, oy, R * 1.22, 0, Math.PI * 2); ctx.fill();
+      // The halo scales WITH the zoom (capped at the canvas diagonal): with
       const RZ = R * zoom;   // magnified projection radius (zoom = 1 when idle)
       const ry = t * 0.32, rx = 0.42 + Math.sin(t * 0.09) * 0.22;
       const cosY = Math.cos(ry), sinY = Math.sin(ry), cosX = Math.cos(rx), sinX = Math.sin(rx);
