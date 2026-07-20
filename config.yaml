@@ -170,12 +170,17 @@ wakeword:                           # M1
   #   2) train it (~1 h on a free Colab GPU) — the script prints the steps;
   #      see docs/Wake Word Training.md for the full runbook.
   #   3) drop hey_medo.onnx in models/wakeword/ and set phrase to it below.
-  phrase: "hey_jarvis"              # built-in model name (say "hey jarvis")
+  phrase: "models/wakeword/hey_medo.onnx"   # custom "hey MEDO" model (trained
+                                    # locally 2026-07-20; acc 0.85, recall 0.76,
+                                    # 0.09 FP/hr). Was "hey_jarvis" (built-in).
   # Lower = easier to trigger (0.5 is openWakeWord's default; 0.4 helps a
   # non-native "hey jarvis"). Watch your live score with:
   #   .venv\Scripts\python -m voice.wakeword
   # If the mic level stays ~0 there, it's the input device, not the threshold.
-  threshold: 0.4
+  # 0.5 for the custom hey_medo model: it scores 0.99+ on real "hey medo" and
+  # <0.2 on near-misses, so 0.5 separates cleanly. Nudge down if your voice/mic
+  # under-triggers, up if it false-fires.
+  threshold: 0.5
 
 audio:                              # M1
   # Which microphone the wake word listens on — a PRIORITY LIST: the first
