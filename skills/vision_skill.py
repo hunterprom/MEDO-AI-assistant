@@ -76,6 +76,7 @@ class SeeCameraSkill(Skill):
         re.compile(r"\bwhat\s+(?:do|can)\s+you\s+see\b", re.IGNORECASE),
         re.compile(r"\bdescribe\s+(?:what\s+you\s+see|the\s+(?:camera|room|view))\b", re.IGNORECASE),
         re.compile(r"\blook\s+(?:at\s+(?:me|this)|around)\b", re.IGNORECASE),
+        re.compile(r"\bcan\s+you\s+see\s+me\b", re.IGNORECASE),
     ]
 
     def __init__(self, settings: Settings) -> None:
@@ -117,6 +118,12 @@ class SeeScreenSkill(Skill):
     patterns = [
         re.compile(r"\bwhat(?:'?s| is)\s+on\s+(?:my|the)\s+screen\b", re.IGNORECASE),
         re.compile(r"\b(?:read|describe)\s+(?:my|the)\s+screen\b", re.IGNORECASE),
+        # "can you see my screen" / "look at my screen" / "what am I looking
+        # at" went to the LLM, which would claim it can't see screens instead
+        # of calling this tool — catch the common phrasings deterministically.
+        re.compile(r"\bcan\s+you\s+see\s+(?:my|the)\s+screen\b", re.IGNORECASE),
+        re.compile(r"\blook\s+at\s+(?:my|the)\s+screen\b", re.IGNORECASE),
+        re.compile(r"\bwhat\s+am\s+i\s+looking\s+at\b", re.IGNORECASE),
     ]
 
     def __init__(self, settings: Settings) -> None:
