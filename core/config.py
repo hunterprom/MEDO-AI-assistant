@@ -233,6 +233,11 @@ class AudioConfig(BaseModel):
 class SafetyConfig(BaseModel):
     confirm_destructive: bool = True
     whitelist_dirs: list[str] = Field(default_factory=list)
+    # Master switch: may MEDO ACT on this computer (type, click, launch apps,
+    # open websites, move files, power)? Toggled live from the HUD CONFIG tab
+    # (PC CONTROL) and persisted per-machine in secrets.local.yaml. Sensing
+    # (vision, weather, questions) is never affected.
+    pc_control_enabled: bool = True
 
     def resolved_whitelist(self) -> list[Path]:
         """Whitelist directories as absolute, expanded paths."""
@@ -437,6 +442,9 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
     remote = data.get("remote", {}) or {}
     if remote.get("token"):
         settings.remote.token = str(remote["token"])
+    control = data.get("control", {}) or {}
+    if "pc" in control:  # the HUD's PC CONTROL switch, remembered per machine
+        settings.safety.pc_control_enabled = bool(control["pc"])
     return settings
 
 
@@ -482,6 +490,16 @@ def ensure_remote_token(settings: Settings, path: Path = SECRETS_PATH) -> str:
     except Exception:
         logging.getLogger(__name__).exception("could not persist remote token")
     return token
+
+
+def save_pc_control(enabled: bool, path: Path = SECRETS_PATH) -> None:
+    """Persist the HUD's PC CONTROL switch (may MEDO act on this machine?)."""
+    try:
+        data = _read_local(path)
+        data.setdefault("control", {})["pc"] = bool(enabled)
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist the PC-control switch")
 
 
 def save_audio_input(device: int | str | None, path: Path = SECRETS_PATH) -> None:

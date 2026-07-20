@@ -199,6 +199,7 @@ class RemoteServer:
         app.router.add_get("/docs/stats", self._handle_docs_stats)
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
         app.router.add_get("/mcp", self._handle_mcp_status)
+        app.router.add_post("/control/pc", self._handle_pc_control)
         # MEDO Link (M9): manifest-driven device layer. Token-authed like
         # everything else — LAN devices must present the bearer token.
         app.router.add_post("/link/register", self._handle_link_register)
@@ -387,6 +388,8 @@ class RemoteServer:
                 "has_api_key": bool(self._settings.llm.api_key),
                 "anthropic_base_url": self._settings.llm.anthropic_base_url,
                 "has_anthropic_key": bool(self._settings.llm.anthropic_api_key),
+                # The PC CONTROL switch (may MEDO act on this computer?).
+                "pc_control": self._settings.safety.pc_control_enabled,
                 # Which local CLI agents exist on this machine (for the HUD).
                 "cli_available": await asyncio.to_thread(self._cli_availability),
             }
@@ -680,6 +683,26 @@ class RemoteServer:
             self._wake_event.set()
         logger.info("interrupt requested (listen=%s)", listen)
         return web.json_response({"ok": True, "listening": listen and self._wake_event is not None})
+
+    async def _handle_pc_control(self, request: web.Request) -> web.Response:
+        """The HUD's PC CONTROL switch: may MEDO act on this computer?
+
+        Gates every ``controls_pc`` skill (typing, apps, websites, files,
+        power…) at the router. Persisted per machine so the choice survives
+        restarts. Sensing skills are never affected.
+        """
+        try:
+            enabled = bool((await request.json()).get("on"))
+        except (ValueError, TypeError):
+            return _error(400, "body must be JSON like {\"on\": true}")
+        self._settings.safety.pc_control_enabled = enabled
+        if self._persist_secrets:
+            from core.config import save_pc_control
+
+            save_pc_control(enabled)
+        logger.info("PC control switched %s via companion API",
+                    "ON" if enabled else "OFF")
+        return web.json_response({"ok": True, "on": enabled})
 
     # --- MEDO Link (M9): manifest-driven device layer -----------------------
 

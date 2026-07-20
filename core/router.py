@@ -25,7 +25,7 @@ from core.safety import is_affirmative, is_negative
 from llm.client import LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
 from llm.tools import build_tools, dispatch_tool
-from skills.base import Skill, SkillRegistry, SkillRequest
+from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: How many tool rounds before we force a final text answer (loop guard).
 MAX_TOOL_ROUNDS = 4
@@ -49,6 +49,10 @@ OFFLINE_CLI_REPLY = (
     "logged in, and on your PATH — or switch provider in the HUD."
 )
 CANCELLED_REPLY = "Okay, cancelled."
+PC_CONTROL_OFF_REPLY = (
+    "PC control is switched off — flip the PC CONTROL switch in the HUD "
+    "settings if you want me to do that."
+)
 #: Spoken when the model returns nothing usable (e.g. reasoning truncated mid-think).
 EMPTY_REPLY = "Sorry — I lost my train of thought. Ask me that again?"
 
@@ -187,6 +191,9 @@ class Router:
 
     async def _run_skill(self, skill: Skill, request: SkillRequest) -> RouteResult:
         """Execute a fast-path skill, deferring for confirmation if it asks."""
+        if skill.controls_pc and not self._settings.safety.pc_control_enabled:
+            return RouteResult(path=RoutePath.FAST, speech=PC_CONTROL_OFF_REPLY,
+                              skill_name=skill.name)
         outcome = await skill.execute(request)
         if outcome.needs_confirmation and self._settings.safety.confirm_destructive:
             # Stash the request; the next utterance is treated as the yes/no.
@@ -245,6 +252,11 @@ class Router:
             return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
         tools = build_tools(self._registry)
+        if not self._settings.safety.pc_control_enabled:
+            # PC control is off: actuation tools aren't even offered, so the
+            # model answers around them instead of calling and being refused.
+            gated = {s.name for s in self._registry.all() if s.controls_pc}
+            tools = [t for t in tools if t["function"]["name"] not in gated]
         try:
             facts = await asyncio.to_thread(
                 self.facts.relevant, text, self._settings.memory.max_facts
@@ -314,7 +326,14 @@ class Router:
             fn = call.get("function", {})
             name = fn.get("name", "")
             args = fn.get("arguments") or {}
-            result = await dispatch_tool(self._registry, name, args, context)
+            gated_skill = self._registry.get(name)
+            if (gated_skill is not None and gated_skill.controls_pc
+                    and not self._settings.safety.pc_control_enabled):
+                # Belt to the tool-filter's braces: even a hallucinated call
+                # to an actuation tool is refused when PC control is off.
+                result = SkillResult(PC_CONTROL_OFF_REPLY, success=False)
+            else:
+                result = await dispatch_tool(self._registry, name, args, context)
             used_skill = name
 
             if result.needs_confirmation and self._settings.safety.confirm_destructive:

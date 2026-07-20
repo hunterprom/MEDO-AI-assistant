@@ -28,6 +28,7 @@ _ALIASES = {
 
 class AppsSkill(Skill):
     name = "apps"
+    controls_pc = True
     description = "Open or close a known application."
 
     def __init__(self, apps_table: dict[str, dict[str, str]]) -> None:

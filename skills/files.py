@@ -20,6 +20,7 @@ _MAX_RESULTS = 25
 
 class FilesSkill(Skill):
     name = "files"
+    controls_pc = True
     description = "Search for and open files within whitelisted folders."
 
     patterns = [

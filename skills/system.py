@@ -135,6 +135,7 @@ def _current_volume() -> int | None:
 
 class VolumeSkill(Skill):
     name = "volume"
+    controls_pc = True
     description = "Adjust or query the system output volume."
 
     patterns = [
@@ -275,6 +276,7 @@ class SystemInfoSkill(Skill):
 # --------------------------------------------------------------------------- #
 class ScreenshotSkill(Skill):
     name = "screenshot"
+    controls_pc = True
     description = "Capture the screen to an image file."
 
     patterns = [
@@ -316,6 +318,7 @@ class ScreenshotSkill(Skill):
 # --------------------------------------------------------------------------- #
 class PowerSkill(Skill):
     name = "power"
+    controls_pc = True
     description = "Lock, sleep, shut down, or restart the machine."
 
     patterns = [
@@ -398,6 +401,7 @@ class PowerSkill(Skill):
 # --------------------------------------------------------------------------- #
 class PointerControlSkill(Skill):
     name = "pointer_control"
+    controls_pc = True
     description = "Turn gesture mouse control (pointer mode) on or off."
 
     patterns = [

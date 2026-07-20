@@ -160,6 +160,12 @@ def build_registry(
     # Window actions before apps: "close the window" is not "close <app>".
     registry.register(WindowActionSkill())
     registry.register(AppsSkill(apps_table))
+    # Websites right after apps: "open chrome" stays an app launch, while
+    # "open tinkercad.com" (dotted) opens the browser — before FilesSkill so
+    # a domain never reads as a filename.
+    from skills.web_open import OpenWebsiteSkill
+
+    registry.register(OpenWebsiteSkill())
     registry.register(SeeCameraSkill(settings))
     registry.register(SeeScreenSkill(settings))
     # M11 deictic pointing: "what is this?" crops around the mouse cursor.

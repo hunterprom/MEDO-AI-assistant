@@ -44,6 +44,7 @@ def _mac_player() -> str:
 
 class MediaSkill(Skill):
     name = "media"
+    controls_pc = True
     description = "Control music playback: play, pause, resume, next or previous track."
 
     patterns = [

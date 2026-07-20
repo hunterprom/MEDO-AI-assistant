@@ -185,6 +185,11 @@ audio:                              # M1
 
 safety:                             # M2
   confirm_destructive: true
+  # Master switch: may MEDO ACT on this computer (type, click, open apps and
+  # websites, move files, power)? Toggle it live from the HUD CONFIG tab
+  # ("PC control") — the live choice persists per machine in
+  # secrets.local.yaml. Sensing (vision, weather, questions) always works.
+  pc_control_enabled: true
   whitelist_dirs:                   # files.py may only touch these trees
     - "~/Documents"
     - "~/Downloads"

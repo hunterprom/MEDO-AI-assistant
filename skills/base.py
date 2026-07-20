@@ -55,6 +55,11 @@ class Skill(ABC):
     patterns: list[re.Pattern[str]] = []
     #: Destructive/system actions set this so core/safety.py gates them (M2).
     requires_confirmation: bool = False
+    #: True for skills that ACT on this computer (type, click, launch, open
+    #: sites, power, files...). The HUD's PC CONTROL switch
+    #: (safety.pc_control_enabled) blocks them all at one router choke point;
+    #: purely sensing/answering skills stay available either way.
+    controls_pc: bool = False
 
     def match(self, text: str) -> re.Match[str] | None:
         """Return the first pattern that matches ``text``, or ``None``."""

@@ -520,6 +520,10 @@
         <button class="toggle" id="cfg-pointer"><span class="knob"></span></button>
       </div>
       <div class="setting">
+        <div class="info"><span class="name">PC control</span><span class="desc">MAY MEDO ACT ON THIS PC — TYPE · OPEN APPS &amp; SITES · FILES · POWER · OFF = ANSWERS ONLY</span></div>
+        <button class="toggle on" id="cfg-pc"><span class="knob"></span></button>
+      </div>
+      <div class="setting">
         <div class="info"><span class="name">Camera feed</span><span class="desc">SHOW THE OPTICAL FEED PANEL ON CORE</span></div>
         <button class="toggle on" id="cfg-cam"><span class="knob"></span></button>
       </div>
@@ -957,6 +961,21 @@
   }
   $('dev-pointer').onclick = $('cfg-pointer').onclick = togglePointer;
   (async () => { try { const d = await (await fetch(`${STREAM}/pointer`)).json(); setPointerUI(d.on); } catch { } })();
+
+  /* ---- PC CONTROL master switch: may MEDO act on this computer? ---- */
+  let pcOn = true;
+  function setPcUI(on) { pcOn = !!on; $('cfg-pc').classList.toggle('on', pcOn); }
+  $('cfg-pc').onclick = async () => {
+    try {
+      const r = await (await fetch(`${API}/control/pc`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: !pcOn }),
+      })).json();
+      setPcUI(r.on);
+      log(`PC CONTROL ${r.on ? 'ENABLED' : 'DISABLED'}`);
+    } catch { log('PC CONTROL — API offline'); }
+  };
+  (async () => { try { const d = await (await fetch(`${API}/status`)).json(); if ('pc_control' in d) setPcUI(d.pc_control); } catch { } })();
 
   let scan = localStorage.getItem('medo_scanlines') !== 'off';
   function applyScan() {

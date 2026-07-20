@@ -78,6 +78,7 @@ def _pyautogui():
 
 class TypeTextSkill(Skill):
     name = "type_text"
+    controls_pc = True
     description = "Type text into the currently focused window."
 
     patterns = [
@@ -136,6 +137,7 @@ class TypeTextSkill(Skill):
 
 class PressKeysSkill(Skill):
     name = "press_keys"
+    controls_pc = True
     description = "Press a key or keyboard shortcut (e.g. control s, alt tab, f5)."
 
     patterns = [
@@ -184,6 +186,7 @@ class PressKeysSkill(Skill):
 
 class WindowActionSkill(Skill):
     name = "window_action"
+    controls_pc = True
     description = "Minimize, maximize, or close the focused window; show desktop; switch apps."
 
     #: action -> key chord. The v1 jarvis-web mapping was Windows-only —
@@ -267,6 +270,7 @@ class WindowActionSkill(Skill):
 
 class ClipboardSkill(Skill):
     name = "clipboard"
+    controls_pc = True
     description = "Read the clipboard aloud, or copy given text to it."
 
     patterns = [
@@ -314,6 +318,7 @@ class ClipboardSkill(Skill):
 
 class BrightnessSkill(Skill):
     name = "brightness"
+    controls_pc = True
     description = "Set the display brightness (0-100), where supported."
 
     patterns = [
