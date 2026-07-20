@@ -70,6 +70,25 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
 | 8731 | Vision sidecar — MJPEG `/video`, `/frame.jpg`, `POST /pointer` |
 | 11434 | Ollama |
 
+## Performance
+
+Measured on my machine (RTX with 12 GB VRAM, `qwen3:30b` local /
+`llama-3.3-70b-versatile` via Groq). Every routed request appends a row to
+the shared sqlite DB; regenerate this table any time with
+`python -m core.metrics --report`.
+
+<!-- Run `python -m core.metrics --report` after using MEDO for a while and
+     paste its output over the placeholder table below. -->
+
+| Path | Requests | Share | p50 | p95 |
+|------|---------:|------:|----:|----:|
+| FAST | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+| LLM  | _tbd_ | _tbd_ | _tbd_ | _tbd_ |
+
+Reference points from live testing: fast-path skills answer in ~2–15 ms,
+Groq replies land in ~0.5–0.7 s, the warm local 30B in ~7–9 s (first audio
+starts after the first sentence thanks to streaming TTS, ~0.8 s).
+
 ## Configuration
 
 Everything lives in **`config.yaml`** (env-overridable, prefix `MEDO_`,

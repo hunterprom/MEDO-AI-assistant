@@ -36,7 +36,7 @@ from core.config import (
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
 from core.facts import FactsStore
 from core.memory import NoteStore, ReminderStore
-from core.metrics import LatencyLog, TurnTimings
+from core.metrics import LatencyLog, MetricsStore, TurnTimings
 from core.router import Router
 from core.safety import PathWhitelist
 from ui.console import ConsoleUI
@@ -700,7 +700,10 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     registry = build_registry(settings, announcer, summarize, reminders, doc_index)
     bus = EventBus()
     sm = StateMachine(bus)
-    router = Router(settings, registry, llm, bus)
+    # Persist one metrics row per request (path/skill/latency) so
+    # `python -m core.metrics --report` has data across restarts.
+    metrics = MetricsStore(settings.memory.db_path) if settings.logging.routing_stats else None
+    router = Router(settings, registry, llm, bus, metrics=metrics)
     router.model = select_startup_model(llm, settings)
 
     log = LatencyLog()

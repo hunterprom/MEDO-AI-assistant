@@ -76,11 +76,15 @@ class Router:
         registry: SkillRegistry,
         llm: OllamaClient,
         bus: EventBus,
+        metrics: Any = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
         self._llm = llm
         self._bus = bus
+        #: Optional MetricsStore persisting one row per request (main.py wires
+        #: it when logging.routing_stats is on; tests pass None).
+        self._metrics = metrics
         #: Active model for the LLM path; set by the app / model picker.
         self.model: str | None = settings.llm.default_model
         #: Routing tallies for the README.
@@ -131,6 +135,9 @@ class Router:
         result.latency_ms = (time.perf_counter() - started) * 1000.0
 
         self.stats[result.path] += 1
+        if self._metrics is not None:  # persisted for `core.metrics --report`
+            self._metrics.record(result.path.value, result.skill_name,
+                                 result.latency_ms)
         # Remember the turn (unless we're mid-confirmation, where the follow-up is
         # a yes/no that shouldn't pollute conversational context).
         if not self.awaiting_confirmation:
