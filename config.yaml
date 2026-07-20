@@ -101,6 +101,11 @@ vision:                             # camera hand-gesture control (sidecar proce
                                     # "log this part" / "do i have any 10k resistors"
     camera_index: 1                 # opened per request, released immediately —
                                     # never streamed (privacy + VRAM)
+  # Screen agent (EXPERIMENTAL, skills/screen_agent.py): "do this for me: …"
+  # looks at the screen and clicks/types/scrolls toward a goal. Gated by the
+  # PC-control switch AND a spoken confirmation; bounded to agent_max_steps.
+  agent_enabled: true
+  agent_max_steps: 6
   # NOTE: this build is pointer-only — the gesture->utterance map below is no
   # longer routed (kept for reference / future re-enable). Pointer poses:
   #   index=move, pinch=drag/click, victory=scroll, rock=zoom, three=right-click,

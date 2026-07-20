@@ -164,6 +164,10 @@ class VisionConfig(BaseModel):
     cooldown_s: float = 2.0                 # min gap before re-firing a gesture
     pointer: PointerConfig = Field(default_factory=PointerConfig)
     bench: BenchConfig = Field(default_factory=BenchConfig)
+    # Screen agent (skills/screen_agent.py): max actions per task before it
+    # stops itself. Gated by the PC-control switch + a spoken confirmation.
+    agent_enabled: bool = True
+    agent_max_steps: int = 6
     # Recognized gesture -> the utterance routed through the Intent Router.
     gestures: dict[str, str] = Field(
         default_factory=lambda: {

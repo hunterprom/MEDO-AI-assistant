@@ -180,6 +180,12 @@ def build_registry(
     from skills.vision_skill import PointAtSkill
 
     registry.register(PointAtSkill(settings))
+    # Screen agent (experimental): "do this for me: …" clicks/types on screen.
+    # controls_pc + requires_confirmation; after the sensing vision skills so
+    # "what's on my screen" stays a description, not an action.
+    from skills.screen_agent import ScreenAgentSkill
+
+    registry.register(ScreenAgentSkill(settings))
     # Documents RAG before FilesSkill/WebSearch so "search my documents for X"
     # isn't stolen by the filename search or the broad web "search for …".
     if doc_index is not None:
