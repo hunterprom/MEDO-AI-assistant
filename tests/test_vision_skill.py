@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from core.config import Settings
 from skills.base import SkillRequest
 from skills.vision_skill import SeeCameraSkill, _describe
@@ -66,3 +68,56 @@ def test_shrink_downscales_big_images_and_passes_junk_through():
     Image.new("RGB", (640, 480)).save(tiny, format="PNG")
     assert _shrink(tiny.getvalue()) == tiny.getvalue()  # small stays untouched
     assert _shrink(b"not an image") == b"not an image"  # junk passes through
+
+
+# --- M11 deictic pointing ----------------------------------------------------
+
+
+def test_crop_box_centers_and_clamps():
+    from skills.vision_skill import crop_box
+
+    assert crop_box(1280, 720, 2560, 1440) == (1040, 480, 1520, 960)  # centered
+    assert crop_box(0, 0, 2560, 1440) == (0, 0, 480, 480)             # corner
+    assert crop_box(2560, 1440, 2560, 1440) == (2080, 960, 2560, 1440)
+    assert crop_box(50, 50, 320, 240) == (0, 0, 240, 240)  # tiny screen shrinks
+
+
+def test_point_at_patterns_are_anchored():
+    from skills.vision_skill import PointAtSkill
+
+    s = PointAtSkill(_settings_with_dead_ports())
+    for phrase in ("what is this?", "What's this", "what is that",
+                   "what am I pointing at", "what's it under my cursor"):
+        assert s.match(phrase) is not None, phrase
+    # Richer questions stay on the LLM path; bench keeps its Cyrillic trigger.
+    for phrase in ("what is this song", "what is this file about",
+                   "што е ова"):
+        assert s.match(phrase) is None, phrase
+
+
+@pytest.mark.asyncio
+async def test_point_at_crops_around_cursor_and_describes():
+    from PIL import Image
+
+    from skills.base import SkillRequest
+    from skills.vision_skill import PointAtSkill, SkillResult
+
+    seen = {}
+
+    def capture():
+        return Image.new("RGB", (2560, 1440), "white"), (100, 100)
+
+    async def describe(image_b64: str) -> SkillResult:
+        import base64 as b64
+        import io as _io
+
+        img = Image.open(_io.BytesIO(b64.b64decode(image_b64)))
+        seen["size"] = img.size
+        return SkillResult("A settings icon.")
+
+    skill = PointAtSkill(_settings_with_dead_ports(), capture=capture,
+                         describe=describe)
+    r = await skill.execute(SkillRequest(text="what is this?"))
+    assert r.success and r.speech == "A settings icon."
+    assert seen["size"] == (480, 480)          # exactly the cursor crop
+    assert r.data["cursor"] == [100, 100]

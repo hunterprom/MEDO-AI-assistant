@@ -162,6 +162,10 @@ def build_registry(
     registry.register(AppsSkill(apps_table))
     registry.register(SeeCameraSkill(settings))
     registry.register(SeeScreenSkill(settings))
+    # M11 deictic pointing: "what is this?" crops around the mouse cursor.
+    from skills.vision_skill import PointAtSkill
+
+    registry.register(PointAtSkill(settings))
     # Documents RAG before FilesSkill/WebSearch so "search my documents for X"
     # isn't stolen by the filename search or the broad web "search for …".
     if doc_index is not None:

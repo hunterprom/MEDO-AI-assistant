@@ -33,6 +33,25 @@ READ_SCREEN_PROMPT = (
     "This is a computer screen. Read out the main text visible on it, briefly. "
     "If there is no readable text, say so in one short sentence."
 )
+POINT_PROMPT = (
+    "This is a close-up of a computer screen, centered on the user's mouse "
+    "cursor. Tell the user what the cursor is pointing at, in one or two "
+    "short spoken sentences. Plain text."
+)
+
+
+def crop_box(cx: int, cy: int, width: int, height: int,
+             size: int = 480) -> tuple[int, int, int, int]:
+    """Square crop centered on the cursor, clamped inside the screen.
+
+    Near an edge the box slides inward (stays ``size`` wide) rather than
+    shrinking, so the model always gets the same amount of context. Pure —
+    unit-tested without a screen.
+    """
+    size = min(size, width, height)
+    left = max(0, min(cx - size // 2, width - size))
+    top = max(0, min(cy - size // 2, height - size))
+    return left, top, left + size, top + size
 
 
 def _shrink(image_bytes: bytes, max_side: int = 1280) -> bytes:
@@ -189,5 +208,67 @@ class SeeScreenSkill(Skill):
                     },
                     "required": [],
                 },
+            },
+        }
+
+
+class PointAtSkill(Skill):
+    """M11 deictic pointing: "what is this?" looks where the cursor is.
+
+    Crops a square around the current mouse cursor (driven by hand in pointer
+    mode or by the physical mouse — either way the position is the intent),
+    and asks the vision model about JUST that region. The whole-utterance
+    anchor on "what is this/that" keeps richer questions ("what is this song")
+    on the LLM path; "што е ова" stays with see_bench (bench context).
+    """
+
+    name = "what_is_this"
+    description = (
+        "Identify what the mouse cursor is currently pointing at on screen "
+        "(a close-up look at the region around the cursor)."
+    )
+
+    patterns = [
+        re.compile(r"^\s*what(?:'?s|\s+is)\s+(?:this|that)\b[\s?.!]*$", re.IGNORECASE),
+        re.compile(r"\bwhat\s+am\s+i\s+pointing\s+(?:at|to)\b", re.IGNORECASE),
+        re.compile(r"\bwhat(?:'?s|\s+is)\s+(?:this|that|it)\s+(?:under|at|near)\s+"
+                   r"(?:my|the)\s+(?:cursor|mouse|pointer)\b", re.IGNORECASE),
+    ]
+
+    def __init__(self, settings: Settings, capture=None, describe=None) -> None:
+        self._settings = settings
+        self._capture = capture or self._default_capture
+        self._describe = describe or self._default_describe
+
+    @staticmethod
+    def _default_capture():
+        """(full-screen PIL image, cursor xy) — runs in a worker thread."""
+        import pyautogui
+
+        pos = pyautogui.position()
+        return pyautogui.screenshot(), (int(pos.x), int(pos.y))
+
+    async def _default_describe(self, image_b64: str) -> SkillResult:
+        return await _describe(self._settings, image_b64, POINT_PROMPT)
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        try:
+            shot, (cx, cy) = await asyncio.to_thread(self._capture)
+        except Exception as exc:
+            return SkillResult(f"I couldn't capture the screen: {exc}", success=False)
+        crop = shot.crop(crop_box(cx, cy, shot.width, shot.height))
+        buf = io.BytesIO()
+        crop.save(buf, format="PNG")
+        result = await self._describe(base64.b64encode(buf.getvalue()).decode())
+        result.data.setdefault("cursor", [cx, cy])
+        return result
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {"type": "object", "properties": {}, "required": []},
             },
         }
