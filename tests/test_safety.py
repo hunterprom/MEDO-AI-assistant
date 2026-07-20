@@ -45,6 +45,44 @@ def test_negations(word):
     assert not is_affirmative(word)
 
 
+# --- bilingual (Macedonian) confirmation ------------------------------------
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        "да", "може", "секако", "ајде", "важи", "потврди", "потврдувам",
+        "Да.",                      # Whisper punctuation-wraps single words
+        "Да, те молам.",            # punctuation stripped -> "да те молам"
+        "da", "moze", "ajde", "vazi",  # Latin transliterations Whisper emits
+    ],
+)
+def test_macedonian_affirmations(word):
+    assert is_affirmative(word)
+    assert not is_negative(word)
+
+
+@pytest.mark.parametrize(
+    "word",
+    [
+        "не", "откажи", "стоп", "прекини", "немој", "заборави", "не сакам",
+        "Не!", "  не  сакам  ",     # punctuation + messy whitespace
+        "ne", "otkazi",
+    ],
+)
+def test_macedonian_negations(word):
+    assert is_negative(word)
+    assert not is_affirmative(word)
+
+
+@pytest.mark.parametrize("phrase", ["не знам", "ne znam", "maybe", "што?"])
+def test_ambiguous_replies_are_neither(phrase):
+    # Whole-reply matching: "не знам" ("I don't know") contains "не" but must
+    # NOT cancel — unknown answers go back to the router, which won't guess.
+    assert not is_affirmative(phrase)
+    assert not is_negative(phrase)
+
+
 # --- confirmation gate (with a safe dummy skill, never a real action) --------
 class DummyDangerSkill(Skill):
     name = "danger"
@@ -97,3 +135,21 @@ async def test_saying_no_cancels_without_running():
     assert danger.executed is False
     assert r.speech == CANCELLED_REPLY
     assert router.awaiting_confirmation is False
+
+
+@pytest.mark.asyncio
+async def test_confirmation_gate_speaks_macedonian():
+    # End-to-end through the router: "Да." confirms, "не" cancels.
+    danger = DummyDangerSkill()
+    router = make_router(danger)
+    await router.route("self destruct")
+    r = await router.route("Да.")
+    assert danger.executed is True
+    assert router.awaiting_confirmation is False
+
+    danger2 = DummyDangerSkill()
+    router2 = make_router(danger2)
+    await router2.route("self destruct")
+    r2 = await router2.route("не")
+    assert danger2.executed is False
+    assert r2.speech == CANCELLED_REPLY

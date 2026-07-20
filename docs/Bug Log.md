@@ -27,6 +27,7 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 | 18 | Windows volume broken with newer pycaw (`AudioDevice` has no `.Activate`) | 3-way endpoint fallback (session fix, carried over) |
 | 19 | "close browser" killed a nonexistent `browser.exe` | image name derived from the launch command (session fix, carried over) |
 | 20 | Missing Piper voice crashed `--voice` and took the HUD+API down with it | launcher downloads the voice; TTS optional; servers survive voice-stack failure (session fixes, carried over) |
+| 21 | Confirmation gate was English-only — the bilingual assistant could not confirm/cancel destructive actions in Macedonian ("да"/"не" fell through as unknown) | yes/no sets extended with Cyrillic + Whisper's Latin transliterations; replies normalized (lowercase, punctuation stripped, whitespace collapsed) but still matched whole — "не знам" stays ambiguous, never a cancel |
 
 ## Known limitations (open, by design or deferred)
 
