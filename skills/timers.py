@@ -28,9 +28,34 @@ _DURATION_RE = re.compile(
     r"(\d+)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)", re.IGNORECASE
 )
 
+# Whisper (especially large-v3-turbo) transcribes numbers as WORDS — "set a
+# timer for one minute" — which the digit-only regex above never matched, so
+# every spoken timer got "How long should the timer be?". Normalize word
+# numbers to digits before matching.
+_WORD_NUMBERS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "twenty": 20,
+    "twenty five": 25, "thirty": 30, "forty": 40, "forty five": 45,
+    "fifty": 50, "sixty": 60, "ninety": 90,
+}
+_WORD_NUMBER_RE = re.compile(
+    r"\b(" + "|".join(sorted(_WORD_NUMBERS, key=len, reverse=True)) + r")\s+"
+    r"(?=(?:hours?|hrs?|minutes?|mins?|seconds?|secs?)\b)",
+    re.IGNORECASE,
+)
+_HALF_HOUR_RE = re.compile(r"\bhalf\s+(?:an\s+)?hour\b", re.IGNORECASE)
+
 
 def parse_duration(text: str) -> int:
-    """Sum every '<n> <unit>' in ``text`` into total seconds (0 if none)."""
+    """Sum every '<n> <unit>' in ``text`` into total seconds (0 if none).
+
+    Accepts digits and spoken word numbers: "5 minutes", "one minute",
+    "an hour", "forty five seconds", "half an hour".
+    """
+    text = _HALF_HOUR_RE.sub("30 minutes", text)
+    text = _WORD_NUMBER_RE.sub(
+        lambda m: f"{_WORD_NUMBERS[m.group(1).lower()]} ", text)
     total = 0
     for value, unit in _DURATION_RE.findall(text):
         base = unit.lower().rstrip("s")

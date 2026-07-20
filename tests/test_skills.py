@@ -67,6 +67,21 @@ def test_parse_duration():
     assert parse_duration("no numbers here") == 0
 
 
+def test_parse_duration_word_numbers():
+    # Whisper transcribes spoken numbers as words ("one minute"), which used
+    # to fall through to "How long should the timer be?".
+    assert parse_duration("set a timer for one minute") == 60
+    assert parse_duration("remind me in five minutes") == 300
+    assert parse_duration("an hour") == 3600
+    assert parse_duration("a minute") == 60
+    assert parse_duration("forty five seconds") == 45
+    assert parse_duration("twenty five minutes") == 1500
+    assert parse_duration("half an hour") == 1800
+    assert parse_duration("one hour and ten minutes") == 4200
+    # Bare articles without a time unit never count ("a note", "an apple").
+    assert parse_duration("take a note about apples") == 0
+
+
 def test_note_store_crud(tmp_path):
     store = NoteStore(tmp_path / "t.db")
     n = store.add("buy milk")

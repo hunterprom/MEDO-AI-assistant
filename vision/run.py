@@ -139,8 +139,12 @@ def load_api_token(config_path: Path) -> str:
         return ""
 
 
-def _make_video_handler(engine: GestureEngine, cfg: VisionRunConfig):
-    """An HTTP handler: MJPEG stream, latest-frame JPEG, pointer toggle, bench."""
+def _make_video_handler(holder: dict, cfg: VisionRunConfig):
+    """An HTTP handler: MJPEG stream, latest-frame JPEG, pointer toggle, bench.
+
+    ``holder["engine"]`` is read per request (not captured) so the
+    supervision loop in main() can swap in a freshly restarted engine.
+    """
     import time
 
     class Handler(BaseHTTPRequestHandler):
@@ -166,7 +170,7 @@ def _make_video_handler(engine: GestureEngine, cfg: VisionRunConfig):
 
         def do_GET(self):
             if self.path == "/frame.jpg":
-                jpeg = engine.latest_jpeg()
+                jpeg = holder["engine"].latest_jpeg()
                 if not jpeg:
                     self._send_json(503, {"ok": False, "error": "no frame yet"})
                     return
@@ -195,7 +199,7 @@ def _make_video_handler(engine: GestureEngine, cfg: VisionRunConfig):
                 self._send_jpeg(jpeg.tobytes())
                 return
             if self.path == "/pointer":
-                self._send_json(200, {"ok": True, "on": engine.pointer_on()})
+                self._send_json(200, {"ok": True, "on": holder["engine"].pointer_on()})
                 return
             if self.path not in ("/video", "/"):
                 self.send_error(404)
@@ -206,7 +210,7 @@ def _make_video_handler(engine: GestureEngine, cfg: VisionRunConfig):
             self.end_headers()
             try:
                 while True:
-                    jpeg = engine.latest_jpeg()
+                    jpeg = holder["engine"].latest_jpeg()
                     if jpeg:
                         self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
                         self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode())
@@ -232,7 +236,7 @@ def _make_video_handler(engine: GestureEngine, cfg: VisionRunConfig):
                     400, {"ok": False, "error": 'body must be JSON like {"on": true}'}
                 )
                 return
-            state = engine.set_pointer(want)
+            state = holder["engine"].set_pointer(want)
             payload: dict = {"ok": state == want, "on": state}
             if want and not state:
                 payload["error"] = "pointer mode is disabled in config or unavailable"
@@ -273,11 +277,13 @@ def main() -> None:
     if args.api:
         api_url = args.api.rstrip("/")
 
-    engine = GestureEngine(cfg, make_gesture_poster(api_url, load_api_token(Path(args.config))))
+    poster = make_gesture_poster(api_url, load_api_token(Path(args.config)))
+    engine = GestureEngine(cfg, poster)
     engine.start()
+    holder = {"engine": engine}
 
     server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port),
-                                 _make_video_handler(engine, cfg))
+                                 _make_video_handler(holder, cfg))
     Thread(target=server.serve_forever, daemon=True).start()
     logger.info("pointer-only build | camera stream → http://127.0.0.1:%d/video | "
                 "pointer toggle → POST http://127.0.0.1:%d/pointer | companion API %s",
@@ -285,8 +291,23 @@ def main() -> None:
     logger.info("controls: index tip = cursor, thumb+index pinch = left click, "
                 "three fingers = right click, fist = exit pointer (boots OFF)")
 
+    import time
+
     try:
-        engine._thread.join()  # type: ignore[union-attr]
+        while True:
+            engine._thread.join(5.0)  # type: ignore[union-attr]
+            if engine._thread.is_alive():  # type: ignore[union-attr]
+                continue
+            # The capture thread died (camera unplugged, driver hiccup,
+            # MediaPipe error). This used to exit the WHOLE sidecar - the HUD
+            # showed "optical feed offline" until a manual restart. Now the
+            # HTTP server stays up and the engine relaunches itself.
+            logger.warning("gesture engine stopped - restarting in 3 s")
+            time.sleep(3.0)
+            engine.stop()
+            engine = GestureEngine(cfg, poster)
+            engine.start()
+            holder["engine"] = engine
     except KeyboardInterrupt:
         pass
     finally:
