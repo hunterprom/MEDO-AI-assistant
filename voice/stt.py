@@ -118,6 +118,23 @@ def filter_transcript(
     return transcript
 
 
+def pick_forced_language(detected: str | None, allowed: list[str]) -> str | None:
+    """The language to force a re-transcription with, or None to keep the decode.
+
+    Whisper's per-utterance language ID regularly mistakes spoken Macedonian
+    for a neighboring language (Bulgarian/Serbian/Slovenian — or Russian on
+    short clips); the decode then uses the wrong tokenizer context and comes
+    out garbled, which reads as "it doesn't understand complex sentences".
+    For a bilingual assistant the fix is a clamp: when the detected language
+    falls outside ``allowed``, force the first non-English allowed language
+    (English detections are reliable; the misdetections are Slavic-on-Slavic).
+    Empty ``allowed`` disables the clamp. Pure — unit-testable without audio.
+    """
+    if not allowed or detected in allowed:
+        return None
+    return next((lang for lang in allowed if lang != "en"), allowed[0])
+
+
 def build_hotwords(initial_prompt: str) -> str:
     """Extract a hotwords string from an ``initial_prompt``-style sentence.
 
@@ -130,24 +147,65 @@ def build_hotwords(initial_prompt: str) -> str:
     return ", ".join(p for p in phrases if p)
 
 
+def _add_pip_cuda_dll_dirs() -> None:
+    """Make pip-installed NVIDIA runtime wheels loadable on Windows.
+
+    ``nvidia-cublas-cu12`` / ``nvidia-cudnn-cu12`` ship the exact DLLs
+    ctranslate2 needs (cuBLAS 12, cuDNN 9) inside site-packages — but Windows
+    doesn't look there. Register their bin dirs with the DLL loader AND prepend
+    them to PATH (ctranslate2 resolves through PATH), so a plain ``pip install``
+    is enough to turn GPU STT on. No-op when the wheels aren't installed.
+    """
+    import os
+    import site
+    from pathlib import Path
+
+    candidates = []
+    try:
+        candidates += site.getsitepackages()
+    except Exception:
+        pass
+    for base in candidates:
+        for sub in ("nvidia/cublas/bin", "nvidia/cudnn/bin"):
+            p = Path(base) / sub
+            if p.is_dir():
+                try:
+                    os.add_dll_directory(str(p))
+                    os.environ["PATH"] = str(p) + os.pathsep + os.environ.get("PATH", "")
+                except Exception:  # best effort — preflight below stays honest
+                    pass
+
+
 def _cuda_runtime_ok() -> bool:
     """True when CUDA's math libraries are actually loadable, not just the driver.
 
     ``get_cuda_device_count`` succeeds with only the display driver installed,
-    but encoding needs cuBLAS (``cublas64_12.dll``) — its absence surfaces as a
-    RuntimeError on the *first transcription*, which used to freeze a voice
-    session on "PROCESSING". Preflight it so auto-selection is honest.
+    but encoding needs cuBLAS (``cublas64_12.dll``) and the conv layers need
+    cuDNN 9 — their absence surfaces as a RuntimeError on the *first
+    transcription*, which used to freeze a voice session on "PROCESSING".
+    Preflight both so auto-selection is honest. Pip-wheel DLL dirs are
+    registered first, so installing the nvidia wheels is all it takes.
     """
     import ctypes
 
+    _add_pip_cuda_dll_dirs()
     try:
         ctypes.WinDLL("cublas64_12")
-        return True
     except OSError:
-        logger.info("CUDA present but cublas64_12.dll not loadable — using CPU for STT")
+        logger.info("CUDA present but cublas64_12.dll not loadable — using CPU for STT "
+                    "(pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 to enable)")
         return False
     except Exception:
         return True  # non-Windows or unexpected: let ctranslate2 decide
+    try:
+        ctypes.WinDLL("cudnn64_9")
+    except OSError:
+        logger.info("cuBLAS found but cuDNN 9 (cudnn64_9.dll) is not loadable — "
+                    "using CPU for STT (pip install nvidia-cudnn-cu12 to enable)")
+        return False
+    except Exception:
+        return True
+    return True
 
 
 def _resolve_device(device: str, compute_type: str) -> tuple[str, str]:
@@ -178,6 +236,12 @@ class Transcriber:
 
         self._config = config
         self._language = None if config.language in ("", "auto") else config.language
+        # Bilingual clamp for auto-detect (see pick_forced_language).
+        self._allowed = [
+            lang.strip().lower()
+            for lang in getattr(config, "allowed_languages", []) or []
+            if lang.strip()
+        ]
         device, compute_type = _resolve_device(config.device, config.compute_type)
         logger.info(
             "loading faster-whisper %r on %s/%s", config.model, device, compute_type
@@ -248,17 +312,15 @@ class Transcriber:
             )
             return self._transcribe(audio)
 
-    def _transcribe(self, audio: np.ndarray) -> str:
-        if audio.dtype != np.float32:
-            audio = audio.astype(np.float32)
-        audio = self._normalize(audio)
+    def _decode(self, audio: np.ndarray, language: str | None):
+        """One faster-whisper pass; returns (segments_data, detected_language)."""
         c = self._config
         kwargs: dict[str, object] = {}
         if self._hotwords is not None:
             kwargs["hotwords"] = self._hotwords
-        segments, _ = self._model.transcribe(
+        segments, info = self._model.transcribe(
             audio,
-            language=self._language,
+            language=language,
             beam_size=c.beam_size,
             vad_filter=c.vad_filter,
             condition_on_previous_text=c.condition_on_previous_text,
@@ -270,6 +332,24 @@ class Transcriber:
             (seg.text, float(seg.no_speech_prob), float(seg.avg_logprob))
             for seg in segments
         ]
-        if getattr(c, "filter_hallucinations", True):
+        return segments_data, getattr(info, "language", None)
+
+    def _transcribe(self, audio: np.ndarray) -> str:
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+        audio = self._normalize(audio)
+        segments_data, detected = self._decode(audio, self._language)
+        # Auto-detect landed outside the allowed set (e.g. Macedonian heard as
+        # Bulgarian): the decode used the wrong tokenizer context. Redo it with
+        # the language forced — one extra pass, only on misdetection.
+        if self._language is None:
+            forced = pick_forced_language(detected, self._allowed)
+            if forced is not None:
+                logger.info(
+                    "detected language %r not in allowed %s — re-transcribing as %r",
+                    detected, self._allowed, forced,
+                )
+                segments_data, _ = self._decode(audio, forced)
+        if getattr(self._config, "filter_hallucinations", True):
             return filter_transcript(segments_data)
         return " ".join(text.strip() for text, _, _ in segments_data).strip()

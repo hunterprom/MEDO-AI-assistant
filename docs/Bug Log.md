@@ -28,6 +28,7 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 | 19 | "close browser" killed a nonexistent `browser.exe` | image name derived from the launch command (session fix, carried over) |
 | 20 | Missing Piper voice crashed `--voice` and took the HUD+API down with it | launcher downloads the voice; TTS optional; servers survive voice-stack failure (session fixes, carried over) |
 | 21 | Confirmation gate was English-only — the bilingual assistant could not confirm/cancel destructive actions in Macedonian ("да"/"не" fell through as unknown) | yes/no sets extended with Cyrillic + Whisper's Latin transliterations; replies normalized (lowercase, punctuation stripped, whitespace collapsed) but still matched whole — "не знам" stays ambiguous, never a cancel |
+| 22 | Macedonian STT only understood trivial phrases ("Како си?" worked, complex sentences decoded as garbage): Whisper `small` is too weak for mk, auto-detect misheard mk as Bulgarian/Serbian (wrong tokenizer → garbled decode), CUDA math DLLs were missing (CPU int8), and the 1.0 s silence gate cut sentences at mid-thought pauses | `large-v3-turbo` on GPU — pip `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` wheels + DLL-dir registration in stt.py; en/mk detection clamp (one forced re-decode on misdetection); silence gate 1.4 s. A/B on a synthesized complex mk sentence: small → "� micronquax 석고", turbo → the full sentence (decode 1.5 s, warm load 3.1 s) |
 
 ## Known limitations (open, by design or deferred)
 

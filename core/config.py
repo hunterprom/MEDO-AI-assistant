@@ -140,6 +140,11 @@ class STTConfig(BaseModel):
     compute_type: str = "auto"
     # null/None = per-utterance auto-detect (enables Macedonian + English).
     language: str | None = "en"
+    # With auto-detect on, clamp detection to these languages: Whisper often
+    # mistakes spoken Macedonian for Bulgarian/Serbian, which garbles the
+    # decode. Outside-the-set detections are re-transcribed forced to the
+    # first non-English entry. Empty = no clamp.
+    allowed_languages: list[str] = Field(default_factory=list)
     beam_size: int = 5                   # >1 = beam search; more accurate than greedy
     vad_filter: bool = True              # drop non-speech the recorder let through
     condition_on_previous_text: bool = False  # avoids runaway repeats on short clips
