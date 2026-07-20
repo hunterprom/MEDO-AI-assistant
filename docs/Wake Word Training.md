@@ -1,9 +1,25 @@
 # Wake Word Training — "hey MEDO"
 
 How to replace the pretrained **"hey jarvis"** with a custom **"hey MEDO"**
-model. Nothing here is run yet — this is the runbook for when the [[Roadmap]]
-item comes up. The code side is already done: `wakeword.phrase` accepts a
-model path, and the framework (onnx/tflite) is picked by file extension.
+model. The code side is already done: `wakeword.phrase` accepts a model path,
+and the framework (onnx/tflite) is picked by file extension.
+
+## Shortcut: the sample generator
+
+MEDO ships a helper that does the tedious part — synthesizing a **diverse**
+positive sample set (many edge-tts English voices + Piper) so you don't hand
+it to the notebook empty:
+
+```
+.venv\Scripts\python -m voice.train_wakeword --generate
+# -> models/wakeword/samples/*.wav  (16 kHz mono)
+.venv\Scripts\python -m voice.train_wakeword --train    # prints the next steps
+```
+
+Upload those samples to the Colab notebook below (or run its generator with
+`"hey medo"` as the phrase). Then follow steps 4–7. Diversity matters — a
+model trained on one voice overfits, which is why the helper spreads across
+a dozen accents/genders.
 
 ## How openWakeWord training works (the short version)
 

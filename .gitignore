@@ -8,8 +8,13 @@ venv/
 jarvis.db
 # Online API key(s), written by the HUD "connect online model" flow — never commit
 secrets.local.yaml
-# Downloaded STT/TTS/wake-word models (fetched by setup, never committed)
-models/
+# Downloaded STT/TTS/wake-word models (fetched by setup, never committed).
+# models/* (not bare models/) so a re-include below can escape the ignore.
+models/*
+# ...but keep the wake-word folder's README so the path is documented in-repo.
+!models/wakeword/
+models/wakeword/*
+!models/wakeword/README.md
 *.onnx
 *.onnx.json
 .DS_Store
