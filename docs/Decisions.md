@@ -43,6 +43,13 @@ Why the super project is shaped the way it is.
   zero-config startup; `remote.auth_enabled: false` restores the old open API
   (documented as unsafe). Access logging is off so `?token=` never lands in
   the console.
+- **`run_voice` extracted to `voice/loop.py` as `VoiceLoop`.** A ~335-line
+  function in main.py was the one place the modular story collapsed. Pure
+  mechanical move: each phase is a named method (standby / listen /
+  transcribe / route-streaming / speak / barge-in watcher), tuning constants
+  became class attributes, behavior byte-for-byte identical. The audio stack
+  imports stay lazy *inside* `run()` — constructing a VoiceLoop touches no
+  audio deps, so the wiring is testable on machines without them.
 - **Design provenance.** The HUD implements `Medo.dc.html` from the user's
   claude.ai/design handoff zip (the earlier share link had expired; the zip
   in `design/` is the source of truth). `support.js` in the handoff is the
