@@ -460,9 +460,18 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             from core.config import ensure_remote_token
 
             ensure_remote_token(settings)
+        # MEDO Link (M9): restore persisted device manifests so a reboot
+        # doesn't forget the fleet; their tools re-register immediately.
+        from link.registry import LinkRegistry
+
+        link = LinkRegistry(registry, settings.memory.db_path)
+        restored = await asyncio.to_thread(link.load_persisted)
+        if restored:
+            console.print(f"[dim]MEDO Link: {restored} device manifest(s) restored.[/dim]")
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
                               wake_event=wake_event if voice else None,
-                              doc_index=doc_index, mcp_manager=mcp_manager)
+                              doc_index=doc_index, mcp_manager=mcp_manager,
+                              link=link)
         try:
             await remote.start()
         except OSError as exc:

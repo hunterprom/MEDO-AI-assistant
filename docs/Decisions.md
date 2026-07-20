@@ -46,6 +46,18 @@ Why the super project is shaped the way it is.
   instead of thirty skill files. The LLM path gets the same persona as a 2–3
   sentence manner fragment (num_ctx is 4096; no prompt bloat). Swapping
   `style: professional` changes the whole assistant without touching a skill.
+- **MEDO Link: manifest-driven tools + per-capability confirmation, HTTP/WS
+  over MQTT.** A device manifest turns into skills through the SAME registry
+  path built-ins, plugins, and MCP tools use — zero per-device code in MEDO,
+  and the capability description IS the LLM tool description (the device
+  author writes for the model). The safety flag lives per capability, not
+  per device, because the device author knows which commands move motors —
+  flagged ones ride the existing bilingual yes/no gate untouched. HTTP
+  polling + optional websocket instead of MQTT: the API already exists,
+  polling doubles as the liveness heartbeat, and a broker is one more
+  always-on dependency for zero added capability. Offline devices keep
+  their tools registered and say so — a tool that vanishes confuses the
+  model more than one that reports "offline".
 - **Design provenance.** The HUD implements `Medo.dc.html` from the user's
   claude.ai/design handoff zip (the earlier share link had expired; the zip
   in `design/` is the source of truth). `support.js` in the handoff is the

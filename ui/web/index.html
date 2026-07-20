@@ -578,6 +578,12 @@
         <div class="info"><span class="name">File map</span><span class="desc" id="dirs-desc">FOLDER BEACONS ON THE SPHERE · RESCAN AFTER MOVING TO A NEW MACHINE</span></div>
         <button class="btn-sm" id="dirs-rescan">SCAN THIS PC</button>
       </div>
+      <div class="head" style="margin-top:8px">MEDO LINK · DEVICES</div>
+      <div class="setting">
+        <div class="info"><span class="name">Device fleet</span><span class="desc" id="link-desc">EXPERIMENTAL ESP32 / RPI SDK · SEE docs/MEDO Link.md</span></div>
+        <button class="btn-sm" id="link-refresh">REFRESH</button>
+      </div>
+      <div id="link-list"></div>
       <div class="head" style="margin-top:8px">CONNECTED APPS · MCP</div>
       <div class="setting col-layout">
         <div class="info"><span class="name">MCP servers</span><span class="desc" id="mcp-desc">PLUG ANY APP INTO MEDO · LOADING…</span></div>
@@ -638,7 +644,7 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'comms') { scrollChat(); $('draft').focus(); }
-    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadLinkDevices(); }
   }
   $('tab-core').onclick = () => go('core');
   $('tab-comms').onclick = () => go('comms');
@@ -1301,6 +1307,30 @@
       setTimeout(loadDocsStats, 5000);
     } catch { }
   };
+
+  /* ---- MEDO Link device fleet (M9): name, online, capability count ---- */
+  async function loadLinkDevices() {
+    const list = $('link-list');
+    try {
+      const d = await (await fetch(`${API}/link/devices`)).json();
+      list.innerHTML = '';
+      if (!d.devices.length) {
+        $('link-desc').textContent = 'NO DEVICES REGISTERED · EXPERIMENTAL ESP32 / RPI SDK';
+        return;
+      }
+      $('link-desc').textContent = `${d.devices.length} REGISTERED · EXPERIMENTAL`;
+      for (const dev of d.devices) {
+        const row = document.createElement('div');
+        row.className = 'setting';
+        row.innerHTML = '<div class="info"><span class="name"></span><span class="desc"></span></div>';
+        row.querySelector('.name').textContent = dev.name.toUpperCase();
+        row.querySelector('.desc').textContent =
+          `${dev.online ? 'ONLINE' : 'OFFLINE'} · ${dev.capabilities} CAPABILITIES · ${(dev.transport || '').toUpperCase()}`;
+        list.appendChild(row);
+      }
+    } catch { $('link-desc').textContent = 'API OFFLINE'; }
+  }
+  $('link-refresh').onclick = loadLinkDevices;
 
   // File map rescan: GET /dirs walks THIS machine's folders server-side, then
   // the orb rebuilds its beacons in place — no reload, stale dirs from a config

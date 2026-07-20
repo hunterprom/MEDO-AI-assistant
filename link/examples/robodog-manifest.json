@@ -1,0 +1,40 @@
+{
+  "device_id": "robodog",
+  "name": "the robot dog",
+  "description": "ESP32 quadruped. walk_forward and demo_mode physically move it, so they require a spoken yes before dispatch.",
+  "transport": "http_poll",
+  "capabilities": [
+    {
+      "name": "sit",
+      "description": "Make the robot dog sit down. Harmless, stationary.",
+      "fast_patterns": ["\\b(robo)?dog,?\\s+sit\\b", "\\bседни\\s+куче\\b"]
+    },
+    {
+      "name": "stand",
+      "description": "Make the robot dog stand up from sitting. Harmless, stationary.",
+      "fast_patterns": ["\\b(robo)?dog,?\\s+(stand|up)\\b"]
+    },
+    {
+      "name": "walk_forward",
+      "description": "Walk the robot dog forward a number of steps. It PHYSICALLY MOVES - confirm intent before calling.",
+      "params": {
+        "steps": {"type": "integer", "description": "How many steps forward, 1-20."}
+      },
+      "requires_confirmation": true
+    },
+    {
+      "name": "turn",
+      "description": "Turn the robot dog in place.",
+      "params": {
+        "direction": {"type": "string", "enum": ["left", "right"], "description": "Which way to turn."},
+        "degrees": {"type": "integer", "description": "How far to turn, 15-180 degrees."}
+      }
+    },
+    {
+      "name": "demo_mode",
+      "description": "Run the full movement demo routine. It PHYSICALLY MOVES around - confirm intent before calling.",
+      "fast_patterns": ["\\b(robo)?dog,?\\s+demo\\b"],
+      "requires_confirmation": true
+    }
+  ]
+}

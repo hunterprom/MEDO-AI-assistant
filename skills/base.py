@@ -100,6 +100,14 @@ class SkillRegistry:
     def all(self) -> list[Skill]:
         return list(self._skills)
 
+    def unregister(self, name: str) -> bool:
+        """Remove a skill by name (device re-registration). False if absent."""
+        for i, skill in enumerate(self._skills):
+            if skill.name == name:
+                del self._skills[i]
+                return True
+        return False
+
     def get(self, name: str) -> Skill | None:
         return next((s for s in self._skills if s.name == name), None)
 

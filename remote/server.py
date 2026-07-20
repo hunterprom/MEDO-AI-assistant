@@ -142,12 +142,15 @@ class RemoteServer:
         wake_event: threading.Event | None = None,
         doc_index=None,
         mcp_manager=None,
+        link=None,
     ) -> None:
         self._settings = settings
         self._router = router
         self._sm = sm
         # MCP client manager (None when MCP is disabled/unconfigured).
         self._mcp = mcp_manager
+        # MEDO Link device registry (link/registry.py); None disables /link/*.
+        self._link = link
         # When True, a /provider switch writes the key/model to the git-ignored
         # secrets file so it survives a restart. Off by default (and in tests).
         self._persist_secrets = persist_secrets
@@ -196,6 +199,13 @@ class RemoteServer:
         app.router.add_get("/docs/stats", self._handle_docs_stats)
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
         app.router.add_get("/mcp", self._handle_mcp_status)
+        # MEDO Link (M9): manifest-driven device layer. Token-authed like
+        # everything else — LAN devices must present the bearer token.
+        app.router.add_post("/link/register", self._handle_link_register)
+        app.router.add_get("/link/devices", self._handle_link_devices)
+        app.router.add_get("/link/commands/{device_id}", self._handle_link_commands)
+        app.router.add_post("/link/result", self._handle_link_result)
+        app.router.add_get("/link/ws", self._handle_link_ws)
         app.router.add_post("/pair/start", self._handle_pair_start)
         app.router.add_post("/pair/confirm", self._handle_pair_confirm)
         app.router.add_get("/facts", self._handle_facts_list)
@@ -670,6 +680,89 @@ class RemoteServer:
             self._wake_event.set()
         logger.info("interrupt requested (listen=%s)", listen)
         return web.json_response({"ok": True, "listening": listen and self._wake_event is not None})
+
+    # --- MEDO Link (M9): manifest-driven device layer -----------------------
+
+    async def _handle_link_register(self, request: web.Request) -> web.Response:
+        """A device uploads its manifest; capabilities become tools + patterns."""
+        if self._link is None:
+            return _error(503, "MEDO Link is not enabled")
+        try:
+            manifest = await request.json()
+        except ValueError:
+            return _error(400, "body must be the device manifest as JSON")
+        # to_thread: register persists to sqlite.
+        errors = await asyncio.to_thread(self._link.register, manifest)
+        if errors:
+            return web.json_response({"ok": False, "errors": errors}, status=422)
+        return web.json_response({
+            "ok": True,
+            "device_id": manifest["device_id"],
+            "capabilities": len(manifest["capabilities"]),
+        })
+
+    async def _handle_link_devices(self, request: web.Request) -> web.Response:
+        """Registered devices for the HUD: name, online, capability count."""
+        devices = self._link.devices() if self._link is not None else []
+        return web.json_response({"ok": True, "devices": devices})
+
+    async def _handle_link_commands(self, request: web.Request) -> web.Response:
+        """http_poll transport: a device fetches its queued commands (heartbeat)."""
+        if self._link is None:
+            return _error(503, "MEDO Link is not enabled")
+        device_id = request.match_info["device_id"]
+        if not self._link.known(device_id):
+            return _error(404, f"unknown device {device_id!r} — register first")
+        return web.json_response(
+            {"ok": True, "commands": self._link.drain_commands(device_id)})
+
+    async def _handle_link_result(self, request: web.Request) -> web.Response:
+        """A device reports one command's outcome; wakes the waiting dispatch."""
+        if self._link is None:
+            return _error(503, "MEDO Link is not enabled")
+        try:
+            payload = await request.json()
+            device_id = str(payload["device_id"])
+            command_id = str(payload["id"])
+        except (ValueError, KeyError, TypeError):
+            return _error(400, "body must be JSON like {\"device_id\": …, \"id\": …,"
+                               " \"ok\": true, \"message\": \"…\"}")
+        if not self._link.known(device_id):
+            return _error(404, f"unknown device {device_id!r}")
+        matched = self._link.resolve(
+            device_id, command_id,
+            bool(payload.get("ok", True)), str(payload.get("message") or ""))
+        return web.json_response({"ok": True, "matched": matched})
+
+    async def _handle_link_ws(self, request: web.Request) -> web.StreamResponse:
+        """websocket transport: commands pushed down, results come back up.
+
+        ``?device_id=…&token=…`` — the query token matters here because many
+        embedded websocket clients can't set request headers.
+        """
+        if self._link is None:
+            return _error(503, "MEDO Link is not enabled")
+        device_id = request.query.get("device_id", "")
+        if not self._link.known(device_id):
+            return _error(404, f"unknown device {device_id!r} — register first")
+        ws = web.WebSocketResponse(heartbeat=15.0)
+        await ws.prepare(request)
+        self._link.attach_ws(device_id, ws)
+        logger.info("link device %r connected over websocket", device_id)
+        try:
+            async for msg in ws:
+                if msg.type != web.WSMsgType.TEXT:
+                    continue
+                with contextlib.suppress(ValueError, TypeError, KeyError):
+                    data = json.loads(msg.data)
+                    self._link.resolve(
+                        device_id, str(data.get("id")),
+                        bool(data.get("ok", True)),
+                        str(data.get("message") or ""))
+        finally:
+            self._link.detach_ws(device_id)
+            logger.info("link device %r websocket closed", device_id)
+        return ws
 
     async def _handle_facts_list(self, request: web.Request) -> web.Response:
         """Remembered facts for the HUD memory manager."""
