@@ -44,6 +44,11 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 
 ## Known limitations (open, by design or deferred)
 
+- **see_bench** recognition quality depends on lighting and moondream — a
+  1.7 B vision model, not a parts database. Part-number OCR is best-effort:
+  without the Tesseract engine (`winget install UB-Mannheim.TesseractOCR`,
+  needs admin — the silent install was refused a UAC prompt) answers simply
+  omit the markings line.
 - Macedonian replies are **spoken with an English Piper voice** (no mk voice
   exists for Piper). Text in the HUD is correct. → [[Roadmap]]
 - Wake word is pretrained **"hey jarvis"**, not "MEDO". → [[Roadmap]]
