@@ -78,6 +78,8 @@ class VisionRunConfig:
     cooldown_s: float = 2.0
     gestures: dict = field(default_factory=lambda: dict(DEFAULT_GESTURES))
     pointer: PointerRunConfig = field(default_factory=PointerRunConfig)
+    bench_enabled: bool = False         # M10: on-demand 2nd camera (/bench.jpg)
+    bench_index: int = 1
 
 
 def load_config(path: Path) -> tuple[VisionRunConfig, str]:
@@ -99,6 +101,8 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
         min_tracking_confidence=v.get("min_tracking_confidence", 0.5),
         stability_frames=v.get("stability_frames", 6),
         cooldown_s=v.get("cooldown_s", 2.0),
+        bench_enabled=bool((v.get("bench", {}) or {}).get("enabled", False)),
+        bench_index=int((v.get("bench", {}) or {}).get("camera_index", 1)),
         gestures={**DEFAULT_GESTURES, **(v.get("gestures", {}) or {})},
         pointer=PointerRunConfig(
             enabled=bool(p.get("enabled", True)),
@@ -135,8 +139,8 @@ def load_api_token(config_path: Path) -> str:
         return ""
 
 
-def _make_video_handler(engine: GestureEngine):
-    """An HTTP handler: MJPEG stream, latest-frame JPEG, pointer toggle."""
+def _make_video_handler(engine: GestureEngine, cfg: VisionRunConfig):
+    """An HTTP handler: MJPEG stream, latest-frame JPEG, pointer toggle, bench."""
     import time
 
     class Handler(BaseHTTPRequestHandler):
@@ -152,18 +156,43 @@ def _make_video_handler(engine: GestureEngine):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_jpeg(self, jpeg: bytes) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(jpeg)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(jpeg)
+
         def do_GET(self):
             if self.path == "/frame.jpg":
                 jpeg = engine.latest_jpeg()
                 if not jpeg:
                     self._send_json(503, {"ok": False, "error": "no frame yet"})
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "image/jpeg")
-                self.send_header("Content-Length", str(len(jpeg)))
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(jpeg)
+                self._send_jpeg(jpeg)
+                return
+            if self.path == "/bench.jpg":
+                # M10: the bench camera is opened PER REQUEST and released
+                # immediately — never streamed, never in the pointer pipeline.
+                if not cfg.bench_enabled:
+                    self._send_json(409, {"ok": False,
+                                          "error": "bench camera disabled in config"})
+                    return
+                import cv2
+
+                cap = cv2.VideoCapture(cfg.bench_index)
+                ok, frame = cap.read() if cap.isOpened() else (False, None)
+                cap.release()
+                if not ok:
+                    self._send_json(503, {"ok": False,
+                                          "error": "bench camera unavailable"})
+                    return
+                ok, jpeg = cv2.imencode(".jpg", frame)
+                if not ok:
+                    self._send_json(503, {"ok": False, "error": "encode failed"})
+                    return
+                self._send_jpeg(jpeg.tobytes())
                 return
             if self.path == "/pointer":
                 self._send_json(200, {"ok": True, "on": engine.pointer_on()})
@@ -247,7 +276,8 @@ def main() -> None:
     engine = GestureEngine(cfg, make_gesture_poster(api_url, load_api_token(Path(args.config))))
     engine.start()
 
-    server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port), _make_video_handler(engine))
+    server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port),
+                                 _make_video_handler(engine, cfg))
     Thread(target=server.serve_forever, daemon=True).start()
     logger.info("pointer-only build | camera stream → http://127.0.0.1:%d/video | "
                 "pointer toggle → POST http://127.0.0.1:%d/pointer | companion API %s",

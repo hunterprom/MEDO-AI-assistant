@@ -179,6 +179,22 @@ def build_registry(
     registry.register(ScreenshotSkill(shots))
     registry.register(PointerControlSkill(settings.vision.stream_port))
     registry.register(PowerSkill())
+    # Bench camera (M10): on-demand part identification; the sidecar opens
+    # camera 2 per request. Registered late so core skills keep precedence
+    # over its broad "do i have any …" inventory pattern.
+    from skills.bench import BenchInventory, BenchSkill
+
+    bench_embedder = None
+    if settings.memory.embed_model:
+        from core.embeddings import embed_texts as _bench_embed
+
+        _bm, _bh = settings.memory.embed_model, settings.llm.host
+
+        def bench_embedder(texts):  # noqa: E731 - tiny closure over config
+            return _bench_embed(texts, _bm, _bh)
+
+    registry.register(BenchSkill(
+        settings, BenchInventory(settings.memory.db_path, bench_embedder)))
     # Drop-in plugins load after the core skills (which keep fast-path
     # precedence) but BEFORE the broad web skills — otherwise web_search's
     # greedy "search … for …" pattern steals plugin triggers like

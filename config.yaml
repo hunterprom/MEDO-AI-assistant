@@ -88,6 +88,11 @@ vision:                             # camera hand-gesture control (sidecar proce
     volume_interval_ms: 180         # min gap between volume steps while thumbs-up/pinky held
     exit_hold_frames: 18            # frames a fist must HOLD to exit (~1.2 s; brief
                                     # fist misreads while pointing don't kick you out)
+  bench:                            # M10: 2nd workbench camera (skills/bench.py)
+    enabled: false                  # "what's on my bench" / "identify this part" /
+                                    # "log this part" / "do i have any 10k resistors"
+    camera_index: 1                 # opened per request, released immediately —
+                                    # never streamed (privacy + VRAM)
   # NOTE: this build is pointer-only — the gesture->utterance map below is no
   # longer routed (kept for reference / future re-enable). Pointer poses:
   #   index=move, pinch=drag/click, victory=scroll, rock=zoom, three=right-click,
