@@ -12,7 +12,12 @@ Why the super project is shaped the way it is.
 - **ctypes instead of pyautogui in the sidecar.** The sidecar must stay
   dependency-light (numpy<2 pin) and move the cursor 15×/s; pyautogui adds a
   default 0.1 s pause per call and a FAILSAFE corner trap. Raw
-  `SetCursorPos`/`mouse_event` is 30 lines.
+  `SetCursorPos`/`mouse_event` is 30 lines. The same philosophy carried to
+  macOS: `vision/macmouse.py` is raw CoreGraphics via ctypes (CGEvents,
+  CFRelease'd — 15 fps would leak otherwise), with osascript only for
+  volume/media where the HID media keys would need AppKit. pyautogui exists
+  solely as the last-resort `anymouse` backend for other platforms, with its
+  pause and corner trap disabled.
 - **`/sys` instead of extending `/status`.** `/status` does a live Ollama
   round-trip per hit (model listing) and its shape is pinned by the watch app
   and tests. Telemetry is a cached dict refreshed by a background task.
@@ -33,23 +38,6 @@ Why the super project is shaped the way it is.
   level; short-lived connections per op (no cross-thread sharing).
 - **Pointer mode always boots OFF** and turning it on can be refused by
   config — a stray API call must never grab the mouse unasked.
-- **Bearer token + localhost exemption on :8710, not TLS.** The companion API
-  can open files and (via skills) type/control power, so LAN clients now
-  authenticate: a random token generated into git-ignored secrets.local.yaml
-  (`remote.token`), checked constant-time on every request, `?token=` fallback
-  for clients that can't set headers. Full TLS would mean self-signed-cert
-  management on a watch for a LAN-only port — pain without covering any threat
-  this doesn't. 127.0.0.1 is exempt so the HUD and vision sidecar keep
-  zero-config startup; `remote.auth_enabled: false` restores the old open API
-  (documented as unsafe). Access logging is off so `?token=` never lands in
-  the console.
-- **`run_voice` extracted to `voice/loop.py` as `VoiceLoop`.** A ~335-line
-  function in main.py was the one place the modular story collapsed. Pure
-  mechanical move: each phase is a named method (standby / listen /
-  transcribe / route-streaming / speak / barge-in watcher), tuning constants
-  became class attributes, behavior byte-for-byte identical. The audio stack
-  imports stay lazy *inside* `run()` — constructing a VoiceLoop touches no
-  audio deps, so the wiring is testable on machines without them.
 - **Design provenance.** The HUD implements `Medo.dc.html` from the user's
   claude.ai/design handoff zip (the earlier share link had expired; the zip
   in `design/` is the source of truth). `support.js` in the handoff is the
@@ -57,3 +45,32 @@ Why the super project is shaped the way it is.
 - **Deletion protocol.** The two source projects are deleted only after the
   merged app passes tests + live smoke checks, jarvis-web first, the v2
   Downloads folder (the copy source) last.
+- **`run_voice` extracted to `voice/loop.py` as a class, not split into free
+  functions.** The 335-line function shared seven pieces of state through
+  closures (models, barge-in flag, wake event…); as free functions that state
+  would have become parameter soup. `VoiceLoop` names each phase
+  (`_wait_for_wake`, `_capture`, `_run_turn`, `_speak`,
+  `_play_interruptible`) and the phases share state as attributes. Pure
+  mechanical move — same log lines, timings, and error handling; heavy
+  engines still load in `run()`, so constructing the class stays
+  dependency-free for tests. `main.py` drops from ~36 KB to ~21 KB of wiring.
+- **Watch pairing = UDP discovery + a 6-digit code on the PC screen, never a
+  token handout.** Discovery answers "where is MEDO" (name + port — what a
+  LAN scan sees anyway); it must not answer "may I have the token", or M1's
+  auth would be theater. The code flashed on the PC console is the trust
+  anchor: typing it on the watch proves the person can see this machine's
+  screen (same model as Bluetooth/TV pairing). Codes are single-use, expire
+  in 2 minutes, and 5 wrong guesses kill the session — and `/pair/start`
+  deliberately returns no secret, so an unattended spam of it only flashes
+  codes on the owner's screen.
+- **Bearer token + localhost exemption on :8710, not TLS.** The companion API
+  can type, screenshot, and power off the PC, so "no auth by design" had to
+  die. A random token minted into git-ignored `secrets.local.yaml` on first
+  serve stops any LAN device from driving the machine; requests from
+  127.0.0.1 skip it so the HUD and vision sidecar keep zero-config startup.
+  Full TLS was rejected: self-signed certs break the browser HUD and the
+  watch's Dart client for no gain on a home LAN — the port still must never
+  be forwarded. `?token=` is accepted alongside the header for clients that
+  can't set one (EventSource/MJPEG-style embeds); auth fails CLOSED when a
+  LAN request arrives before a token exists. `remote.auth_enabled: false`
+  restores the old behavior, documented as unsafe.

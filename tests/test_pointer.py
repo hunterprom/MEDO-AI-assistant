@@ -91,3 +91,53 @@ def test_scroll_accumulator_direction_and_carry():
     # Hand moving down scrolls down (negative notches).
     acc.reset()
     assert acc.update(0.04) == -2
+
+
+# --- cross-platform mouse backend (vision/mouse.py) ---------------------------
+
+MOUSE_SURFACE = (
+    "screen_size", "move", "click_left", "click_right", "press_left",
+    "release_left", "scroll", "zoom", "volume_up", "volume_down", "play_pause",
+)
+
+
+def test_mouse_dispatcher_exposes_the_full_surface():
+    """Pointer mode must resolve a complete backend on THIS platform.
+
+    winmouse (win32), macmouse (darwin), or anymouse (everything else) — the
+    engine calls all of these; a missing one would crash mid-gesture.
+    """
+    from vision import mouse
+
+    for name in MOUSE_SURFACE:
+        assert callable(getattr(mouse, name)), f"backend lacks {name}()"
+
+
+def test_macmouse_drags_with_dragged_events(monkeypatch):
+    """While the pinch holds the button, moves must be LeftMouseDragged —
+    plain MouseMoved mid-drag makes most apps drop the drag."""
+    import sys
+
+    import pytest as _pytest
+
+    if sys.platform != "darwin":
+        _pytest.skip("macOS backend")
+    from vision import macmouse
+
+    posted: list[int] = []
+    monkeypatch.setattr(
+        macmouse, "_mouse",
+        lambda etype, x, y, button=macmouse._BTN_LEFT: posted.append(etype),
+    )
+    monkeypatch.setattr(macmouse, "_cursor", lambda: macmouse._CGPoint(10, 10))
+    monkeypatch.setattr(macmouse, "_left_down", False)
+
+    macmouse.move(1, 2)
+    macmouse.press_left()
+    macmouse.move(3, 4)
+    macmouse.release_left()
+    macmouse.move(5, 6)
+    assert posted == [
+        macmouse._MOVED, macmouse._LDOWN, macmouse._LDRAG,
+        macmouse._LUP, macmouse._MOVED,
+    ]

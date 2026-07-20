@@ -4,21 +4,19 @@ Each turn records per-stage timings; :class:`LatencyLog` keeps them and computes
 averages against the budgets in the README. Kept separate from the UI so it can be
 unit-tested and queried (``/latency`` in the REPL).
 
-:class:`MetricsStore` additionally persists one row per routed request into the
-shared sqlite database (``jarvis.db`` — no new files), so routing stats survive
-restarts. ``python -m core.metrics --report`` renders them as the markdown
-table in the README's Performance section.
+:class:`MetricsStore` persists one row per routed request (path, skill, latency)
+into the existing assistant sqlite DB, and renders the README's Performance
+table from whatever has accumulated:
+
+    python -m core.metrics --report
 """
 
 from __future__ import annotations
 
-import logging
+import math
 import sqlite3
-import time
 from dataclasses import dataclass
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,116 +71,119 @@ class LatencyLog:
         }
 
 
-# --- persisted routing stats (the README Performance table) -----------------
+# --- persisted routing metrics (README Performance table) --------------------
 
-_SCHEMA = """
+_METRICS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS metrics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts REAL NOT NULL,
+    ts TEXT NOT NULL DEFAULT (datetime('now')),
     path TEXT NOT NULL,
     skill TEXT,
     latency_ms REAL NOT NULL
-);
+)
 """
 
 
-def percentile(values: list[float], pct: float) -> float:
-    """Nearest-rank percentile (0 < pct <= 100). Empty input -> 0.0."""
-    if not values:
+def _percentile(sorted_vals: list[float], q: float) -> float:
+    """Nearest-rank percentile of an ascending list (q in 0..100)."""
+    if not sorted_vals:
         return 0.0
-    ordered = sorted(values)
-    rank = max(1, -(-len(ordered) * pct // 100))  # ceil without math import
-    return ordered[int(rank) - 1]
+    rank = max(1, math.ceil(q / 100 * len(sorted_vals)))
+    return sorted_vals[min(rank, len(sorted_vals)) - 1]
 
 
 class MetricsStore:
-    """Append-only per-request routing log in the shared sqlite database.
+    """One sqlite row per routed request, in the shared assistant DB.
 
-    Same short-lived-connection pattern as the facts store (no cross-thread
-    sharing). A failed write is logged and swallowed — metrics must never
-    break routing.
+    Same idiom as :class:`~core.facts.FactsStore`: short-lived connection per
+    operation, safe to construct anywhere. ``record`` is best-effort — a
+    locked/corrupt DB must never cost a routed reply.
     """
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=10.0)
-        conn.executescript(_SCHEMA)
+        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn.execute(_METRICS_SCHEMA)
         return conn
 
     def record(self, path: str, skill: str | None, latency_ms: float) -> None:
         try:
             with self._connect() as conn:
                 conn.execute(
-                    "INSERT INTO metrics (ts, path, skill, latency_ms)"
-                    " VALUES (?, ?, ?, ?)",
-                    (time.time(), path, skill, float(latency_ms)),
+                    "INSERT INTO metrics (path, skill, latency_ms) VALUES (?, ?, ?)",
+                    (path, skill, float(latency_ms)),
                 )
-        except Exception:
-            logger.debug("could not record metrics row", exc_info=True)
+        except Exception:  # noqa: BLE001 - telemetry must never break routing
+            pass
 
-    def _rows(self) -> list[tuple[str, str | None, float]]:
-        try:
-            with self._connect() as conn:
-                return conn.execute(
-                    "SELECT path, skill, latency_ms FROM metrics"
-                ).fetchall()
-        except Exception:
-            return []
+    def _latencies(self, where: str = "", args: tuple = ()) -> list[float]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT latency_ms FROM metrics {where} ORDER BY latency_ms", args
+            ).fetchall()
+        return [r[0] for r in rows]
 
     def report(self) -> str:
-        """The README Performance table as markdown (or a friendly empty note)."""
-        rows = self._rows()
-        if not rows:
-            # ASCII only: this prints straight to a cp1252 Windows console.
-            return ("No routing stats recorded yet - talk to MEDO for a while, "
-                    "then re-run `python -m core.metrics --report`.")
-        total = len(rows)
-        lines = ["| Path | Requests | Share | p50 | p95 |",
-                 "|------|---------:|------:|----:|----:|"]
+        """The README Performance section as markdown (see --report)."""
+        with self._connect() as conn:
+            per_path = conn.execute(
+                "SELECT path, COUNT(*) FROM metrics GROUP BY path"
+            ).fetchall()
+            top_skills = conn.execute(
+                "SELECT skill, COUNT(*) AS n FROM metrics WHERE skill IS NOT NULL "
+                "GROUP BY skill ORDER BY n DESC, skill LIMIT 10"
+            ).fetchall()
+        total = sum(n for _, n in per_path)
+        if total == 0:
+            return ("No routing metrics recorded yet — talk to MEDO first "
+                    "(logging.routing_stats: true), then re-run this report.")
+
+        counts = dict(per_path)
+        lines = [
+            "| Path | Requests | Share | p50 | p95 |",
+            "|------|---------:|------:|--------:|--------:|",
+        ]
         for path in ("FAST", "LLM"):
-            lat = [r[2] for r in rows if r[0] == path]
-            if not lat:
+            n = counts.get(path, 0)
+            if n == 0:
                 continue
+            lat = self._latencies("WHERE path = ?", (path,))
             lines.append(
-                f"| {path} | {len(lat)} | {len(lat) / total * 100:.0f}% "
-                f"| {percentile(lat, 50):.0f} ms | {percentile(lat, 95):.0f} ms |"
+                f"| {path} | {n} | {n / total * 100:.1f}% "
+                f"| {_percentile(lat, 50):,.0f} ms | {_percentile(lat, 95):,.0f} ms |"
             )
-        by_skill: dict[str, list[float]] = {}
-        for path, skill, latency in rows:
-            if skill:
-                by_skill.setdefault(skill, []).append(latency)
-        if by_skill:
-            top = sorted(by_skill.items(), key=lambda kv: len(kv[1]), reverse=True)
-            lines += ["", "| Skill (top 10) | Requests | p50 |",
-                      "|----------------|---------:|----:|"]
-            for skill, lat in top[:10]:
-                lines.append(
-                    f"| {skill} | {len(lat)} | {percentile(lat, 50):.0f} ms |"
-                )
-        return "\n".join(lines)
+        out = [f"{total} routed request{'s' if total != 1 else ''} measured.", "", *lines]
+
+        if top_skills:
+            out += ["", "Top skills by usage:", "",
+                    "| Skill | Requests | p50 |", "|-------|---------:|--------:|"]
+            for skill, n in top_skills:
+                lat = self._latencies("WHERE skill = ?", (skill,))
+                out.append(f"| {skill} | {n} | {_percentile(lat, 50):,.0f} ms |")
+        return "\n".join(out)
 
 
-def _main() -> None:  # pragma: no cover - thin CLI over report()
+def main() -> None:
+    """``python -m core.metrics --report`` — print the Performance table."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="MEDO routing/latency stats")
+    from core.config import load_settings
+
+    parser = argparse.ArgumentParser(description="MEDO routing metrics")
     parser.add_argument("--report", action="store_true",
-                        help="print the markdown Performance table")
+                        help="print the README Performance table (markdown)")
     parser.add_argument("--db", default=None,
-                        help="sqlite path (default: memory.db_path from config)")
+                        help="database path (default: memory.db_path from config.yaml)")
     args = parser.parse_args()
     if not args.report:
         parser.print_help()
         return
-    db = args.db
-    if db is None:
-        from core.config import load_settings
-
-        db = load_settings().memory.db_path
-    print(MetricsStore(db).report())
+    db_path = args.db or load_settings().memory.db_path
+    print(f"<!-- generated by: python -m core.metrics --report ({db_path}) -->")
+    print(MetricsStore(db_path).report())
 
 
-if __name__ == "__main__":  # pragma: no cover
-    _main()
+if __name__ == "__main__":
+    main()

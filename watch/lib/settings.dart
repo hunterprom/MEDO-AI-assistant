@@ -34,10 +34,8 @@ class AppSettings {
     await prefs.setString(_addressKey, address.trim());
   }
 
-  /// Companion-API bearer token — on the PC it's in secrets.local.yaml
-  /// under `remote.token` (generated on the first `--serve` run). Empty
-  /// means "send none", which only works against pre-auth servers or with
-  /// `remote.auth_enabled: false`.
+  /// Companion-API auth token — `remote.token` from the server's
+  /// secrets.local.yaml. Empty = none sent (works when server auth is off).
   static Future<String> loadToken() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_tokenKey) ?? '';

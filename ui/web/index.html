@@ -114,6 +114,7 @@
   #orbcol { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 0; }
   #orbwrap {
     --orb: clamp(320px, 74vh, 880px);
+    /* barrier rings hug the sphere (1x geometry: 1.045× the orb). */
     position: relative; width: calc(var(--orb) * 1.045); height: calc(var(--orb) * 1.045);
     flex: none; display: flex; align-items: center; justify-content: center;
     margin: calc(var(--orb) * -0.18) 0 calc(var(--orb) * -0.145);
@@ -243,7 +244,7 @@
   #swatches .customwrap .lbl { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: #4a6d94; letter-spacing: .1em; }
 
   /* ---- provider / model controls ---- */
-  .seg { display: inline-flex; border: 1px solid rgba(56,168,255,.3); }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid rgba(56,168,255,.3); }
   .seg button {
     background: rgba(8,18,34,.5); border: none; color: #7fa8cf;
     font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 12px; letter-spacing: .16em;
@@ -534,16 +535,19 @@
       <div class="setting col-layout">
         <div class="info"><span class="name">Brain</span><span class="desc" id="model-desc">ACTIVE BRAIN · VIA OLLAMA</span></div>
         <div class="seg" id="provider-seg">
-          <button data-prov="ollama" class="active">LOCAL · OLLAMA</button>
-          <button data-prov="openai">ONLINE · API</button>
+          <button data-prov="ollama" class="active">OLLAMA</button>
+          <button data-prov="openai">GPT · API</button>
+          <button data-prov="anthropic">CLAUDE · API</button>
+          <button data-prov="claude-code">CLAUDE CODE</button>
+          <button data-prov="codex">CODEX</button>
         </div>
         <div id="online-fields">
           <div class="field">
-            <label>API KEY — stored locally on this machine, never committed</label>
+            <label id="key-label">API KEY — stored locally on this machine, never committed</label>
             <input id="api-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
           </div>
           <div class="field">
-            <label>BASE URL — any OpenAI-compatible API</label>
+            <label id="base-label">BASE URL — any OpenAI-compatible API</label>
             <input id="api-base" type="text" placeholder="https://api.openai.com/v1" autocomplete="off" spellcheck="false" />
           </div>
         </div>
@@ -570,6 +574,18 @@
         <div class="info"><span class="name">Documents index</span><span class="desc" id="docs-desc">ASK ABOUT YOUR FILES · LOADING…</span></div>
         <button class="btn-sm" id="docs-reindex">REINDEX</button>
       </div>
+      <div class="setting">
+        <div class="info"><span class="name">File map</span><span class="desc" id="dirs-desc">FOLDER BEACONS ON THE SPHERE · RESCAN AFTER MOVING TO A NEW MACHINE</span></div>
+        <button class="btn-sm" id="dirs-rescan">SCAN THIS PC</button>
+      </div>
+      <div class="head" style="margin-top:8px">CONNECTED APPS · MCP</div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">MCP servers</span><span class="desc" id="mcp-desc">PLUG ANY APP INTO MEDO · LOADING…</span></div>
+        <div id="mcp-list" class="sr-list"></div>
+        <div id="mcp-hint" style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.06em">
+          ADD SERVERS IN config.yaml → mcp.servers (COMMAND OR URL) · THEIR TOOLS BECOME SKILLS THE BRAIN CAN CALL · DROP-IN PYTHON SKILLS GO IN plugins/
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -580,11 +596,20 @@
   const CFG = __MEDO_CONFIG__;
   const API = `http://${location.hostname}:${CFG.apiPort}`;
   const STREAM = `http://${location.hostname}:${CFG.streamPort}`;
-  /* Companion-API calls carry the injected bearer token — required when the
-     HUD is opened from another LAN device (localhost requests are exempt). */
-  const AUTH_HEADERS = CFG.apiToken ? { 'Authorization': `Bearer ${CFG.apiToken}` } : {};
-  const apiFetch = (url, opts = {}) =>
-    fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...AUTH_HEADERS } });
+
+  // Companion-API auth: attach the injected bearer token to every :8710 fetch.
+  // Only matters when the HUD is opened from another device — localhost
+  // requests are exempt server-side — so all call sites stay untouched.
+  if (CFG.apiToken) {
+    const _fetch = window.fetch.bind(window);
+    window.fetch = (url, opts = {}) => {
+      if (typeof url === 'string' && url.startsWith(API)) {
+        opts.headers = Object.assign({}, opts.headers,
+          { 'Authorization': `Bearer ${CFG.apiToken}` });
+      }
+      return _fetch(url, opts);
+    };
+  }
   const $ = id => document.getElementById(id);
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -613,20 +638,20 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'comms') { scrollChat(); $('draft').focus(); }
-    if (screen === 'config') { loadFacts(); loadDocsStats(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); }
   }
   $('tab-core').onclick = () => go('core');
   $('tab-comms').onclick = () => go('comms');
   $('tab-config').onclick = () => go('config');
   async function triggerWake() {
     try {
-      const r = await apiFetch(`${API}/wake`, { method: 'POST' });
+      const r = await fetch(`${API}/wake`, { method: 'POST' });
       log(r.ok ? 'WAKE (manual)' : 'WAKE — voice mode not running');
     } catch { log('WAKE — API offline'); }
   }
   async function interruptSpeech() {
     try {
-      const r = await apiFetch(`${API}/interrupt`, { method: 'POST' });
+      const r = await fetch(`${API}/interrupt`, { method: 'POST' });
       log(r.ok ? 'INTERRUPT' : 'INTERRUPT failed');
     } catch { log('INTERRUPT — API offline'); }
   }
@@ -763,7 +788,7 @@
     if (!text) return;
     go('comms');
     try {
-      const r = await apiFetch(`${API}/ask`, {
+      const r = await fetch(`${API}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -797,7 +822,7 @@
     const box = $('sr-files');
     box.innerHTML = '<div class="sr-loading">searching files…</div>';
     let results;
-    try { results = ((await (await apiFetch(`${API}/search/files?q=${encodeURIComponent(q)}`)).json()).results) || []; }
+    try { results = ((await (await fetch(`${API}/search/files?q=${encodeURIComponent(q)}`)).json()).results) || []; }
     catch { box.innerHTML = '<div class="sr-loading">file search offline</div>'; return; }
     $('sr-files-count').textContent = `(${results.length})`;
     if (!results.length) { box.innerHTML = '<div class="sr-empty">no matching files or folders</div>'; return; }
@@ -814,14 +839,14 @@
   }
   async function openSearchPath(path) {
     log(`OPEN → ${path}`);
-    try { await apiFetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); }
+    try { await fetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); }
     catch { log('OPEN failed — API offline'); }
   }
   async function runWebSearch(q) {
     const box = $('sr-web');
     box.innerHTML = '<div class="sr-loading">searching the web…</div>';
     let data;
-    try { data = await (await apiFetch(`${API}/search/web?q=${encodeURIComponent(q)}`)).json(); }
+    try { data = await (await fetch(`${API}/search/web?q=${encodeURIComponent(q)}`)).json(); }
     catch { box.innerHTML = '<div class="sr-loading">web search offline</div>'; return; }
     const results = data.results || [];
     $('sr-web-count').textContent = `(${results.length})`;
@@ -846,7 +871,7 @@
   }
   async function pollSys() {
     try {
-      const d = await (await apiFetch(`${API}/sys`)).json();
+      const d = await (await fetch(`${API}/sys`)).json();
       if (typeof d.cpu === 'number') setStat('stat-cpu', `${Math.round(d.cpu)}%`, d.cpu);
       if (d.ram) setStat('stat-ram', `${d.ram.used_gb} GB`, d.ram.percent);
       if (d.gpu) {
@@ -1019,26 +1044,61 @@
   const connectBtn = $('connect-btn');
   let curProvider = 'ollama';
   let firstStatus = true;
-  let keySaved = false;       // is an online API key remembered on this PC?
-  let savedBaseUrl = '';      // the remembered OpenAI-compatible base URL
+  let keySaved = false;        // is an OpenAI-compatible key remembered on this PC?
+  let anthKeySaved = false;    // is a Claude API key remembered on this PC?
+  let savedBaseUrl = '';       // the remembered OpenAI-compatible base URL
+  let savedAnthBaseUrl = '';   // the remembered Claude API base URL
+  let cliAvail = {};           // {'claude-code': bool, 'codex': bool} from /status
 
-  const PLACEHOLDER_RE = /^(loading|no models|connect|api offline|—)/i;
+  /* Five brains. `key` providers show the key/base fields; `hint` providers
+     show install/run guidance instead. */
+  const PROVIDERS = {
+    'ollama': { btn: 'APPLY', hint: 'REQUIRES OLLAMA RUNNING · PULL A MODEL FIRST, e.g. ollama pull llama3.2:3b' },
+    'openai': {
+      btn: 'CONNECT', key: true, keyPh: 'sk-…', basePh: 'https://api.openai.com/v1',
+      keyLabel: 'API KEY — stored locally on this machine, never committed',
+      baseLabel: 'BASE URL — any OpenAI-compatible API (GPT, Groq, …)',
+    },
+    'anthropic': {
+      btn: 'CONNECT', key: true, keyPh: 'sk-ant-…', basePh: 'https://api.anthropic.com',
+      keyLabel: 'CLAUDE API KEY — stored locally on this machine, never committed',
+      baseLabel: 'BASE URL — the Claude API',
+    },
+    'claude-code': { btn: 'APPLY', cli: true, hint: 'RUNS THE LOCAL claude CLI (CLAUDE CODE) — INSTALL: npm i -g @anthropic-ai/claude-code · LOG IN ONCE BY RUNNING claude' },
+    'codex': { btn: 'APPLY', cli: true, hint: 'RUNS THE LOCAL codex CLI (OPENAI CODEX) — INSTALL: npm i -g @openai/codex · LOG IN ONCE BY RUNNING codex' },
+  };
+
+  const PLACEHOLDER_RE = /^(loading|no models|connect|api offline|cli not|—)/i;
 
   function reflectProvider(prov) {
-    curProvider = prov === 'openai' ? 'openai' : 'ollama';
+    curProvider = PROVIDERS[prov] ? prov : 'ollama';
+    const meta = PROVIDERS[curProvider];
     for (const b of providerSeg.querySelectorAll('button')) b.classList.toggle('active', b.dataset.prov === curProvider);
-    onlineFields.classList.toggle('show', curProvider === 'openai');
-    localHint.style.display = curProvider === 'ollama' ? '' : 'none';
-    connectBtn.textContent = curProvider === 'openai' ? 'CONNECT' : 'APPLY';
-    if (curProvider === 'openai') {
-      apiKeyInput.placeholder = keySaved ? '•••••••••• saved on this PC — leave blank to keep' : 'sk-…';
-      if (savedBaseUrl && !apiBaseInput.value) apiBaseInput.value = savedBaseUrl;
+    onlineFields.classList.toggle('show', !!meta.key);
+    localHint.style.display = meta.hint ? '' : 'none';
+    connectBtn.textContent = meta.btn;
+    if (meta.hint) {
+      let hint = meta.hint;
+      if (meta.cli && cliAvail[curProvider] === false) hint = 'NOT DETECTED ON THIS PC · ' + hint;
+      if (meta.cli && cliAvail[curProvider] === true) hint = 'DETECTED ON THIS PC ✓ · ' + hint;
+      localHint.textContent = hint;
+    }
+    if (meta.key) {
+      const saved = curProvider === 'anthropic' ? anthKeySaved : keySaved;
+      $('key-label').textContent = meta.keyLabel;
+      $('base-label').textContent = meta.baseLabel;
+      apiKeyInput.placeholder = saved ? '•••••••••• saved on this PC — leave blank to keep' : meta.keyPh;
+      apiBaseInput.placeholder = meta.basePh;
+      apiBaseInput.value = (curProvider === 'anthropic' ? savedAnthBaseUrl : savedBaseUrl) || '';
     }
   }
   function fillModels(models, active) {
     modelSel.innerHTML = '';
     if (!(models || []).length) {
-      modelSel.innerHTML = `<option>${curProvider === 'openai' ? 'connect to list models' : 'no models — is ollama up?'}</option>`;
+      const empty = PROVIDERS[curProvider].cli ? 'cli not detected — see hint below'
+        : PROVIDERS[curProvider].key ? 'connect to list models'
+        : 'no models — is ollama up?';
+      modelSel.innerHTML = `<option>${empty}</option>`;
       return;
     }
     for (const m of models) {
@@ -1050,14 +1110,19 @@
   }
   async function loadModels() {
     try {
-      const d = await (await apiFetch(`${API}/status`)).json();
+      const d = await (await fetch(`${API}/status`)).json();
       keySaved = !!d.has_api_key;
+      anthKeySaved = !!d.has_anthropic_key;
       savedBaseUrl = d.openai_base_url || '';
-      if (savedBaseUrl && document.activeElement !== apiBaseInput) apiBaseInput.value = savedBaseUrl;
+      savedAnthBaseUrl = d.anthropic_base_url || '';
+      cliAvail = d.cli_available || {};
       if (firstStatus) {
         reflectProvider(d.provider || 'ollama');
-        if (keySaved && (d.provider || 'ollama') === 'openai') { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED'; }
+        const savedNow = curProvider === 'anthropic' ? anthKeySaved : keySaved;
+        if (savedNow && PROVIDERS[curProvider].key) { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED'; }
         firstStatus = false;
+      } else if (PROVIDERS[curProvider].hint) {
+        reflectProvider(curProvider);   // refresh the DETECTED ✓ marker
       }
       if (document.activeElement !== modelSel) fillModels(d.models, d.model);  // don't yank an open dropdown
       $('model-desc').textContent = `ACTIVE BRAIN · ${(d.provider || 'ollama').toUpperCase()}`;
@@ -1066,18 +1131,19 @@
   modelSel.onchange = async () => {
     if (!modelSel.value || PLACEHOLDER_RE.test(modelSel.value)) return;
     try {
-      await apiFetch(`${API}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelSel.value }) });
+      await fetch(`${API}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelSel.value }) });
       log(`MODEL → ${modelSel.value}`);
     } catch { }
   };
   for (const b of providerSeg.querySelectorAll('button')) b.onclick = () => {
     reflectProvider(b.dataset.prov);
     connStatus.className = ''; connStatus.textContent = '';
-    if (curProvider === 'openai' && keySaved) { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED · LEAVE BLANK TO KEEP'; }
+    const saved = curProvider === 'anthropic' ? anthKeySaved : keySaved;
+    if (PROVIDERS[curProvider].key && saved) { connStatus.className = 'ok'; connStatus.textContent = 'KEY REMEMBERED · LEAVE BLANK TO KEEP'; }
   };
   connectBtn.onclick = async () => {
     const body = { provider: curProvider };
-    if (curProvider === 'openai') {
+    if (PROVIDERS[curProvider].key) {
       const key = apiKeyInput.value.trim(), base = apiBaseInput.value.trim();
       if (key) body.api_key = key;
       if (base) body.base_url = base;
@@ -1085,7 +1151,7 @@
     if (modelSel.value && !PLACEHOLDER_RE.test(modelSel.value)) body.model = modelSel.value;
     connStatus.className = ''; connStatus.textContent = 'CONNECTING…';
     try {
-      const r = await apiFetch(`${API}/provider`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await fetch(`${API}/provider`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok || !d.ok) { connStatus.className = 'err'; connStatus.textContent = (d && d.error) || `FAILED (${r.status})`; return; }
       reflectProvider(d.provider);
@@ -1094,19 +1160,57 @@
       connStatus.className = 'ok';
       connStatus.textContent = (d.models && d.models.length)
         ? `CONNECTED · ${d.model || ''}`
-        : (curProvider === 'openai' ? 'SAVED — no models listed (check key / URL)' : 'APPLIED');
+        : (PROVIDERS[curProvider].key ? 'SAVED — no models listed (check key / URL)'
+           : PROVIDERS[curProvider].cli ? 'SAVED — cli not detected (see hint below)'
+           : 'APPLIED');
       apiKeyInput.value = '';   // never leave the key sitting in the DOM
       log(`PROVIDER → ${d.provider}${d.model ? ' · ' + d.model : ''}`);
     } catch { connStatus.className = 'err'; connStatus.textContent = 'API OFFLINE'; }
   };
   loadModels(); setInterval(loadModels, 60000);
 
+  /* ---- MCP connectors (CONFIG tab) ----
+     Read-only status of the servers declared in config.yaml → mcp.servers:
+     connected servers list their tools; failed ones show why. */
+  async function loadMcp() {
+    const list = $('mcp-list'), desc = $('mcp-desc');
+    try {
+      const d = await (await fetch(`${API}/mcp`)).json();
+      const servers = d.servers || [];
+      if (!servers.length) {
+        desc.textContent = d.enabled
+          ? 'PLUG ANY APP INTO MEDO · NO SERVERS CONFIGURED YET'
+          : 'PLUG ANY APP INTO MEDO · DISABLED IN config.yaml';
+        list.innerHTML = '';
+        return;
+      }
+      const connected = servers.filter(s => s.state === 'connected');
+      const toolCount = connected.reduce((n, s) => n + (s.tools || []).length, 0);
+      desc.textContent = `${connected.length}/${servers.length} SERVER(S) CONNECTED · ${toolCount} TOOL(S) AVAILABLE TO THE BRAIN`;
+      list.innerHTML = '';
+      for (const s of servers) {
+        const row = document.createElement('div');
+        const dot = s.state === 'connected' ? '●' : s.state === 'disabled' ? '○' : '✕';
+        const color = s.state === 'connected' ? '#6ee7a8' : s.state === 'disabled' ? '#4a6d94' : '#ff7a6b';
+        const info = s.state === 'connected'
+          ? (s.tools || []).slice(0, 8).join(', ') + ((s.tools || []).length > 8 ? ', …' : '')
+          : (s.error || s.state);
+        row.style.cssText = 'display:flex;gap:10px;align-items:baseline;padding:4px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
+        const b = document.createElement('span'); b.textContent = dot; b.style.color = color;
+        const n = document.createElement('span'); n.textContent = s.name; n.style.color = '#c9e6ff';
+        const t = document.createElement('span'); t.textContent = info; t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        row.append(b, n, t);
+        list.appendChild(row);
+      }
+    } catch { desc.textContent = 'PLUG ANY APP INTO MEDO · API OFFLINE'; }
+  }
+
   /* ---- microphone picker ---- */
   const micSel = $('cfg-mic');
   const MIC_PLACEHOLDER = /^(loading|api offline|no input)/i;
   async function loadMics() {
     try {
-      const d = await (await apiFetch(`${API}/audio/devices`)).json();
+      const d = await (await fetch(`${API}/audio/devices`)).json();
       const devices = d.devices || [];
       if (!devices.length) { micSel.innerHTML = '<option>no input devices</option>'; return; }
       micSel.innerHTML = '';
@@ -1138,7 +1242,7 @@
     if (MIC_PLACEHOLDER.test(micSel.value)) return;
     const device = micSel.value === '__default__' ? null : Number(micSel.value);
     try {
-      await apiFetch(`${API}/audio/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device }) });
+      await fetch(`${API}/audio/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device }) });
       log(`MIC → ${micSel.options[micSel.selectedIndex].textContent}`);
     } catch { }
   };
@@ -1148,7 +1252,7 @@
   const factsList = $('facts-list');
   async function loadFacts() {
     try {
-      const d = await (await apiFetch(`${API}/facts`)).json();
+      const d = await (await fetch(`${API}/facts`)).json();
       const facts = d.facts || [];
       $('facts-desc').textContent =
         `WHAT MEDO KNOWS ABOUT YOU · ${facts.length} FACT${facts.length === 1 ? '' : 'S'}`;
@@ -1160,7 +1264,7 @@
         const x = document.createElement('button'); x.className = 'fact-x'; x.textContent = '✕'; x.title = 'forget this';
         x.onclick = async () => {
           try {
-            await apiFetch(`${API}/facts/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: f.id }) });
+            await fetch(`${API}/facts/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: f.id }) });
             log(`FORGOT · ${f.fact.slice(0, 40)}`);
           } catch { }
           loadFacts();
@@ -1173,7 +1277,7 @@
     const v = $('fact-new').value.trim();
     if (!v) return;
     try {
-      await apiFetch(`${API}/facts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fact: v }) });
+      await fetch(`${API}/facts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fact: v }) });
       $('fact-new').value = '';
       log('REMEMBERED');
     } catch { }
@@ -1184,7 +1288,7 @@
 
   async function loadDocsStats() {
     try {
-      const d = await (await apiFetch(`${API}/docs/stats`)).json();
+      const d = await (await fetch(`${API}/docs/stats`)).json();
       $('docs-desc').textContent = d.enabled
         ? `ASK ABOUT YOUR FILES · ${d.files} FILES · ${d.chunks} PASSAGES INDEXED`
         : 'DISABLED — NO EMBEDDING MODEL';
@@ -1192,10 +1296,30 @@
   }
   $('docs-reindex').onclick = async () => {
     try {
-      await apiFetch(`${API}/docs/reindex`, { method: 'POST' });
+      await fetch(`${API}/docs/reindex`, { method: 'POST' });
       log('DOCUMENT REINDEX STARTED');
       setTimeout(loadDocsStats, 5000);
     } catch { }
+  };
+
+  // File map rescan: GET /dirs walks THIS machine's folders server-side, then
+  // the orb rebuilds its beacons in place — no reload, stale dirs from a config
+  // rendered on another computer are replaced by what actually exists here.
+  let orbApplyDirs = null;            // assigned by initOrb below
+  $('dirs-rescan').onclick = async () => {
+    const desc = $('dirs-desc'), btn = $('dirs-rescan');
+    btn.disabled = true;
+    desc.textContent = 'SCANNING FILE SYSTEM…';
+    try {
+      const d = await (await fetch(`${API}/dirs`)).json();
+      const n = orbApplyDirs ? orbApplyDirs(d.dirs || []) : 0;
+      desc.textContent = `FOLDER BEACONS ON THE SPHERE · ${n} FOLDERS MAPPED FROM THIS PC`;
+      log(`FILE MAP REBUILT · ${n} FOLDERS`);
+    } catch {
+      desc.textContent = 'SCAN FAILED · API OFFLINE';
+      log('FILE MAP SCAN FAILED · API OFFLINE');
+    }
+    btn.disabled = false;
   };
 
   /* ---- the orb: cosmic web (nodes + filaments + dust), from the design ---- */
@@ -1241,27 +1365,36 @@
     // The centre node is the system drive; the rest are appended as evenly-spread
     // beacons (golden-angle spiral) so they never overlap and stay clickable.
     // Each carries {key,label,path}; hovering shows the path, clicking opens it.
-    const DIRS = CFG.dirs || [];
-    const centerDir = DIRS.find(d => d.center);
-    if (centerDir) nodes[0].dir = centerDir;
-    // Primaries and extras get SEPARATE spirals: with one spiral over all ~300
-    // dirs, the 7 labeled folders (first in the array) landed on consecutive
-    // indices = the same latitude, clumped unreadably at the sphere's pole.
-    const prims = DIRS.filter(d => !d.center && d.primary);
-    const extras = DIRS.filter(d => !d.center && !d.primary);
-    prims.forEach((d, i) => {
-      const yy = (i + 0.5) / prims.length * 1.5 - 0.75;     // mid-latitude band, labels stay apart
-      const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
-      const phi = i * 2.399963229;                          // golden angle
-      nodes.push({ x: Math.cos(phi) * rr * 0.78, y: yy * 0.78, z: Math.sin(phi) * rr * 0.78, sz: 11, br: 1, dir: d });
-    });
-    extras.forEach((d, i) => {
-      const yy = 1 - (i + 0.5) / extras.length * 2;         // -1..1 (even spread)
-      const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
-      const phi = i * 2.399963229;
-      const rad = 0.58 + (i % 5) * 0.075;                   // shells so 300 dots don't pile up
-      nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: 6, br: 0.7, dir: d });
-    });
+    // Wrapped in applyDirs() so CONFIG's "SCAN THIS PC" can swap the whole set
+    // live after a rescan (e.g. the config was rendered on another machine).
+    const WEB_NODES = nodes.length;   // cosmic-web nodes; dir beacons are appended after
+    function applyDirs(DIRS) {
+      nodes.length = WEB_NODES;       // drop previous beacons before re-adding
+      delete nodes[0].dir;
+      const centerDir = DIRS.find(d => d.center);
+      if (centerDir) nodes[0].dir = centerDir;
+      // Primaries and extras get SEPARATE spirals: with one spiral over all ~300
+      // dirs, the 7 labeled folders (first in the array) landed on consecutive
+      // indices = the same latitude, clumped unreadably at the sphere's pole.
+      const prims = DIRS.filter(d => !d.center && d.primary);
+      const extras = DIRS.filter(d => !d.center && !d.primary);
+      prims.forEach((d, i) => {
+        const yy = (i + 0.5) / prims.length * 1.5 - 0.75;   // mid-latitude band, labels stay apart
+        const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
+        const phi = i * 2.399963229;                        // golden angle
+        nodes.push({ x: Math.cos(phi) * rr * 0.78, y: yy * 0.78, z: Math.sin(phi) * rr * 0.78, sz: 11, br: 1, dir: d });
+      });
+      extras.forEach((d, i) => {
+        const yy = 1 - (i + 0.5) / extras.length * 2;       // -1..1 (even spread)
+        const rr = Math.sqrt(Math.max(0, 1 - yy * yy));
+        const phi = i * 2.399963229;
+        const rad = 0.58 + (i % 5) * 0.075;                 // shells so 300 dots don't pile up
+        nodes.push({ x: Math.cos(phi) * rr * rad, y: yy * rad, z: Math.sin(phi) * rr * rad, sz: 6, br: 0.7, dir: d });
+      });
+      return DIRS.length;
+    }
+    applyDirs(CFG.dirs || []);
+    orbApplyDirs = applyDirs;         // hand the rebuild hook to the CONFIG tab
     const hotspots = [];   // rebuilt each frame: {x,y,r,key,label,path} in client px
 
     const dust = [];
@@ -1276,18 +1409,71 @@
       z = p.y * sinX + z * cosX;
       return { x, y, z };
     };
-    // Zoom: mouse wheel over the orb (and a gentle bump while hovering it)
-    // smoothly magnifies the sphere so the unlabeled dots spread out and
-    // reveal their folder names. Eased every frame; rotation slows when
-    // zoomed so labels are readable.
+    // Zoom + fly-through: the mouse wheel magnifies the sphere TOWARD THE
+    // CURSOR (the dot you point at stays put while everything spreads around
+    // it), and once zoomed in you can grab-drag to move through the cluster —
+    // the view pans, labels reveal, and dots stay clickable. Zooming back out
+    // glides the view home. Eased every frame; rotation slows when zoomed.
     let zoom = 1, zoomTarget = 1, hoverBump = 0;
+    let panX = 0, panY = 0, panTX = 0, panTY = 0;      // eased + target pan (canvas px)
+    let dragging = false, dragMoved = false, lastMX = 0, lastMY = 0;
+    const clientToCanvas = e => {
+      const r = cv.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (W / r.width), y: (e.clientY - r.top) * (H / r.height) };
+    };
+    const panLimit = z => R * Math.max(0, z - 1) * 1.15;  // can't lose the sphere
     cv.addEventListener('wheel', e => {
       e.preventDefault();
-      zoomTarget = Math.min(3.2, Math.max(1, zoomTarget * (e.deltaY < 0 ? 1.15 : 0.87)));
+      const prev = zoomTarget;
+      zoomTarget = Math.min(4.5, Math.max(1, zoomTarget * (e.deltaY < 0 ? 1.15 : 0.87)));
+      // Anchor the zoom on the cursor: keep the pointed-at spot stationary.
+      const m = clientToCanvas(e), ratio = zoomTarget / prev;
+      panTX = (m.x - cx) - ((m.x - cx) - panTX) * ratio;
+      panTY = (m.y - cy) - ((m.y - cy) - panTY) * ratio;
+      const lim = panLimit(zoomTarget);
+      panTX = Math.max(-lim, Math.min(lim, panTX));
+      panTY = Math.max(-lim, Math.min(lim, panTY));
     }, { passive: false });
     cv.addEventListener('mouseenter', () => { hoverBump = 0.18; });
-    cv.addEventListener('mouseleave', () => { hoverBump = 0; if (zoomTarget < 1.2) zoomTarget = 1; });
-    cv.addEventListener('dblclick', () => { zoomTarget = zoomTarget > 1.4 ? 1 : 2.2; });
+    cv.addEventListener('mouseleave', () => {
+      hoverBump = 0; dragging = false;
+      if (zoomTarget < 1.2) { zoomTarget = 1; panTX = panTY = 0; }
+    });
+    cv.addEventListener('dblclick', () => {
+      if (zoomTarget > 1.4) { zoomTarget = 1; panTX = panTY = 0; }
+      else zoomTarget = 2.2;
+    });
+    cv.addEventListener('mousedown', e => {
+      if (e.button !== 0 || zoomTarget <= 1.05) return;
+      dragging = true; dragMoved = false; lastMX = e.clientX; lastMY = e.clientY;
+    });
+    window.addEventListener('mouseup', () => { dragging = false; });
+
+    // Pre-rendered halo sprite: one radial gradient built once, stamped with
+    // drawImage + globalAlpha — replaces ~350 createRadialGradient calls per
+    // frame (the inner/mid stop alphas keep a ~0.5 ratio across all depths,
+    // so a single sprite is visually identical).
+    const SPR = 64;
+    const sprite = document.createElement('canvas');
+    sprite.width = sprite.height = SPR * 2;
+    {
+      const sc = sprite.getContext('2d');
+      const sg = sc.createRadialGradient(SPR, SPR, 0, SPR, SPR, SPR);
+      sg.addColorStop(0, 'rgba(220,245,255,1)');
+      sg.addColorStop(0.35, 'rgba(90,185,255,0.5)');
+      sg.addColorStop(1, 'rgba(30,90,200,0)');
+      sc.fillStyle = sg; sc.fillRect(0, 0, SPR * 2, SPR * 2);
+    }
+    // Lazily-built alpha→fillStyle tables (256 steps): the dust/filament loops
+    // were allocating ~2700 rgba() strings per frame; a quantized lookup keeps
+    // the exact same colors without the string churn.
+    const styleCache = (r, g, b) => {
+      const tbl = [];
+      return q => tbl[q] || (tbl[q] = `rgba(${r},${g},${b},${(q / 255).toFixed(3)})`);
+    };
+    const dustStyle = styleCache(90, 180, 255);
+    const filNear = styleCache(190, 235, 255), filFar = styleCache(70, 170, 255);
+    const q255 = a => a >= 1 ? 255 : a <= 0 ? 0 : (a * 255) | 0;
 
     let t = 0, last = performance.now(), speed = 1, glow = 1;
     function frame(now) {
@@ -1295,6 +1481,12 @@
       speed += (orbSpeedTarget - speed) * 0.06;   // ease between states
       glow += (orbGlowTarget - glow) * 0.06;
       zoom += (Math.max(zoomTarget, 1 + hoverBump) - zoom) * 0.08;
+      // Glide the pan toward its target, always inside the reachable bubble
+      // for the CURRENT zoom — zooming out therefore pulls the view home.
+      const lim = panLimit(zoom);
+      panX += (Math.max(-lim, Math.min(lim, panTX)) - panX) * 0.12;
+      panY += (Math.max(-lim, Math.min(lim, panTY)) - panY) * 0.12;
+      const ox = cx + panX, oy = cy + panY;       // panned projection centre
       t += dt * speed / (0.4 + 0.6 * zoom);       // rotate slower when zoomed in
       // Skip all drawing while the orb is hidden (COMMS/CONFIG tab): no point
       // animating a full-screen canvas — and hue-rotate — behind another screen.
@@ -1302,12 +1494,12 @@
       const frameDirs = [];   // directory beacons visible this frame (screen coords)
       ctx.clearRect(0, 0, W, H);
       ctx.globalCompositeOperation = 'lighter';
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.22);
+      const g = ctx.createRadialGradient(ox, oy, 0, ox, oy, R * 1.22);
       g.addColorStop(0, `rgba(120,200,255,${0.28 * glow})`);
       g.addColorStop(0.4, `rgba(40,120,230,${0.1 * glow})`);
       g.addColorStop(1, 'rgba(10,40,120,0)');
       ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(cx, cy, R * 1.22, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(ox, oy, R * 1.22, 0, Math.PI * 2); ctx.fill();
       const RZ = R * zoom;   // magnified projection radius (zoom = 1 when idle)
       const ry = t * 0.32, rx = 0.42 + Math.sin(t * 0.09) * 0.22;
       const cosY = Math.cos(ry), sinY = Math.sin(ry), cosX = Math.cos(rx), sinX = Math.sin(rx);
@@ -1315,8 +1507,8 @@
         const q = rot(p, cosY, sinY, cosX, sinX);
         const depth = (q.z + 1.05) / 2.1;
         const a = (0.03 + depth * 0.16) * (0.6 + 0.4 * Math.sin(t * 2 + p.tw)) * glow;
-        ctx.fillStyle = `rgba(90,180,255,${a.toFixed(3)})`;
-        ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, p.sz, p.sz);
+        ctx.fillStyle = dustStyle(q255(a));
+        ctx.fillRect(ox + q.x * RZ, oy + q.y * RZ, p.sz, p.sz);
       }
       for (const p of fil) {
         const q = rot(p, cosY, sinY, cosX, sinX);
@@ -1324,24 +1516,21 @@
         const flick = 0.6 + 0.4 * Math.sin(t * 2.6 + p.tw);
         const a = (0.1 + depth * 0.6) * flick * glow;
         const sz = p.sz * (0.5 + depth * 0.9);
-        ctx.fillStyle = `rgba(${depth > 0.7 ? '190,235,255' : '70,170,255'},${a.toFixed(3)})`;
-        ctx.fillRect(cx + q.x * RZ, cy + q.y * RZ, sz, sz);
+        ctx.fillStyle = (depth > 0.7 ? filNear : filFar)(q255(a));
+        ctx.fillRect(ox + q.x * RZ, oy + q.y * RZ, sz, sz);
       }
       for (let i = 0; i < nodes.length; i++) {
         const p = nodes[i];
         const q = rot(p, cosY, sinY, cosX, sinX);
         const depth = (q.z + 1.05) / 2.1;
-        const px = cx + q.x * RZ, py = cy + q.y * RZ;
+        const px = ox + q.x * RZ, py = oy + q.y * RZ;
         const rad = p.sz * (0.55 + depth * 0.75) * (i === 0 ? 2.6 : 1);
         const pulse = i === 0 ? 0.85 + 0.15 * Math.sin(t * 1.6) : 0.7 + 0.3 * Math.sin(t * 2 + p.sz);
-        const hg = ctx.createRadialGradient(px, py, 0, px, py, rad);
-        hg.addColorStop(0, `rgba(220,245,255,${(p.br * pulse * (0.25 + depth * 0.65) * glow).toFixed(3)})`);
-        hg.addColorStop(0.35, `rgba(90,185,255,${(p.br * pulse * (0.12 + depth * 0.35) * glow).toFixed(3)})`);
-        hg.addColorStop(1, 'rgba(30,90,200,0)');
-        ctx.fillStyle = hg;
-        ctx.beginPath(); ctx.arc(px, py, rad, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = Math.min(1, p.br * pulse * (0.25 + depth * 0.65) * glow);
+        ctx.drawImage(sprite, px - rad, py - rad, rad * 2, rad * 2);
         if (p.dir) frameDirs.push({ px, py, depth, rad, dir: p.dir });
       }
+      ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
 
       // Directory beacons: ring + label on front-facing dots, and register the
@@ -1393,9 +1582,10 @@
     let hoveredDir = null;
     function showTip(h, mx, my) {
       tip.innerHTML =
-        `<span class="k">${h.label}</span> <span class="p"></span>` +
+        `<span class="k"></span> <span class="p"></span>` +
         `<span class="go">CLICK TO OPEN IN FILE EXPLORER</span>`;
-      tip.querySelector('.p').textContent = h.path;   // textContent = no HTML injection
+      tip.querySelector('.k').textContent = h.label;  // textContent = no HTML injection
+      tip.querySelector('.p').textContent = h.path;   // (labels/paths come from disk names)
       tip.style.display = 'block';
       const pad = 14, r = tip.getBoundingClientRect();
       let x = mx + pad, y = my + pad;
@@ -1410,18 +1600,32 @@
       return null;
     }
     cv.addEventListener('mousemove', e => {
+      if (dragging) {
+        // Fly through the cluster: the view follows the grab 1:1.
+        const r = cv.getBoundingClientRect();
+        panTX += (e.clientX - lastMX) * (W / r.width);
+        panTY += (e.clientY - lastMY) * (H / r.height);
+        const lim = panLimit(zoomTarget);
+        panTX = Math.max(-lim, Math.min(lim, panTX));
+        panTY = Math.max(-lim, Math.min(lim, panTY));
+        if (Math.abs(e.clientX - lastMX) + Math.abs(e.clientY - lastMY) > 2) dragMoved = true;
+        lastMX = e.clientX; lastMY = e.clientY;
+        hoveredDir = null; hideTip(); cv.style.cursor = 'grabbing';
+        return;
+      }
       const h = hitTest(e.clientX, e.clientY);
       hoveredDir = h;
       if (h) { showTip(h, e.clientX, e.clientY); cv.style.cursor = 'pointer'; }
-      else { hideTip(); cv.style.cursor = 'default'; }
+      else { hideTip(); cv.style.cursor = zoomTarget > 1.05 ? 'grab' : 'default'; }
     });
     cv.addEventListener('mouseleave', () => { hoveredDir = null; hideTip(); });
     cv.addEventListener('click', async () => {
+      if (dragMoved) { dragMoved = false; return; }   // a drag isn't a click
       if (!hoveredDir) return;
       const h = hoveredDir;
       log(`OPEN → ${h.label} · ${h.path}`);
       try {
-        const r = await apiFetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: h.key }) });
+        const r = await fetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: h.key }) });
         if (!r.ok) log(`OPEN FAILED · ${h.label} (${r.status})`);
       } catch { log('OPEN FAILED · API OFFLINE'); }
     });

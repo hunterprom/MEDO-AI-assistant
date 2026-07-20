@@ -160,18 +160,19 @@ class GestureEngine:
         c = self._config
         min_period = 1.0 / max(1, c.max_fps)
 
-        # Pointer plumbing (camera-thread-local). winmouse is imported lazily so
-        # the engine still runs on machines where user32 is unavailable.
+        # Pointer plumbing (camera-thread-local). The mouse backend is imported
+        # lazily so the engine still runs on machines where no backend works
+        # (vision/mouse.py picks win32/mac/other per platform).
         pcfg = getattr(c, "pointer", None)
         pointer_ready = False
-        winmouse = None
+        mouse = None
         screen_w = screen_h = 0
         if pcfg is not None and getattr(pcfg, "enabled", False):
             try:
-                from vision import winmouse as _winmouse
+                from vision import mouse as _mouse
 
-                screen_w, screen_h = _winmouse.screen_size()
-                winmouse = _winmouse
+                screen_w, screen_h = _mouse.screen_size()
+                mouse = _mouse
                 pointer_ready = screen_w > 0 and screen_h > 0
             except Exception as exc:
                 logger.warning("pointer mode unavailable on this system: %s", exc)
@@ -278,37 +279,37 @@ class GestureEngine:
                         try:
                             if action == DRAG:
                                 if not pinch_down:
-                                    winmouse.press_left()
+                                    mouse.press_left()
                                     pinch_down = True
                                     last_fired, last_utterance = "pinch", "drag / click"
-                                winmouse.move(int(sx), int(sy))
+                                mouse.move(int(sx), int(sy))
                             else:
                                 if pinch_down:
-                                    winmouse.release_left()
+                                    mouse.release_left()
                                     pinch_down = False
                                 if action == MOVE:
-                                    winmouse.move(int(sx), int(sy))
+                                    mouse.move(int(sx), int(sy))
                                 elif action == SCROLL:
                                     n = scroll_acc.update(dy)
                                     if n:
-                                        winmouse.scroll(n)
+                                        mouse.scroll(n)
                                         last_fired, last_utterance = "victory", "scroll"
                                 elif action == ZOOM:
                                     n = zoom_acc.update(dy)
                                     if n:
-                                        winmouse.zoom(n)
+                                        mouse.zoom(n)
                                         last_fired, last_utterance = "rock", "zoom"
                                 elif action == RIGHT_CLICK:
                                     if three_hold.update(True) and click_gate.ready(now):
-                                        winmouse.click_right()
+                                        mouse.click_right()
                                         last_fired, last_utterance = "three", "right click"
                                 elif action == VOLUME_UP:
                                     if vol_up_gate.ready(now):
-                                        winmouse.volume_up()
+                                        mouse.volume_up()
                                         last_fired, last_utterance = "thumbs_up", "volume up"
                                 elif action == VOLUME_DOWN:
                                     if vol_dn_gate.ready(now):
-                                        winmouse.volume_down()
+                                        mouse.volume_down()
                                         last_fired, last_utterance = "open_palm", "volume down"
                                 # action == IDLE: hold the cursor still.
                             # Two-hand gestures: spread = zoom, second thumbs-up
@@ -323,11 +324,11 @@ class GestureEngine:
                                         dspread = 0.0
                                     n = zoom_acc.update(-dspread)  # apart => zoom in
                                     if n:
-                                        winmouse.zoom(n)
+                                        mouse.zoom(n)
                                         last_fired, last_utterance = "two hands", "zoom"
                                 two_spread_prev = spread
                                 if pp_hold.update(sg == THUMBS_UP) and pp_gate.ready(now):
-                                    winmouse.play_pause()
+                                    mouse.play_pause()
                                     last_fired, last_utterance = "second thumbs_up", "play/pause"
                             else:
                                 two_spread_prev = None
@@ -351,7 +352,7 @@ class GestureEngine:
                         # Hand lost: release any held drag and forget motion history.
                         if pinch_down:
                             try:
-                                winmouse.release_left()
+                                mouse.release_left()
                             except Exception:
                                 pass
                             pinch_down = False
@@ -367,7 +368,7 @@ class GestureEngine:
                     if fist_exit:
                         if pinch_down:
                             try:
-                                winmouse.release_left()
+                                mouse.release_left()
                             except Exception:
                                 pass
                             pinch_down = False

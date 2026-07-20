@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.events import AssistantState, EventBus, EventType, StateMachine
-from core.metrics import BUDGETS, LatencyLog, MetricsStore, TurnTimings, percentile
+from core.metrics import BUDGETS, LatencyLog, MetricsStore, TurnTimings, _percentile
 
 
 def test_latency_summary_averages_by_stage_and_path():
@@ -27,57 +27,81 @@ def test_budgets_present():
     assert BUDGETS["llm_spoken_ms"] == 4000.0
 
 
-# --- persisted routing stats + the --report table ---------------------------
+# --- persisted routing metrics + the --report table --------------------------
 
 
-def test_percentile_nearest_rank():
-    assert percentile([], 50) == 0.0
-    assert percentile([7.0], 50) == 7.0
-    assert percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 50) == 5
-    assert percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 95) == 10
-    assert percentile([5, 1, 3], 100) == 5  # unsorted input handled
+def _seeded_store(tmp_path) -> MetricsStore:
+    store = MetricsStore(tmp_path / "metrics-test.db")
+    for ms in (5, 8, 11, 40):                       # 4 fast datetime hits
+        store.record("FAST", "datetime", ms)
+    store.record("FAST", "volume", 3)
+    store.record("LLM", None, 2500)                 # plain chat, no tool
+    store.record("LLM", "weather", 4200)
+    return store
 
 
-def test_metrics_store_report_from_seeded_db(tmp_path):
-    store = MetricsStore(tmp_path / "metrics.db")
-    for latency in (2.0, 4.0, 6.0):
-        store.record("FAST", "datetime", latency)
-    store.record("FAST", "volume", 3.0)
-    store.record("LLM", None, 900.0)
-
-    report = store.report()
-    assert "| FAST | 4 | 80% | 3 ms | 6 ms |" in report  # nearest-rank p50/p95
-    assert "| LLM | 1 | 20% | 900 ms | 900 ms |" in report
-    assert "| datetime | 3 |" in report                  # top skill first
-    assert "| volume | 1 |" in report
+def test_percentiles_nearest_rank():
+    assert _percentile([], 50) == 0.0
+    assert _percentile([1, 2, 3, 4], 50) == 2
+    assert _percentile([1, 2, 3, 4], 95) == 4
+    assert _percentile([7], 95) == 7
 
 
-def test_metrics_store_empty_db_message(tmp_path):
+def test_report_from_seeded_db(tmp_path):
+    report = _seeded_store(tmp_path).report()
+    assert "7 routed requests measured." in report
+    assert "| FAST | 5 | 71.4% |" in report
+    assert "| LLM | 2 | 28.6% |" in report
+    # FAST p50 over [3,5,8,11,40] = 8; p95 = 40 (nearest rank)
+    assert "| 8 ms | 40 ms |" in report
+    # top skills: datetime first (4 hits), then the single-hit ones
+    lines = report.splitlines()
+    assert "| datetime | 4 | 8 ms |" in lines
+    assert lines.index("| datetime | 4 | 8 ms |") < lines.index("| volume | 1 | 3 ms |")
+
+
+def test_report_empty_db_says_so(tmp_path):
     report = MetricsStore(tmp_path / "empty.db").report()
-    assert "No routing stats recorded yet" in report
+    assert "No routing metrics recorded yet" in report
+
+
+def test_record_never_raises_on_bad_db(tmp_path):
+    bad = tmp_path / "not-a-dir" / "x.db"           # parent missing -> connect fails
+    MetricsStore(bad).record("FAST", "datetime", 1.0)  # must not raise
 
 
 @pytest.mark.asyncio
-async def test_router_persists_metrics_row(tmp_path):
+async def test_router_persists_metrics(tmp_path, monkeypatch):
+    """One routed fast-path request lands as one metrics row."""
+    import re
+
     from core.config import load_settings
     from core.router import Router
     from llm.client import OllamaClient
-    from skills.base import SkillRegistry
-    from skills.datetime_skill import DateTimeSkill
+    from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
+    class Hello(Skill):
+        name = "hello"
+        description = "test"
+        patterns = [re.compile(r"\bhello\b", re.IGNORECASE)]
+
+        async def execute(self, request: SkillRequest) -> SkillResult:
+            return SkillResult("hi")
+
+        def tool_schema(self):
+            return {}
+
+    monkeypatch.setenv("MEDO_MEMORY__DB_PATH", str(tmp_path / "router-metrics.db"))
     settings = load_settings()
-    store = MetricsStore(tmp_path / "m.db")
     registry = SkillRegistry()
-    registry.register(DateTimeSkill())
-    router = Router(settings, registry, OllamaClient(settings.llm), EventBus(),
-                    metrics=store)
+    registry.register(Hello())
+    router = Router(settings, registry, OllamaClient(settings.llm), EventBus())
     router.model = None
-    await router.route("what time is it")
+    await router.route("hello there")
 
-    rows = store._rows()
-    assert len(rows) == 1
-    path, skill, latency = rows[0]
-    assert path == "FAST" and skill == "datetime" and latency >= 0
+    report = router.metrics.report()
+    assert "1 routed request measured." in report
+    assert "| hello | 1 |" in report
 
 
 @pytest.mark.asyncio

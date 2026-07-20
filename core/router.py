@@ -20,6 +20,7 @@ from core.config import Settings
 from core.events import Event, EventBus, EventType, RoutePath
 from core.facts import FactsStore
 from core.memory import ConversationMemory
+from core.metrics import MetricsStore
 from core.safety import is_affirmative, is_negative
 from llm.client import LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
@@ -42,6 +43,10 @@ OFFLINE_LLM_REPLY = (
 OFFLINE_CLOUD_REPLY = (
     "I can't reach the cloud model. Check your API key, the base URL, and your "
     "internet connection — or switch back to the local provider."
+)
+OFFLINE_CLI_REPLY = (
+    "I can't reach the {name} command-line agent. Make sure it is installed, "
+    "logged in, and on your PATH — or switch provider in the HUD."
 )
 CANCELLED_REPLY = "Okay, cancelled."
 #: Spoken when the model returns nothing usable (e.g. reasoning truncated mid-think).
@@ -76,19 +81,20 @@ class Router:
         registry: SkillRegistry,
         llm: OllamaClient,
         bus: EventBus,
-        metrics: Any = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
         self._llm = llm
         self._bus = bus
-        #: Optional MetricsStore persisting one row per request (main.py wires
-        #: it when logging.routing_stats is on; tests pass None).
-        self._metrics = metrics
         #: Active model for the LLM path; set by the app / model picker.
         self.model: str | None = settings.llm.default_model
-        #: Routing tallies for the README.
+        #: Routing tallies (this session) + persisted per-request metrics that
+        #: feed the README's Performance table (python -m core.metrics --report).
         self.stats: dict[RoutePath, int] = {RoutePath.FAST: 0, RoutePath.LLM: 0}
+        self.metrics: MetricsStore | None = (
+            MetricsStore(settings.memory.db_path)
+            if settings.logging.routing_stats else None
+        )
         #: A destructive action awaiting a spoken yes/no, if any.
         self._pending: tuple[Skill, SkillRequest] | None = None
         #: Rolling context so follow-ups ("and tomorrow?") resolve.
@@ -135,9 +141,12 @@ class Router:
         result.latency_ms = (time.perf_counter() - started) * 1000.0
 
         self.stats[result.path] += 1
-        if self._metrics is not None:  # persisted for `core.metrics --report`
-            self._metrics.record(result.path.value, result.skill_name,
-                                 result.latency_ms)
+        if self.metrics is not None:
+            # to_thread: a slow disk must never delay the spoken reply's caller.
+            await asyncio.to_thread(
+                self.metrics.record, result.path.value, result.skill_name,
+                result.latency_ms,
+            )
         # Remember the turn (unless we're mid-confirmation, where the follow-up is
         # a yes/no that shouldn't pollute conversational context).
         if not self.awaiting_confirmation:
@@ -209,8 +218,13 @@ class Router:
     @property
     def _offline_reply(self) -> str:
         """The provider-appropriate 'can't reach the model' message."""
-        if self._settings.llm.provider == "openai":
+        provider = self._settings.llm.provider
+        if provider in ("openai", "anthropic"):
             return OFFLINE_CLOUD_REPLY
+        if provider == "claude-code":
+            return OFFLINE_CLI_REPLY.format(name="Claude Code")
+        if provider == "codex":
+            return OFFLINE_CLI_REPLY.format(name="Codex")
         return OFFLINE_LLM_REPLY
 
     async def _llm_reply(
@@ -265,7 +279,7 @@ class Router:
             )
         except LLMUnavailableError as exc:
             logger.warning("LLM path unavailable: %s", exc)
-            return RouteResult(path=RoutePath.LLM, speech=OFFLINE_LLM_REPLY)
+            return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
     async def _run_tool_calls(
         self,

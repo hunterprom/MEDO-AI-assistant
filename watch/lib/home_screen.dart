@@ -60,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _init() async {
     final address = await AppSettings.loadAddress();
-    _client = JarvisClient(address, token: await AppSettings.loadToken());
+    _client = JarvisClient(address, await AppSettings.loadToken());
 
     _speechAvailable = await _speech.initialize(
       onError: _onSpeechError,
@@ -239,7 +239,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
     _client = JarvisClient(
       await AppSettings.loadAddress(),
-      token: await AppSettings.loadToken(),
+      await AppSettings.loadToken(),
     );
     await _reloadGestureSettings();
   }

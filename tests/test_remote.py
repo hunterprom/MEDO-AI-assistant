@@ -1,4 +1,4 @@
-"""Companion API tests: liveness, routing, and bearer-token auth over real HTTP."""
+"""Companion API tests: /ping liveness, /ask routing, and token auth."""
 
 from __future__ import annotations
 
@@ -16,13 +16,9 @@ from remote.server import MAX_TEXT_CHARS, RemoteServer
 from skills.base import SkillRegistry
 from skills.datetime_skill import DateTimeSkill
 
-AUTH_TOKEN = "unit-test-token"
 
-
-def _build_server(*, auth_enabled: bool = True, token: str = "") -> RemoteServer:
+def _make_server() -> RemoteServer:
     settings = load_settings()
-    settings.remote.auth_enabled = auth_enabled
-    settings.remote.token = token
     registry = SkillRegistry()
     registry.register(DateTimeSkill())
     bus = EventBus()
@@ -31,27 +27,26 @@ def _build_server(*, auth_enabled: bool = True, token: str = "") -> RemoteServer
     return RemoteServer(settings, router, StateMachine(bus))
 
 
-async def _start(server: RemoteServer) -> TestClient:
-    test_client = TestClient(TestServer(server.build_app()))
-    await test_client.start_server()
-    return test_client
-
-
 @pytest_asyncio.fixture
 async def client() -> AsyncIterator[TestClient]:
-    # Auth is on with a token set, but TestClient connects from 127.0.0.1 —
-    # so this fixture also exercises the localhost exemption on every test.
-    test_client = await _start(_build_server(token=AUTH_TOKEN))
+    # TestClient connects from 127.0.0.1, so these tests double as proof of
+    # the localhost exemption: auth is on by default and nothing sends a token.
+    server = _make_server()
+    test_client = TestClient(TestServer(server.build_app()))
+    await test_client.start_server()
     yield test_client
     await test_client.close()
 
 
 @pytest_asyncio.fixture
 async def lan_client() -> AsyncIterator[TestClient]:
-    """A client whose requests look like they come from another LAN device."""
-    server = _build_server(token=AUTH_TOKEN)
-    server._peer_is_local = lambda request: False  # not 127.0.0.1
-    test_client = await _start(server)
+    """A client the server treats as a LAN peer (localhost exemption off)."""
+    server = _make_server()
+    server._settings.remote.token = "watch-secret"
+    server._is_local = lambda request: False  # simulate a non-local peer
+    test_client = TestClient(TestServer(server.build_app()))
+    await test_client.start_server()
+    test_client.medo_server = server  # for per-test config tweaks
     yield test_client
     await test_client.close()
 
@@ -94,78 +89,163 @@ async def test_ask_rejects_oversize_text(client: TestClient):
     assert resp.status == 413
 
 
-# --- bearer-token auth (remote.auth_enabled) ---
+# --- token auth (LAN clients) ------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_auth_valid_token_accepted(lan_client: TestClient):
-    resp = await lan_client.post(
-        "/ask",
-        json={"text": "what time is it"},
-        headers={"Authorization": f"Bearer {AUTH_TOKEN}"},
-    )
-    assert resp.status == 200
-    assert (await resp.json())["path"] == "FAST"
-
-
-@pytest.mark.asyncio
-async def test_auth_query_token_fallback(lan_client: TestClient):
-    # For EventSource/MJPEG-style clients that can't set request headers.
-    resp = await lan_client.get(f"/ping?token={AUTH_TOKEN}")
-    assert resp.status == 200
-
-
-@pytest.mark.asyncio
-async def test_auth_missing_token_rejected(lan_client: TestClient):
-    resp = await lan_client.get("/ping")
-    assert resp.status == 401
-    body = await resp.json()
-    assert body["ok"] is False and "token" in body["error"]
-
-
-@pytest.mark.asyncio
-async def test_auth_wrong_token_rejected(lan_client: TestClient):
-    resp = await lan_client.get(
-        "/ping", headers={"Authorization": "Bearer not-the-token"}
-    )
-    assert resp.status == 401
-
-
-@pytest.mark.asyncio
-async def test_auth_preflight_needs_no_token(lan_client: TestClient):
-    # Browsers never attach Authorization to a CORS preflight.
-    resp = await lan_client.options("/ask")
-    assert resp.status == 204
-
-
-@pytest.mark.asyncio
-async def test_auth_localhost_exempt(client: TestClient):
-    # The `client` fixture has auth on + a token set, but connects from
-    # 127.0.0.1 — no token needed (zero-config HUD/sidecar startup).
+async def test_localhost_is_exempt_even_with_token_set(client: TestClient):
+    # `client` sends no token and still gets 200 everywhere — see fixture note.
     resp = await client.get("/ping")
     assert resp.status == 200
 
 
 @pytest.mark.asyncio
-async def test_auth_disabled_restores_open_api():
-    server = _build_server(auth_enabled=False)
-    server._peer_is_local = lambda request: False
-    test_client = await _start(server)
-    try:
-        resp = await test_client.get("/ping")
-        assert resp.status == 200
-    finally:
-        await test_client.close()
+async def test_lan_valid_bearer_token(lan_client: TestClient):
+    resp = await lan_client.get(
+        "/ping", headers={"Authorization": "Bearer watch-secret"}
+    )
+    assert resp.status == 200
+    assert (await resp.json())["ok"] is True
 
 
 @pytest.mark.asyncio
-async def test_auth_fails_closed_without_provisioned_token():
-    # Auth on but no token generated yet -> LAN requests are refused, not let in.
-    server = _build_server(token="")
-    server._peer_is_local = lambda request: False
-    test_client = await _start(server)
-    try:
-        resp = await test_client.get("/ping?token=anything")
+async def test_lan_query_param_token_fallback(lan_client: TestClient):
+    resp = await lan_client.get("/ping?token=watch-secret")
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_lan_missing_token_is_401(lan_client: TestClient):
+    resp = await lan_client.post("/ask", json={"text": "what time is it"})
+    assert resp.status == 401
+    body = await resp.json()
+    assert body["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_lan_wrong_token_is_401(lan_client: TestClient):
+    resp = await lan_client.get(
+        "/ping", headers={"Authorization": "Bearer wrong"}
+    )
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_lan_401_still_carries_cors_headers(lan_client: TestClient):
+    # The browser HUD must be able to read the error cross-origin.
+    resp = await lan_client.get("/ping")
+    assert resp.status == 401
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+@pytest.mark.asyncio
+async def test_lan_no_token_configured_fails_closed(lan_client: TestClient):
+    lan_client.medo_server._settings.remote.token = ""
+    resp = await lan_client.get("/ping")
+    assert resp.status == 401
+
+
+@pytest.mark.asyncio
+async def test_auth_disabled_restores_open_behavior(lan_client: TestClient):
+    lan_client.medo_server._settings.remote.auth_enabled = False
+    resp = await lan_client.get("/ping")
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_options_preflight_never_needs_token(lan_client: TestClient):
+    # Browsers strip Authorization from CORS preflights; a 401 here would
+    # block every cross-origin call even with a valid token.
+    resp = await lan_client.options("/ask")
+    assert resp.status == 204
+
+
+# --- watch pairing -------------------------------------------------------
+
+
+async def _start_pairing(lan_client: TestClient) -> str:
+    """Kick off pairing and return the code the PC screen would show."""
+    resp = await lan_client.post("/pair/start")
+    assert resp.status == 200
+    return lan_client.medo_server._pair["code"]
+
+
+@pytest.mark.asyncio
+async def test_pairing_is_reachable_without_a_token(lan_client: TestClient):
+    # The whole point: a not-yet-paired watch has no token.
+    resp = await lan_client.post("/pair/start")
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["ok"] is True and "token" not in body  # code goes to the PC only
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_right_code_returns_token(lan_client: TestClient):
+    code = await _start_pairing(lan_client)
+    resp = await lan_client.post("/pair/confirm", json={"code": code})
+    assert resp.status == 200
+    assert (await resp.json())["token"] == "watch-secret"
+    # single use: the same code can't be redeemed twice
+    resp = await lan_client.post("/pair/confirm", json={"code": code})
+    assert resp.status == 409
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_wrong_code_401_then_lockout(lan_client: TestClient):
+    code = await _start_pairing(lan_client)
+    for _ in range(5):
+        resp = await lan_client.post("/pair/confirm", json={"code": "000000"})
         assert resp.status == 401
-    finally:
-        await test_client.close()
+    resp = await lan_client.post("/pair/confirm", json={"code": code})
+    assert resp.status == 429  # brute-forced session is dead, even with the code
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_expired_code(lan_client: TestClient):
+    await _start_pairing(lan_client)
+    lan_client.medo_server._pair["expires"] = 0.0  # long past
+    resp = await lan_client.post("/pair/confirm", json={"code": "123456"})
+    assert resp.status == 410
+
+
+@pytest.mark.asyncio
+async def test_pair_confirm_without_start_is_409(lan_client: TestClient):
+    resp = await lan_client.post("/pair/confirm", json={"code": "123456"})
+    assert resp.status == 409
+
+
+def test_discovery_protocol_answers_probe():
+    from remote.server import DISCOVERY_PROBE, _DiscoveryProtocol
+
+    sent: list[tuple[bytes, tuple]] = []
+
+    class _FakeTransport:
+        def sendto(self, data: bytes, addr) -> None:
+            sent.append((data, addr))
+
+    proto = _DiscoveryProtocol("MEDO", 8710)
+    proto.connection_made(_FakeTransport())
+    proto.datagram_received(b"garbage", ("10.0.0.9", 5000))
+    assert sent == []  # ignores anything but the probe
+    proto.datagram_received(DISCOVERY_PROBE, ("10.0.0.9", 5000))
+    assert len(sent) == 1
+    import json
+
+    payload = json.loads(sent[0][0])
+    assert payload == {"service": "medo", "name": "MEDO", "port": 8710}
+    assert sent[0][1] == ("10.0.0.9", 5000)
+
+
+def test_ensure_remote_token_mints_once_and_persists(tmp_path):
+    from core.config import apply_local_secrets, ensure_remote_token
+
+    secrets_file = tmp_path / "secrets.local.yaml"
+    settings = load_settings()
+    token = ensure_remote_token(settings, secrets_file)
+    assert token and settings.remote.token == token
+    # Second run (fresh settings) loads the same token instead of minting.
+    again = load_settings()
+    assert ensure_remote_token(again, secrets_file) == token
+    # And the normal startup overlay picks it up too.
+    overlaid = apply_local_secrets(load_settings(), secrets_file)
+    assert overlaid.remote.token == token

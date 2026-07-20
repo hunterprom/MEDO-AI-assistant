@@ -50,14 +50,14 @@ class JarvisException implements Exception {
 }
 
 class JarvisClient {
-  JarvisClient(this.address, {this.token = ''});
+  JarvisClient(this.address, [this.token = '']);
 
   /// `host:port` of the machine running `python main.py --serve`.
   final String address;
 
-  /// Bearer token for the companion API. The watch is a LAN client, so the
-  /// server requires it (localhost exemption doesn't apply here). Copied
-  /// from `secrets.local.yaml` → `remote.token` on the PC.
+  /// Bearer token for the companion API (`remote.token` in the server's
+  /// secrets.local.yaml). Empty = send nothing; the server only demands it
+  /// from LAN clients when auth is enabled.
   final String token;
 
   static const _pingTimeout = Duration(seconds: 3);
@@ -66,8 +66,8 @@ class JarvisClient {
   Uri _uri(String path) => Uri.parse('http://$address$path');
 
   Map<String, String> _headers([Map<String, String> extra = const {}]) => {
-        ...extra,
         if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+        ...extra,
       };
 
   /// Returns the assistant's name if the server is reachable.
@@ -92,6 +92,27 @@ class JarvisClient {
     return JarvisReply.fromJson(body);
   }
 
+  /// Ask the server to show a pairing code on its own screen.
+  Future<void> pairStart() async {
+    await _request(
+      () => http.post(_uri('/pair/start')).timeout(_pingTimeout),
+    );
+  }
+
+  /// Exchange the code the user read off the PC for the API token.
+  Future<String> pairConfirm(String code) async {
+    final body = await _request(
+      () => http
+          .post(
+            _uri('/pair/confirm'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'code': code}),
+          )
+          .timeout(_pingTimeout),
+    );
+    return body['token'] as String? ?? '';
+  }
+
   Future<Map<String, dynamic>> _request(
     Future<http.Response> Function() send,
   ) async {
@@ -108,10 +129,6 @@ class JarvisClient {
       body = jsonDecode(response.body) as Map<String, dynamic>;
     } catch (_) {
       throw JarvisException('Unexpected reply from $address.');
-    }
-    if (response.statusCode == 401) {
-      // Auth is on and our token is missing/wrong — point at the fix.
-      throw const JarvisException('Token rejected — set it in Settings.');
     }
     if (response.statusCode != 200) {
       throw JarvisException(

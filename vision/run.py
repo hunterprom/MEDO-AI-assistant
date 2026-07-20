@@ -81,7 +81,7 @@ class VisionRunConfig:
 
 
 def load_config(path: Path) -> tuple[VisionRunConfig, str]:
-    """Read config.yaml (+ the API token). Returns (config, api_url, token)."""
+    """Read the vision + remote sections from config.yaml. Returns (config, api_url)."""
     import yaml
 
     data = yaml.safe_load(path.read_text()) if path.exists() else {}
@@ -113,17 +113,24 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
     host = r.get("host", "127.0.0.1")
     host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     api_url = f"http://{host}:{r.get('port', 8710)}"
-    # The API bearer token lives in git-ignored secrets.local.yaml. Requests to
-    # 127.0.0.1 are auth-exempt, but a --api override may point elsewhere.
-    token = ""
+    return cfg, api_url
+
+
+def load_api_token(config_path: Path) -> str:
+    """Companion-API auth token from secrets.local.yaml (next to config.yaml).
+
+    Localhost requests are exempt server-side, so a missing token (e.g. the
+    sidecar started before MEDO's first serve minted one) is not an error —
+    it only matters when --api points at another machine.
+    """
+    import yaml
+
+    path = config_path.parent / "secrets.local.yaml"
     try:
-        sec = path.parent / "secrets.local.yaml"
-        if sec.exists():
-            data = yaml.safe_load(sec.read_text(encoding="utf-8")) or {}
-            token = str((data.get("remote") or {}).get("token") or "")
+        data = yaml.safe_load(path.read_text()) if path.exists() else {}
+        return str((data.get("remote", {}) or {}).get("token") or "")
     except Exception:
-        token = ""
-    return cfg, api_url, token
+        return ""
 
 
 def _make_video_handler(engine: GestureEngine):
@@ -206,12 +213,11 @@ def _make_video_handler(engine: GestureEngine):
 def make_gesture_poster(api_url: str, token: str = ""):
     """A gesture handler that POSTs the mapped utterance to the companion API."""
 
-    headers = {"Content-Type": "application/json"}
-    if token:  # 127.0.0.1 is auth-exempt, but a --api override may not be
-        headers["Authorization"] = f"Bearer {token}"
-
     def handler(gesture: str, utterance: str) -> None:
         payload = json.dumps({"text": utterance}).encode()
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         req = urllib.request.Request(
             f"{api_url}/ask", data=payload, headers=headers, method="POST",
         )
@@ -232,11 +238,11 @@ def main() -> None:
     parser.add_argument("--api", default=None, help="override companion API URL")
     args = parser.parse_args()
 
-    cfg, api_url, token = load_config(Path(args.config))
+    cfg, api_url = load_config(Path(args.config))
     if args.api:
         api_url = args.api.rstrip("/")
 
-    engine = GestureEngine(cfg, make_gesture_poster(api_url, token))
+    engine = GestureEngine(cfg, make_gesture_poster(api_url, load_api_token(Path(args.config))))
     engine.start()
 
     server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port), _make_video_handler(engine))

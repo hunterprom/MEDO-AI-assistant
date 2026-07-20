@@ -19,23 +19,20 @@ from pathlib import Path
 
 from core.config import expand_path
 
-# Kept small and unambiguous; matched against the WHOLE normalized reply, never
-# by substring — "не знам" ("I don't know") contains "не" but must not cancel.
-# Unknown replies fall through to the router, which refuses to guess with a
-# destructive action pending. Macedonian entries cover both Cyrillic and the
+# Kept small and unambiguous; matched against the WHOLE normalized reply —
+# never substrings, so "не знам" ("I don't know") is neither yes nor no and
+# the router just asks again. Macedonian entries cover both Cyrillic and the
 # Latin transliterations Whisper sometimes produces for spoken Macedonian.
 _AFFIRMATIVE = {
-    # English
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "confirmed",
     "do it", "go ahead", "affirmative", "please do", "yes please",
     # Macedonian (Cyrillic)
     "да", "може", "секако", "ајде", "важи", "потврди", "потврдувам",
     "да те молам",
-    # Latin transliterations
+    # Latin transliterations (Whisper occasionally latinizes Macedonian)
     "da", "moze", "ajde", "vazi",
 }
 _NEGATIVE = {
-    # English
     "no", "nope", "nah", "cancel", "stop", "don't", "dont", "abort", "never mind",
     "nevermind", "negative", "no thanks",
     # Macedonian (Cyrillic)
@@ -44,14 +41,13 @@ _NEGATIVE = {
     "ne", "otkazi",
 }
 
-# Whisper wraps single-word confirmations in punctuation ("Да.", "не!", "ok,")
-# and sometimes doubles spaces. Apostrophes are NOT stripped ("don't").
-_PUNCT = re.compile(r"[.!,?…;:]+")
+# Whisper decorates short utterances ("Да.", "не,") — strip punctuation and
+# collapse whitespace before matching. Apostrophes survive ("don't").
+_PUNCT = re.compile(r"[.!,?…]+")
 _SPACES = re.compile(r"\s+")
 
 
 def _normalize(text: str) -> str:
-    """Lowercase, drop punctuation, collapse whitespace — Whisper-proofing."""
     return _SPACES.sub(" ", _PUNCT.sub(" ", text.lower())).strip()
 
 

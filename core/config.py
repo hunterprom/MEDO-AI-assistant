@@ -31,7 +31,14 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 SECRETS_PATH = PROJECT_ROOT / "secrets.local.yaml"
 
 # Only these LLM fields may be persisted to / loaded from the secrets file.
-_SECRET_LLM_FIELDS = ("provider", "api_key", "openai_base_url", "default_model")
+_SECRET_LLM_FIELDS = (
+    "provider",
+    "api_key",
+    "openai_base_url",
+    "anthropic_api_key",
+    "anthropic_base_url",
+    "default_model",
+)
 
 
 def expand_path(path: str | Path) -> Path:
@@ -40,10 +47,24 @@ def expand_path(path: str | Path) -> Path:
 
 
 class LLMConfig(BaseModel):
-    provider: Literal["ollama", "openai"] = "ollama"
+    # ollama       — local Ollama server
+    # openai       — any OpenAI-compatible cloud API (GPT, Groq, …)
+    # anthropic    — the Claude API (api.anthropic.com)
+    # claude-code  — the locally installed `claude` CLI agent (Claude Code)
+    # codex        — the locally installed `codex` CLI agent (OpenAI Codex)
+    provider: Literal["ollama", "openai", "anthropic", "claude-code", "codex"] = "ollama"
     host: str = "http://localhost:11434"
     api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
+    # Claude API: separate key so switching between GPT and Claude keeps both.
+    anthropic_api_key: str = ""
+    anthropic_base_url: str = "https://api.anthropic.com"
+    # Claude's /v1/messages requires an output cap (also a sane spoken-reply cap).
+    anthropic_max_tokens: int = 1024
+    # CLI agents: the executable to run (absolute path or on $PATH).
+    claude_cmd: str = "claude"
+    codex_cmd: str = "codex"
+    cli_timeout_s: float = 180.0
     default_model: str | None = None
     fallback_model: str = "llama3.2:3b"
     temperature: float = 0.6
@@ -68,14 +89,16 @@ class RemoteConfig(BaseModel):
     enabled: bool = False
     host: str = "0.0.0.0"
     port: int = 8710
-    # Bearer-token auth for LAN clients (watch app, other devices). Requests
-    # from 127.0.0.1 always skip it so the HUD and vision sidecar keep their
-    # zero-config startup. False restores the old open API — unsafe.
+    # Bearer-token auth for LAN clients (localhost is always exempt so the HUD
+    # keeps its zero-config startup). False restores the old open behavior —
+    # documented as unsafe outside a trusted network.
     auth_enabled: bool = True
-    # The token itself never lives in config.yaml: it is generated on the
-    # first --serve run and stored in git-ignored secrets.local.yaml
-    # (remote.token). Populated at runtime by ensure_remote_token().
+    # The token itself never lives in config.yaml (committed); it is generated
+    # on first serve and persisted to the git-ignored secrets.local.yaml.
     token: str = ""
+    # Answer UDP "who is MEDO?" broadcasts so the watch app can find this
+    # machine and start pairing without typing an IP (same port, UDP).
+    discovery_enabled: bool = True
 
 
 class PointerConfig(BaseModel):
@@ -217,6 +240,30 @@ class MemoryConfig(BaseModel):
     embed_model: str = "nomic-embed-text"
 
 
+class MCPServerConfig(BaseModel):
+    """One MCP server MEDO connects to (see core/mcp.py).
+
+    Two transports: a local process (``command`` + ``args``, stdio) or a remote
+    endpoint (``url``, Streamable HTTP/SSE). Exactly one of command/url should
+    be set; each of the server's tools becomes a MEDO skill the LLM can call.
+    """
+
+    enabled: bool = True
+    command: str = ""                   # e.g. "npx" (stdio transport)
+    args: list[str] = Field(default_factory=list)  # e.g. ["-y", "@modelcontextprotocol/server-filesystem", "~"]
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""                       # e.g. "http://localhost:3000/mcp" (HTTP transport)
+
+
+class MCPConfig(BaseModel):
+    """Model Context Protocol client — connect any app that speaks MCP."""
+
+    enabled: bool = True
+    connect_timeout_s: float = 15.0
+    call_timeout_s: float = 60.0
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+
+
 class RoutineItem(BaseModel):
     """One proactive routine (see core/routines.py)."""
 
@@ -258,6 +305,7 @@ class Settings(BaseSettings):
     news: NewsConfig = Field(default_factory=NewsConfig)
     vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
     routines: list[RoutineItem] = Field(default_factory=list)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
@@ -353,9 +401,8 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
     if "input_device" in audio:  # may be int, name, or None (= system default)
         settings.audio.input_device = audio["input_device"]
     remote = data.get("remote", {}) or {}
-    token = remote.get("token")
-    if isinstance(token, str) and token:
-        settings.remote.token = token
+    if remote.get("token"):
+        settings.remote.token = str(remote["token"])
     return settings
 
 
@@ -378,28 +425,28 @@ def save_llm_secrets(path: Path = SECRETS_PATH, **fields: object) -> None:
 
 
 def ensure_remote_token(settings: Settings, path: Path = SECRETS_PATH) -> str:
-    """Return the companion-API bearer token, generating one on first run.
+    """Return the companion-API token, generating + persisting one on first run.
 
-    The token lives in the git-ignored secrets file under ``remote.token`` so
-    it survives restarts without ever entering config.yaml or git. LAN clients
-    (the watch) copy it from that file; the value is never logged or printed.
+    The token authenticates LAN clients (watch app etc.); localhost is exempt.
+    It lives only in the git-ignored secrets file — never in config.yaml. If the
+    secrets file can't be written the in-memory token still works for this run.
     """
     if settings.remote.token:
         return settings.remote.token
     stored = (_read_local(path).get("remote", {}) or {}).get("token")
-    if isinstance(stored, str) and stored:
-        settings.remote.token = stored
-        return stored
+    if stored:
+        settings.remote.token = str(stored)
+        return settings.remote.token
     import secrets as _secrets
 
     token = _secrets.token_urlsafe(24)
+    settings.remote.token = token
     try:
         data = _read_local(path)
         data.setdefault("remote", {})["token"] = token
         _write_local(data, path)
-    except Exception:  # still usable this session; regenerated next run
-        logging.getLogger(__name__).exception("could not persist the API token")
-    settings.remote.token = token
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist remote token")
     return token
 
 

@@ -26,23 +26,18 @@ from rich.console import Console
 
 from collections.abc import Awaitable
 
-from core.config import (
-    PROJECT_ROOT,
-    Settings,
-    apply_local_secrets,
-    ensure_remote_token,
-    load_settings,
-)
+from core.config import PROJECT_ROOT, Settings, apply_local_secrets, load_settings
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
 from core.facts import FactsStore
 from core.memory import NoteStore, ReminderStore
-from core.metrics import LatencyLog, MetricsStore, TurnTimings
+from core.metrics import LatencyLog, TurnTimings
 from core.router import Router
 from core.safety import PathWhitelist
 from ui.console import ConsoleUI
 from ui.hud import HudServer
 from llm.client import LLMUnavailableError, OllamaClient
 from remote.server import RemoteServer
+from voice.loop import VoiceLoop
 from skills.apps import AppsSkill
 from skills.base import SkillRegistry
 from skills.datetime_skill import DateTimeSkill
@@ -69,7 +64,6 @@ from skills.timers import TimerSkill
 from skills.vision_skill import SeeCameraSkill, SeeScreenSkill
 from skills.weather import WeatherSkill
 from skills.websearch import WebSearchSkill
-from voice.loop import VoiceLoop
 
 # Never let a pretty glyph kill the app: on legacy/cp1252 consoles (and
 # redirected stdout) rich's output hits charmap encoding, and one un-encodable
@@ -364,12 +358,21 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         )
 
     registry = build_registry(settings, announcer, summarize, reminders, doc_index)
+
+    # MCP: connect configured servers and register their tools as skills, so
+    # any application that speaks the Model Context Protocol becomes callable
+    # by the LLM path. A bad server (or missing `mcp` package) never blocks
+    # startup — it's logged and skipped.
+    from core.mcp import MCPManager
+
+    mcp_manager = MCPManager(settings.mcp)
+    mcp_tools = await mcp_manager.start(registry)
+    if mcp_tools:
+        console.print(f"[dim]MCP: {mcp_tools} tool(s) from connected servers.[/dim]")
+
     bus = EventBus()
     sm = StateMachine(bus)
-    # Persist one metrics row per request (path/skill/latency) so
-    # `python -m core.metrics --report` has data across restarts.
-    metrics = MetricsStore(settings.memory.db_path) if settings.logging.routing_stats else None
-    router = Router(settings, registry, llm, bus, metrics=metrics)
+    router = Router(settings, registry, llm, bus)
     router.model = select_startup_model(llm, settings)
 
     log = LatencyLog()
@@ -408,13 +411,15 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     # The vision sidecar POSTs gestures to the companion API, so enabling vision
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
+        # First serve mints the LAN auth token into secrets.local.yaml; later
+        # runs just load it. Localhost clients (HUD, sidecar) never need it.
         if settings.remote.auth_enabled:
-            # First run generates the LAN bearer token into secrets.local.yaml
-            # (remote.token). The value itself is never printed or logged.
+            from core.config import ensure_remote_token
+
             ensure_remote_token(settings)
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
                               wake_event=wake_event if voice else None,
-                              doc_index=doc_index)
+                              doc_index=doc_index, mcp_manager=mcp_manager)
         try:
             await remote.start()
         except OSError as exc:
@@ -430,11 +435,13 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "
-            f"watch app + vision sidecar connect here."
-            + (" LAN clients need the token from secrets.local.yaml "
-               "(remote.token)." if settings.remote.auth_enabled else "")
-            + "[/dim]"
+            f"watch app + vision sidecar connect here.[/dim]"
         )
+        if settings.remote.auth_enabled:
+            console.print(
+                "[dim]LAN clients need the token from secrets.local.yaml "
+                "(remote.token); localhost is exempt.[/dim]"
+            )
 
     hud_server: HudServer | None = None
     if hud or settings.hud.enabled:
@@ -447,10 +454,11 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
     try:
         if voice:
-            # Voice pipeline (voice/loop.py); the companion API serves alongside.
+            # Voice pipeline (voice/loop.py); the companion API (if started)
+            # serves alongside it.
             try:
                 await VoiceLoop(settings, router, sm, announcer, ui, log,
-                                console=console, wake_event=wake_event).run()
+                                wake_event=wake_event).run()
             except (KeyboardInterrupt, asyncio.CancelledError):
                 raise
             except Exception as exc:
@@ -479,6 +487,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             await remote.stop()
         if hud_server is not None:
             await hud_server.stop()
+        await mcp_manager.stop()
 
 
 def main() -> None:

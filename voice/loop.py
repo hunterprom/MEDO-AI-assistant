@@ -1,26 +1,31 @@
 """The hands-free voice pipeline: wake word -> record -> STT -> route -> TTS.
 
-Extracted verbatim from ``main.py``'s ``run_voice()`` (M5 refactor) — same
-behavior, same tuning, same log lines; ``main.py`` shrank to wiring + CLI.
-Each phase is a named method:
+Extracted verbatim from ``main.py`` (which had grown a ~335-line ``run_voice``)
+into a class with one named method per phase:
 
-    _load_models        build the wake/STT/TTS stack (degrades, never dies)
-    _wait_for_wake      standby: wake word / manual wake / mic hot-swap
-    _capture            listen: open the mic, record until silence
-    _transcribe         Whisper (peak-normalized for quiet mics)
-    _route_streaming    route + sentence-streaming TTS while the LLM generates
-    _speak              synthesize one utterance (mk-MK edge voice for Cyrillic)
-    _play_interruptible playback with the 3-way barge-in watcher
-    run                 the loop tying the phases together
+    run                  the standby/turn loop
+    _load_models         wake word + STT + TTS (graceful when a voice is missing)
+    _wait_for_wake       standby: score frames until the phrase / a manual wake
+    _capture             listen: open the mic (hot-swap aware), record a phrase
+    _run_turn            transcribe -> route (sentence-streaming TTS) -> speak
+    _speak               synthesize one utterance (mk/en voice pick) and play it
+    _play_interruptible  playback while watching the mic for barge-in
+
+Pure mechanical refactor — behavior, log lines, and timings are unchanged.
 
 Blocking audio/model calls run in worker threads so the asyncio loop (and the
 companion API, if serving) stays responsive. After a reply that asks for
 confirmation, we record again *without* the wake word so "yes" works
 naturally. Every stage is timed into a :class:`~core.metrics.TurnTimings`.
 
-The voice stack (sounddevice/whisper/piper) is imported lazily inside
-:meth:`run`, exactly as ``run_voice`` did — importing this module stays cheap
-and machines without the audio deps can still import and construct the class.
+``wake_event`` (set by ``POST /wake``) is an escape hatch: while waiting for
+the wake word we also poll it, so the HUD can start a turn without the phrase
+— which is how you break out of STANDING BY when the pretrained wake word
+doesn't match what you say.
+
+The heavy engines (sounddevice, openwakeword, faster-whisper, piper) are
+imported lazily by the voice modules themselves, so importing this module —
+and constructing :class:`VoiceLoop` — is cheap and dependency-free (tests).
 """
 
 from __future__ import annotations
@@ -29,21 +34,32 @@ import asyncio
 import logging
 import threading
 import time
+from typing import Any
 
-from core.events import AssistantState
-from core.metrics import TurnTimings
+from rich.console import Console
 
-vlog = logging.getLogger("voice")
+from core.config import Settings
+from core.events import AssistantState, StateMachine
+from core.metrics import LatencyLog, TurnTimings
+from core.router import Router
+from ui.console import ConsoleUI
+from voice.audio import (
+    Microphone,
+    frame_rms,
+    normalize_peak,
+    record_until_silence,
+    resolve_input_device,
+)
+from voice.stt import Transcriber
+from voice.tts import EdgeTTS, TextToSpeech, contains_cyrillic, drain_sentences
+from voice.wakeword import WakeWord
+
+logger = logging.getLogger("voice")
+console = Console()
 
 
 class VoiceLoop:
-    """Runs the hands-free pipeline; construct with the app's shared wiring.
-
-    ``wake_event`` (set by ``POST /wake``) is an escape hatch: while waiting
-    for the wake word we also poll it, so the HUD can start a turn without the
-    phrase — which is how you break out of STANDING BY when the pretrained
-    wake word doesn't match what you say.
-    """
+    """Owns one voice session; see the module docstring for the phase map."""
 
     # Barge-in tuning (per the latency/leakage analysis): TTS leaking from the
     # speakers into the open mic crushes the wake score, so 0.4 rarely fires
@@ -58,13 +74,12 @@ class VoiceLoop:
 
     def __init__(
         self,
-        settings,
-        router,
-        sm,
-        announcer,
-        ui,
-        log,
-        console,
+        settings: Settings,
+        router: Router,
+        sm: StateMachine,
+        announcer: Any,           # main.Announcer — anything with a .speak slot
+        ui: ConsoleUI,
+        log: LatencyLog,
         wake_event: threading.Event | None = None,
     ) -> None:
         self._settings = settings
@@ -73,31 +88,24 @@ class VoiceLoop:
         self._announcer = announcer
         self._ui = ui
         self._log = log
-        self._console = console
         self._wake_event = wake_event
+        # Loaded by run() -> _load_models(); None until then.
+        self._wakeword: WakeWord | None = None
+        self._stt: Transcriber | None = None
+        self._tts: TextToSpeech | None = None
+        self._edge: EdgeTTS | None = None
         # Set by the interruptible player when the user barges in mid-reply;
-        # the main loop reads it to skip the wake word and listen immediately.
-        self._barge_hit = False
-        # Voice stack — populated by _load_models() inside run(); None until
-        # then so constructing a VoiceLoop never touches the audio deps.
-        self._wake = None
-        self._stt = None
-        self._tts = None
-        self._edge = None
+        # the turn loop reads it to skip the wake word and listen immediately.
+        self._barged_in = False
 
-    # -- phase: model loading -------------------------------------------------
+    # --- model loading -------------------------------------------------------
 
     def _load_models(self) -> None:
-        """Build wake word, STT, and TTS. TTS failures degrade, never kill."""
-        from voice.stt import Transcriber
-        from voice.tts import EdgeTTS, TextToSpeech
-        from voice.wakeword import WakeWord
-
         # Plain ASCII print, no rich Live/status spinner: with stdout redirected
         # to a file (service/log launches) the spinner's buffer flush dies on
         # cp1252 encoding and takes ALL of voice mode down with it.
-        self._console.print("[dim]loading voice models...[/dim]")
-        self._wake = WakeWord(self._settings.wakeword)
+        console.print("[dim]loading voice models...[/dim]")
+        self._wakeword = WakeWord(self._settings.wakeword)
         self._stt = Transcriber(self._settings.stt)
         # A missing/broken Piper voice shouldn't sink the whole session —
         # degrade to showing replies without speaking them (the HUD renders them).
@@ -105,7 +113,7 @@ class VoiceLoop:
             self._tts = TextToSpeech(self._settings.tts)
         except Exception as exc:
             self._tts = None
-            self._console.print(
+            console.print(
                 f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
                 f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
             )
@@ -116,13 +124,12 @@ class VoiceLoop:
             try:
                 self._edge = EdgeTTS(self._settings.tts.mk_voice)
             except Exception as exc:
-                self._console.print(
-                    f"[dim]Macedonian voice unavailable ({exc}); "
-                    f"Cyrillic replies will use the English voice.[/dim]")
+                console.print(f"[dim]Macedonian voice unavailable ({exc}); "
+                              f"Cyrillic replies will use the English voice.[/dim]")
 
-    # -- phase: standby (wait for the wake word) ------------------------------
+    # --- standby -------------------------------------------------------------
 
-    def _wait_for_wake(self, mic, opened_device) -> str:
+    def _wait_for_wake(self, mic: Microphone, opened_device) -> str:
         """Block until something should end the wait; returns why.
 
         ``"go"``     — wake word heard, or a manual /wake / barge-in carried over.
@@ -134,9 +141,9 @@ class VoiceLoop:
         NB: wake_event is NOT cleared on entry — a /wake or /interrupt fired
         during the previous turn should carry over and start listening now.
         """
-        from voice.audio import frame_rms, resolve_input_device
-
-        self._wake.reset()
+        wake = self._wakeword
+        assert wake is not None
+        wake.reset()
         # Report the peak wake score + mic level every few seconds so it's obvious
         # whether the mic is even hearing you and how close the phrase gets to the
         # threshold — the two things that keep it "stuck on STANDING BY".
@@ -145,39 +152,126 @@ class VoiceLoop:
         frames = 0
         while True:
             if self._settings.audio.input_device != opened_device:
-                vlog.info("input device changed — reopening the microphone")
+                logger.info("input device changed — reopening the microphone")
                 return "reopen"
             frames += 1
             if frames % 25 == 0:  # ~2 s: hot-swap when the chain resolves elsewhere
                 try:
                     if resolve_input_device(self._settings.audio.input_device) != mic.resolved_index:
-                        vlog.info("a preferred microphone (dis)connected — switching")
+                        logger.info("a preferred microphone (dis)connected — switching")
                         return "reopen"
                 except Exception:
                     pass  # nothing usable right now — keep the mic we have
             if self._wake_event is not None and self._wake_event.is_set():
                 self._wake_event.clear()
-                self._console.print("[dim](woken from the HUD)[/dim]")
+                console.print("[dim](woken from the HUD)[/dim]")
                 return "go"
             frame = mic.read_frame()               # ~80 ms/frame, so /wake lands fast
-            score = self._wake.predict(frame)
-            if score >= self._wake.threshold:
-                vlog.info("wake word detected (score %.2f)", score)
+            score = wake.predict(frame)
+            if score >= wake.threshold:
+                logger.info("wake word detected (score %.2f)", score)
                 return "go"
             peak_score = max(peak_score, score)
             peak_rms = max(peak_rms, frame_rms(frame))
             now = time.monotonic()
             if now - last_report >= 4.0:
-                vlog.info("listening for wake word — peak score %.2f (need %.2f), mic level %.3f",
-                          peak_score, self._wake.threshold, peak_rms)
+                logger.info("listening for wake word — peak score %.2f (need %.2f), mic level %.3f",
+                            peak_score, wake.threshold, peak_rms)
                 if peak_rms < 0.004:
-                    self._console.print(
-                        "[yellow](microphone seems silent — check the input "
-                        "device/mute, or pick a mic in the HUD CONFIG tab)[/yellow]")
+                    console.print("[yellow](microphone seems silent — check the input "
+                                  "device/mute, or pick a mic in the HUD CONFIG tab)[/yellow]")
                 peak_score = peak_rms = 0.0
                 last_report = now
 
-    # -- phase: listen (open the mic, record the utterance) -------------------
+    # --- barge-in ------------------------------------------------------------
+
+    def _play_interruptible(self, wav, sr: int) -> bool:
+        """Play a reply while watching the mic; True if the user barged in.
+
+        Interrupts on any of: the HUD/watch interrupt signal (``wake_event``),
+        the wake phrase at a playback-lowered threshold, or sustained mic
+        energy well above the reply's own speaker-leakage baseline (measured
+        live during the first frames of playback). Falls back to blocking
+        playback if the mic can't be opened.
+        """
+        import sounddevice as sd
+
+        wake = self._wakeword
+        assert wake is not None
+        sd.play(wav, samplerate=sr, device=self._settings.audio.output_device)
+        stream = sd.get_stream()
+        interrupted = False
+        why = ""
+        try:
+            wake.reset()
+            baseline: float | None = None   # EMA of mic RMS incl. TTS leakage
+            loud_run = 0
+            frames = 0
+            with Microphone(self._settings.audio.sample_rate,
+                            device=self._settings.audio.input_device) as m:
+                while stream.active:
+                    frame = m.read_frame()  # 80 ms cadence paces this loop
+                    frames += 1
+                    if self._wake_event is not None and self._wake_event.is_set():
+                        self._wake_event.clear()
+                        interrupted, why = True, "interrupt signal"
+                        break
+                    if wake.predict(frame) >= self.BARGE_WAKE_THRESHOLD:
+                        interrupted, why = True, "wake word over playback"
+                        break
+                    rms = frame_rms(frame)
+                    if baseline is None:
+                        baseline = rms
+                    elif frames <= 6 or rms < baseline * 1.5:
+                        # Track the reply's own loudness only while nothing
+                        # shouts over it, so a talking user can't raise the bar.
+                        baseline += 0.2 * (rms - baseline)
+                    loud = rms >= max(baseline * self.BARGE_RMS_RATIO, self.BARGE_MIN_RMS)
+                    # Ignore the first frames: the baseline is still settling.
+                    loud_run = loud_run + 1 if (loud and frames > 6) else 0
+                    if loud_run >= self.BARGE_HOLD_FRAMES:
+                        interrupted, why = True, "voice over playback"
+                        break
+        except Exception:  # mic busy/unavailable — degrade to plain playback
+            logger.debug("barge-in watcher failed", exc_info=True)
+            sd.wait()
+            return False
+        finally:
+            wake.reset()
+        if interrupted:
+            sd.stop()
+            logger.info("barge-in (%s): reply interrupted, listening", why)
+        return interrupted
+
+    # --- speak ---------------------------------------------------------------
+
+    async def _speak(self, text: str) -> float:
+        """Synthesize and play (interruptibly); returns synth time (ms).
+
+        Cyrillic replies go to the Macedonian neural voice; anything else (and
+        any edge-tts failure — offline, service hiccup) uses local Piper.
+        """
+        if self._tts is None and self._edge is None:  # no voice — reply shown only
+            return 0.0
+        t0 = time.perf_counter()
+        wav = None
+        sr = 0
+        if self._edge is not None and contains_cyrillic(text):
+            try:
+                wav, sr = await self._edge.synthesize(text)
+            except Exception:
+                logger.warning("edge-tts failed; falling back to Piper", exc_info=True)
+                wav = None
+        if wav is None or getattr(wav, "size", 0) == 0:
+            if self._tts is None:
+                return 0.0
+            wav, sr = await asyncio.to_thread(self._tts.synthesize, text)
+        tts_ms = (time.perf_counter() - t0) * 1000
+        if await asyncio.to_thread(self._play_interruptible, wav, sr):
+            self._barged_in = True
+        return tts_ms
+
+    # --- listen --------------------------------------------------------------
 
     async def _capture(self, require_wake: bool):
         """Open the mic, optionally wait for the wake word, record a phrase.
@@ -187,8 +281,6 @@ class VoiceLoop:
         to the system default when a picked device can't be opened — so a bad
         pick degrades instead of killing voice mode.
         """
-        from voice.audio import Microphone, record_until_silence
-
         while True:
             device = self._settings.audio.input_device
             mic = Microphone(self._settings.audio.sample_rate, device=device)
@@ -197,8 +289,8 @@ class VoiceLoop:
             except Exception as exc:
                 if device is None:
                     raise  # even the system default is broken — that's fatal
-                vlog.warning("mic %r failed (%s) — falling back to system default",
-                             device, exc)
+                logger.warning("mic %r failed (%s) — falling back to system default",
+                               device, exc)
                 self._settings.audio.input_device = None
                 continue
             try:
@@ -219,121 +311,27 @@ class VoiceLoop:
             finally:
                 mic.close()
 
-    # -- phase: transcribe ----------------------------------------------------
+    # --- one turn: transcribe -> route -> speak ------------------------------
 
-    async def _transcribe(self, audio) -> tuple[str, float]:
-        """Whisper the recording; returns (text, stt_ms).
-
-        Quiet mics (webcam/onboard) record speech peaking at a few percent;
-        normalizing before STT noticeably improves Whisper on those clips.
-        """
-        from voice.audio import normalize_peak
-
+    async def _run_turn(self, audio, wake_to_listen_ms: float, require_wake: bool) -> bool:
+        """Handle one recorded utterance; returns next turn's ``require_wake``."""
+        assert self._stt is not None
+        await self._sm.transition(AssistantState.THINKING)
         t0 = time.perf_counter()
+        # Quiet mics (webcam/onboard) record speech peaking at a few percent;
+        # normalizing before STT noticeably improves Whisper on those clips.
         text = await asyncio.to_thread(self._stt.transcribe, normalize_peak(audio))
-        return text, (time.perf_counter() - t0) * 1000
+        stt_ms = (time.perf_counter() - t0) * 1000
+        if not text.strip():
+            console.print("[dim](couldn't make that out)[/dim]")
+            return True
+        self._ui.transcript(text)
 
-    # -- phase: speak (+ the barge-in watcher) --------------------------------
-
-    def _play_interruptible(self, wav, sr: int) -> bool:
-        """Play a reply while watching the mic; True if the user barged in.
-
-        Interrupts on any of: the HUD/watch interrupt signal (``wake_event``),
-        the wake phrase at a playback-lowered threshold, or sustained mic
-        energy well above the reply's own speaker-leakage baseline (measured
-        live during the first frames of playback). Falls back to blocking
-        playback if the mic can't be opened.
-        """
-        import sounddevice as sd
-
-        from voice.audio import Microphone, frame_rms
-
-        sd.play(wav, samplerate=sr, device=self._settings.audio.output_device)
-        stream = sd.get_stream()
-        interrupted = False
-        why = ""
-        try:
-            self._wake.reset()
-            baseline: float | None = None   # EMA of mic RMS incl. TTS leakage
-            loud_run = 0
-            frames = 0
-            with Microphone(self._settings.audio.sample_rate,
-                            device=self._settings.audio.input_device) as m:
-                while stream.active:
-                    frame = m.read_frame()  # 80 ms cadence paces this loop
-                    frames += 1
-                    if self._wake_event is not None and self._wake_event.is_set():
-                        self._wake_event.clear()
-                        interrupted, why = True, "interrupt signal"
-                        break
-                    if self._wake.predict(frame) >= self.BARGE_WAKE_THRESHOLD:
-                        interrupted, why = True, "wake word over playback"
-                        break
-                    rms = frame_rms(frame)
-                    if baseline is None:
-                        baseline = rms
-                    elif frames <= 6 or rms < baseline * 1.5:
-                        # Track the reply's own loudness only while nothing
-                        # shouts over it, so a talking user can't raise the bar.
-                        baseline += 0.2 * (rms - baseline)
-                    loud = rms >= max(baseline * self.BARGE_RMS_RATIO, self.BARGE_MIN_RMS)
-                    # Ignore the first frames: the baseline is still settling.
-                    loud_run = loud_run + 1 if (loud and frames > 6) else 0
-                    if loud_run >= self.BARGE_HOLD_FRAMES:
-                        interrupted, why = True, "voice over playback"
-                        break
-        except Exception:  # mic busy/unavailable — degrade to plain playback
-            vlog.debug("barge-in watcher failed", exc_info=True)
-            sd.wait()
-            return False
-        finally:
-            self._wake.reset()
-        if interrupted:
-            sd.stop()
-            vlog.info("barge-in (%s): reply interrupted, listening", why)
-        return interrupted
-
-    async def _speak(self, text: str) -> float:
-        """Synthesize and play (interruptibly); returns synth time (ms).
-
-        Cyrillic replies go to the Macedonian neural voice; anything else (and
-        any edge-tts failure — offline, service hiccup) uses local Piper.
-        """
-        from voice.tts import contains_cyrillic
-
-        if self._tts is None and self._edge is None:  # no voice — reply shown only
-            return 0.0
-        t0 = time.perf_counter()
-        wav = None
-        sr = 0
-        if self._edge is not None and contains_cyrillic(text):
-            try:
-                wav, sr = await self._edge.synthesize(text)
-            except Exception:
-                vlog.warning("edge-tts failed; falling back to Piper", exc_info=True)
-                wav = None
-        if wav is None or getattr(wav, "size", 0) == 0:
-            if self._tts is None:
-                return 0.0
-            wav, sr = await asyncio.to_thread(self._tts.synthesize, text)
-        tts_ms = (time.perf_counter() - t0) * 1000
-        if await asyncio.to_thread(self._play_interruptible, wav, sr):
-            self._barge_hit = True
-        return tts_ms
-
-    # -- phase: route (sentence-streaming TTS) --------------------------------
-
-    async def _route_streaming(self, text: str):
-        """Route one utterance, speaking sentences as the LLM streams them.
-
-        LLM content chunks arrive via on_delta, complete sentences are queued,
-        and a speaker task voices them WHILE the rest of the reply is still
-        generating — first audio after the first sentence, not after the whole
-        reply. Fast-path and tool answers never stream (no deltas) and speak
-        as before. Returns (result, streamed_sentence_count).
-        """
-        from voice.tts import drain_sentences
-
+        # Sentence-streaming TTS: LLM content chunks arrive via on_delta,
+        # complete sentences are queued, and a speaker task voices them
+        # WHILE the rest of the reply is still generating — first audio
+        # after the first sentence, not after the whole reply. Fast-path
+        # and tool answers never stream (no deltas) and speak as before.
         stream_buf = {"text": ""}
         streamed = {"count": 0}
         stream_q: asyncio.Queue = asyncio.Queue()
@@ -350,7 +348,7 @@ class VoiceLoop:
                 sentence = await stream_q.get()
                 if sentence is None:
                     return
-                if self._barge_hit:
+                if self._barged_in:
                     continue  # user cut in — drop the remaining sentences
                 await self._sm.transition(AssistantState.SPEAKING)
                 await self._speak(sentence)
@@ -365,14 +363,28 @@ class VoiceLoop:
                 stream_q.put_nowait(tail)  # the last, unterminated sentence
             stream_q.put_nowait(None)
             await speaker_task
-        return result, streamed["count"]
 
-    # -- the loop -------------------------------------------------------------
+        tts_ms = None
+        if streamed["count"] == 0:  # nothing streamed: speak the reply whole
+            await self._sm.transition(AssistantState.SPEAKING)
+            tts_ms = await self._speak(result.speech)
+        self._log.record(TurnTimings(
+            path=result.path.value,
+            wake_to_listen_ms=wake_to_listen_ms if require_wake else None,
+            stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
+        ))
+        self._ui.turn(result, self._log.turns[-1])
+        # Listen again right away (no wake word) when MEDO asked "are you
+        # sure?" or the user just interrupted — they clearly want to talk.
+        next_require_wake = not (self._router.awaiting_confirmation or self._barged_in)
+        self._barged_in = False
+        return next_require_wake
+
+    # --- the loop ------------------------------------------------------------
 
     async def run(self) -> None:
-        """Load models, then loop: standby -> listen -> transcribe -> route -> speak."""
+        """Load models, then loop: standby -> listen -> turn — forever."""
         self._load_models()
-
         # Timer/reminder announcements should be spoken, not just printed.
         self._announcer.speak = self._speak
 
@@ -387,7 +399,7 @@ class VoiceLoop:
             audio, wake_to_listen_ms = await self._capture(require_wake)
             if audio.size == 0:
                 if require_wake:
-                    self._console.print("[dim](heard nothing — back to sleep)[/dim]")
+                    console.print("[dim](heard nothing — back to sleep)[/dim]")
                 require_wake = True
                 continue
 
@@ -396,35 +408,11 @@ class VoiceLoop:
             # forever (state frozen in THINKING, nothing consuming wake/interrupt)
             # while typing kept working — the classic "voice is broken" state.
             try:
-                await self._sm.transition(AssistantState.THINKING)
-                text, stt_ms = await self._transcribe(audio)
-                if not text.strip():
-                    self._console.print("[dim](couldn't make that out)[/dim]")
-                    require_wake = True
-                    continue
-                self._ui.transcript(text)
-
-                result, streamed_count = await self._route_streaming(text)
-
-                tts_ms = None
-                if streamed_count == 0:  # nothing streamed: speak the reply whole
-                    await self._sm.transition(AssistantState.SPEAKING)
-                    tts_ms = await self._speak(result.speech)
-                self._log.record(TurnTimings(
-                    path=result.path.value,
-                    wake_to_listen_ms=wake_to_listen_ms if require_wake else None,
-                    stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
-                ))
-                self._ui.turn(result, self._log.turns[-1])
-                # Listen again right away (no wake word) when MEDO asked "are you
-                # sure?" or the user just interrupted — they clearly want to talk.
-                require_wake = not (self._router.awaiting_confirmation or self._barge_hit)
-                self._barge_hit = False
+                require_wake = await self._run_turn(audio, wake_to_listen_ms, require_wake)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 raise
             except Exception:
-                vlog.exception("voice turn failed; back to standby")
-                self._console.print(
-                    "[red]That one failed — say the wake word to try again.[/red]")
+                logger.exception("voice turn failed; back to standby")
+                console.print("[red]That one failed — say the wake word to try again.[/red]")
                 require_wake = True
-                self._barge_hit = False
+                self._barged_in = False

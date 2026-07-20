@@ -18,9 +18,17 @@ from skills.desktop import (
 )
 
 
+# The chords are platform-dependent (Bug Log #24: the v1 mapping was
+# Windows-only, dead keys on a Mac) — tests assert THIS platform's mapping.
+IS_MAC = sys.platform == "darwin"
+SUPER = "command" if IS_MAC else "win"       # spoken "windows"/"command"
+PASTE = ("command", "v") if IS_MAC else ("ctrl", "v")
+
+
 def test_resolve_keys_names_modifiers_and_unknowns():
     assert resolve_keys("control shift a") == ["ctrl", "shift", "a"]
-    assert resolve_keys("windows d") == ["win", "d"]
+    assert resolve_keys("windows d") == [SUPER, "d"]
+    assert resolve_keys("command d") == [SUPER, "d"]  # either name, same key
     assert resolve_keys(["ALT", "F4"]) == ["alt", "f4"]
     assert resolve_keys("page down") == ["pagedown"]  # two-word alias, not ↓
     assert resolve_keys("ctrl page down") == ["ctrl", "pagedown"]
@@ -80,7 +88,7 @@ async def test_type_cyrillic_pastes_and_restores_clipboard(gui, clip):
     skill = TypeTextSkill()
     r = await skill.execute(_req(skill, "type Здраво Ана"))
     assert r.success
-    assert ("hotkey", ("ctrl", "v")) in gui.calls
+    assert ("hotkey", PASTE) in gui.calls  # Cmd+V on mac — Ctrl+V is a no-op there
     assert not any(c[0] == "write" for c in gui.calls)
     assert clip.buffer == "old clipboard"  # restored after the paste
 
@@ -101,11 +109,11 @@ async def test_press_unknown_keys_graceful(gui):
 
 async def test_window_actions_map_to_chords(gui):
     cases = {
-        "minimize the window": ("win", "down"),
-        "maximize the window": ("win", "up"),
-        "close the window": ("alt", "f4"),
-        "show the desktop": ("win", "d"),
-        "switch apps": ("alt", "tab"),
+        "minimize the window": ("command", "m") if IS_MAC else ("win", "down"),
+        "maximize the window": ("ctrl", "command", "f") if IS_MAC else ("win", "up"),
+        "close the window": ("command", "w") if IS_MAC else ("alt", "f4"),
+        "show the desktop": ("f11",) if IS_MAC else ("win", "d"),
+        "switch apps": ("command", "tab") if IS_MAC else ("alt", "tab"),
     }
     for text, chord in cases.items():
         gui.calls.clear()
