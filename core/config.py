@@ -68,6 +68,14 @@ class RemoteConfig(BaseModel):
     enabled: bool = False
     host: str = "0.0.0.0"
     port: int = 8710
+    # Bearer-token auth for LAN clients (watch app, other devices). Requests
+    # from 127.0.0.1 always skip it so the HUD and vision sidecar keep their
+    # zero-config startup. False restores the old open API — unsafe.
+    auth_enabled: bool = True
+    # The token itself never lives in config.yaml: it is generated on the
+    # first --serve run and stored in git-ignored secrets.local.yaml
+    # (remote.token). Populated at runtime by ensure_remote_token().
+    token: str = ""
 
 
 class PointerConfig(BaseModel):
@@ -344,6 +352,10 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
     audio = data.get("audio", {}) or {}
     if "input_device" in audio:  # may be int, name, or None (= system default)
         settings.audio.input_device = audio["input_device"]
+    remote = data.get("remote", {}) or {}
+    token = remote.get("token")
+    if isinstance(token, str) and token:
+        settings.remote.token = token
     return settings
 
 
@@ -363,6 +375,32 @@ def save_llm_secrets(path: Path = SECRETS_PATH, **fields: object) -> None:
         _write_local(data, path)
     except Exception:
         logging.getLogger(__name__).exception("could not persist llm secrets")
+
+
+def ensure_remote_token(settings: Settings, path: Path = SECRETS_PATH) -> str:
+    """Return the companion-API bearer token, generating one on first run.
+
+    The token lives in the git-ignored secrets file under ``remote.token`` so
+    it survives restarts without ever entering config.yaml or git. LAN clients
+    (the watch) copy it from that file; the value is never logged or printed.
+    """
+    if settings.remote.token:
+        return settings.remote.token
+    stored = (_read_local(path).get("remote", {}) or {}).get("token")
+    if isinstance(stored, str) and stored:
+        settings.remote.token = stored
+        return stored
+    import secrets as _secrets
+
+    token = _secrets.token_urlsafe(24)
+    try:
+        data = _read_local(path)
+        data.setdefault("remote", {})["token"] = token
+        _write_local(data, path)
+    except Exception:  # still usable this session; regenerated next run
+        logging.getLogger(__name__).exception("could not persist the API token")
+    settings.remote.token = token
+    return token
 
 
 def save_audio_input(device: int | str | None, path: Path = SECRETS_PATH) -> None:

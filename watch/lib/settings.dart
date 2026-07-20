@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class AppSettings {
   static const _addressKey = 'server_address';
+  static const _tokenKey = 'server_token';
   static const _gestureEnabledKey = 'gesture_enabled';
   static const _gestureThresholdKey = 'gesture_threshold';
 
@@ -31,6 +32,20 @@ class AppSettings {
   static Future<void> saveAddress(String address) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_addressKey, address.trim());
+  }
+
+  /// Companion-API bearer token — on the PC it's in secrets.local.yaml
+  /// under `remote.token` (generated on the first `--serve` run). Empty
+  /// means "send none", which only works against pre-auth servers or with
+  /// `remote.auth_enabled: false`.
+  static Future<String> loadToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_tokenKey) ?? '';
+  }
+
+  static Future<void> saveToken(String token) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_tokenKey, token.trim());
   }
 
   /// Whether the double wrist-flick hands-free trigger is enabled.

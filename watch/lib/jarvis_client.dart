@@ -50,20 +50,30 @@ class JarvisException implements Exception {
 }
 
 class JarvisClient {
-  JarvisClient(this.address);
+  JarvisClient(this.address, {this.token = ''});
 
   /// `host:port` of the machine running `python main.py --serve`.
   final String address;
+
+  /// Bearer token for the companion API. The watch is a LAN client, so the
+  /// server requires it (localhost exemption doesn't apply here). Copied
+  /// from `secrets.local.yaml` → `remote.token` on the PC.
+  final String token;
 
   static const _pingTimeout = Duration(seconds: 3);
   static const _askTimeout = Duration(seconds: 90); // LLM replies can be slow
 
   Uri _uri(String path) => Uri.parse('http://$address$path');
 
+  Map<String, String> _headers([Map<String, String> extra = const {}]) => {
+        ...extra,
+        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+      };
+
   /// Returns the assistant's name if the server is reachable.
   Future<String> ping() async {
     final body = await _request(
-      () => http.get(_uri('/ping')).timeout(_pingTimeout),
+      () => http.get(_uri('/ping'), headers: _headers()).timeout(_pingTimeout),
     );
     return body['name'] as String? ?? 'Jarvis';
   }
@@ -74,7 +84,7 @@ class JarvisClient {
       () => http
           .post(
             _uri('/ask'),
-            headers: {'Content-Type': 'application/json'},
+            headers: _headers({'Content-Type': 'application/json'}),
             body: jsonEncode({'text': text}),
           )
           .timeout(_askTimeout),
@@ -98,6 +108,10 @@ class JarvisClient {
       body = jsonDecode(response.body) as Map<String, dynamic>;
     } catch (_) {
       throw JarvisException('Unexpected reply from $address.');
+    }
+    if (response.statusCode == 401) {
+      // Auth is on and our token is missing/wrong — point at the fix.
+      throw const JarvisException('Token rejected — set it in Settings.');
     }
     if (response.statusCode != 200) {
       throw JarvisException(

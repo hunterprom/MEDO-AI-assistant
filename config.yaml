@@ -27,11 +27,18 @@ personality:
   address_user_as: "sir"            # used sparingly by the system prompt (M4)
 
 remote:
-  # Companion API for the watch app (remote/server.py). LAN-only; no auth —
-  # never forward this port beyond your local network.
+  # Companion API for the watch app (remote/server.py). LAN-only — never
+  # forward this port beyond your local network.
   enabled: false                    # true = always serve; --serve flag also works
   host: "0.0.0.0"                   # bind address (0.0.0.0 = every interface)
   port: 8710
+  # Bearer-token auth for LAN clients (the watch). The token is generated on
+  # the first --serve run and stored in git-ignored secrets.local.yaml under
+  # remote.token — copy it into the watch's settings screen. Requests from
+  # this machine (127.0.0.1: the HUD, the vision sidecar) skip auth, so local
+  # startup stays zero-config. false restores the old open API — unsafe;
+  # anything on your network could type keystrokes and open files.
+  auth_enabled: true
 
 vision:                             # camera hand-gesture control (sidecar process)
   enabled: true                     # auto-serve the API so the gesture sidecar connects

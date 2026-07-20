@@ -64,6 +64,10 @@ class HudServer:
             "visionEnabled": self._settings.vision.enabled,
             "streamPort": self._settings.vision.stream_port,
             "apiPort": self._settings.remote.port,
+            # Bearer token for :8710 fetches. Needed when the HUD page is
+            # opened from another device on the LAN — those requests aren't
+            # localhost-exempt. Empty until the companion API has started once.
+            "apiToken": self._settings.remote.token,
             "wakePhrase": self._settings.wakeword.phrase.replace("_", " "),
             "weather": {
                 "city": self._settings.weather.default_city,

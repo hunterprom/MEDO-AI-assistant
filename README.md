@@ -66,7 +66,7 @@ Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.
 | Port | What |
 |------|------|
 | 8730 | HUD (127.0.0.1) |
-| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web` (no auth **by design**; LAN only) |
+| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web`. **Bearer-token auth** for LAN clients (`Authorization: Bearer <token>`, or `?token=` where headers are impossible); the token is generated on the first `--serve` run into `secrets.local.yaml` → `remote.token`. Requests from 127.0.0.1 (HUD, sidecar) are exempt. `remote.auth_enabled: false` restores the old open API — unsafe. |
 | 8731 | Vision sidecar — MJPEG `/video`, `/frame.jpg`, `POST /pointer` |
 | 11434 | Ollama |
 

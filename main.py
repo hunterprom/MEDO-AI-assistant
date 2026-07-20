@@ -26,7 +26,13 @@ from rich.console import Console
 
 from collections.abc import Awaitable
 
-from core.config import PROJECT_ROOT, Settings, apply_local_secrets, load_settings
+from core.config import (
+    PROJECT_ROOT,
+    Settings,
+    apply_local_secrets,
+    ensure_remote_token,
+    load_settings,
+)
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
 from core.facts import FactsStore
 from core.memory import NoteStore, ReminderStore
@@ -733,6 +739,10 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     # The vision sidecar POSTs gestures to the companion API, so enabling vision
     # (or the HUD, which reads the same events) implies serving it.
     if serve or settings.remote.enabled or settings.vision.enabled:
+        if settings.remote.auth_enabled:
+            # First run generates the LAN bearer token into secrets.local.yaml
+            # (remote.token). The value itself is never printed or logged.
+            ensure_remote_token(settings)
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
                               wake_event=wake_event if voice else None,
                               doc_index=doc_index)
@@ -751,7 +761,10 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "
-            f"watch app + vision sidecar connect here.[/dim]"
+            f"watch app + vision sidecar connect here."
+            + (" LAN clients need the token from secrets.local.yaml "
+               "(remote.token)." if settings.remote.auth_enabled else "")
+            + "[/dim]"
         )
 
     hud_server: HudServer | None = None

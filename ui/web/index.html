@@ -580,6 +580,11 @@
   const CFG = __MEDO_CONFIG__;
   const API = `http://${location.hostname}:${CFG.apiPort}`;
   const STREAM = `http://${location.hostname}:${CFG.streamPort}`;
+  /* Companion-API calls carry the injected bearer token — required when the
+     HUD is opened from another LAN device (localhost requests are exempt). */
+  const AUTH_HEADERS = CFG.apiToken ? { 'Authorization': `Bearer ${CFG.apiToken}` } : {};
+  const apiFetch = (url, opts = {}) =>
+    fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...AUTH_HEADERS } });
   const $ = id => document.getElementById(id);
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -615,13 +620,13 @@
   $('tab-config').onclick = () => go('config');
   async function triggerWake() {
     try {
-      const r = await fetch(`${API}/wake`, { method: 'POST' });
+      const r = await apiFetch(`${API}/wake`, { method: 'POST' });
       log(r.ok ? 'WAKE (manual)' : 'WAKE — voice mode not running');
     } catch { log('WAKE — API offline'); }
   }
   async function interruptSpeech() {
     try {
-      const r = await fetch(`${API}/interrupt`, { method: 'POST' });
+      const r = await apiFetch(`${API}/interrupt`, { method: 'POST' });
       log(r.ok ? 'INTERRUPT' : 'INTERRUPT failed');
     } catch { log('INTERRUPT — API offline'); }
   }
@@ -758,7 +763,7 @@
     if (!text) return;
     go('comms');
     try {
-      const r = await fetch(`${API}/ask`, {
+      const r = await apiFetch(`${API}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -792,7 +797,7 @@
     const box = $('sr-files');
     box.innerHTML = '<div class="sr-loading">searching files…</div>';
     let results;
-    try { results = ((await (await fetch(`${API}/search/files?q=${encodeURIComponent(q)}`)).json()).results) || []; }
+    try { results = ((await (await apiFetch(`${API}/search/files?q=${encodeURIComponent(q)}`)).json()).results) || []; }
     catch { box.innerHTML = '<div class="sr-loading">file search offline</div>'; return; }
     $('sr-files-count').textContent = `(${results.length})`;
     if (!results.length) { box.innerHTML = '<div class="sr-empty">no matching files or folders</div>'; return; }
@@ -809,14 +814,14 @@
   }
   async function openSearchPath(path) {
     log(`OPEN → ${path}`);
-    try { await fetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); }
+    try { await apiFetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) }); }
     catch { log('OPEN failed — API offline'); }
   }
   async function runWebSearch(q) {
     const box = $('sr-web');
     box.innerHTML = '<div class="sr-loading">searching the web…</div>';
     let data;
-    try { data = await (await fetch(`${API}/search/web?q=${encodeURIComponent(q)}`)).json(); }
+    try { data = await (await apiFetch(`${API}/search/web?q=${encodeURIComponent(q)}`)).json(); }
     catch { box.innerHTML = '<div class="sr-loading">web search offline</div>'; return; }
     const results = data.results || [];
     $('sr-web-count').textContent = `(${results.length})`;
@@ -841,7 +846,7 @@
   }
   async function pollSys() {
     try {
-      const d = await (await fetch(`${API}/sys`)).json();
+      const d = await (await apiFetch(`${API}/sys`)).json();
       if (typeof d.cpu === 'number') setStat('stat-cpu', `${Math.round(d.cpu)}%`, d.cpu);
       if (d.ram) setStat('stat-ram', `${d.ram.used_gb} GB`, d.ram.percent);
       if (d.gpu) {
@@ -1045,7 +1050,7 @@
   }
   async function loadModels() {
     try {
-      const d = await (await fetch(`${API}/status`)).json();
+      const d = await (await apiFetch(`${API}/status`)).json();
       keySaved = !!d.has_api_key;
       savedBaseUrl = d.openai_base_url || '';
       if (savedBaseUrl && document.activeElement !== apiBaseInput) apiBaseInput.value = savedBaseUrl;
@@ -1061,7 +1066,7 @@
   modelSel.onchange = async () => {
     if (!modelSel.value || PLACEHOLDER_RE.test(modelSel.value)) return;
     try {
-      await fetch(`${API}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelSel.value }) });
+      await apiFetch(`${API}/model`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: modelSel.value }) });
       log(`MODEL → ${modelSel.value}`);
     } catch { }
   };
@@ -1080,7 +1085,7 @@
     if (modelSel.value && !PLACEHOLDER_RE.test(modelSel.value)) body.model = modelSel.value;
     connStatus.className = ''; connStatus.textContent = 'CONNECTING…';
     try {
-      const r = await fetch(`${API}/provider`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await apiFetch(`${API}/provider`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const d = await r.json();
       if (!r.ok || !d.ok) { connStatus.className = 'err'; connStatus.textContent = (d && d.error) || `FAILED (${r.status})`; return; }
       reflectProvider(d.provider);
@@ -1101,7 +1106,7 @@
   const MIC_PLACEHOLDER = /^(loading|api offline|no input)/i;
   async function loadMics() {
     try {
-      const d = await (await fetch(`${API}/audio/devices`)).json();
+      const d = await (await apiFetch(`${API}/audio/devices`)).json();
       const devices = d.devices || [];
       if (!devices.length) { micSel.innerHTML = '<option>no input devices</option>'; return; }
       micSel.innerHTML = '';
@@ -1133,7 +1138,7 @@
     if (MIC_PLACEHOLDER.test(micSel.value)) return;
     const device = micSel.value === '__default__' ? null : Number(micSel.value);
     try {
-      await fetch(`${API}/audio/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device }) });
+      await apiFetch(`${API}/audio/input`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device }) });
       log(`MIC → ${micSel.options[micSel.selectedIndex].textContent}`);
     } catch { }
   };
@@ -1143,7 +1148,7 @@
   const factsList = $('facts-list');
   async function loadFacts() {
     try {
-      const d = await (await fetch(`${API}/facts`)).json();
+      const d = await (await apiFetch(`${API}/facts`)).json();
       const facts = d.facts || [];
       $('facts-desc').textContent =
         `WHAT MEDO KNOWS ABOUT YOU · ${facts.length} FACT${facts.length === 1 ? '' : 'S'}`;
@@ -1155,7 +1160,7 @@
         const x = document.createElement('button'); x.className = 'fact-x'; x.textContent = '✕'; x.title = 'forget this';
         x.onclick = async () => {
           try {
-            await fetch(`${API}/facts/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: f.id }) });
+            await apiFetch(`${API}/facts/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: f.id }) });
             log(`FORGOT · ${f.fact.slice(0, 40)}`);
           } catch { }
           loadFacts();
@@ -1168,7 +1173,7 @@
     const v = $('fact-new').value.trim();
     if (!v) return;
     try {
-      await fetch(`${API}/facts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fact: v }) });
+      await apiFetch(`${API}/facts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fact: v }) });
       $('fact-new').value = '';
       log('REMEMBERED');
     } catch { }
@@ -1179,7 +1184,7 @@
 
   async function loadDocsStats() {
     try {
-      const d = await (await fetch(`${API}/docs/stats`)).json();
+      const d = await (await apiFetch(`${API}/docs/stats`)).json();
       $('docs-desc').textContent = d.enabled
         ? `ASK ABOUT YOUR FILES · ${d.files} FILES · ${d.chunks} PASSAGES INDEXED`
         : 'DISABLED — NO EMBEDDING MODEL';
@@ -1187,7 +1192,7 @@
   }
   $('docs-reindex').onclick = async () => {
     try {
-      await fetch(`${API}/docs/reindex`, { method: 'POST' });
+      await apiFetch(`${API}/docs/reindex`, { method: 'POST' });
       log('DOCUMENT REINDEX STARTED');
       setTimeout(loadDocsStats, 5000);
     } catch { }
@@ -1416,7 +1421,7 @@
       const h = hoveredDir;
       log(`OPEN → ${h.label} · ${h.path}`);
       try {
-        const r = await fetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: h.key }) });
+        const r = await apiFetch(`${API}/open`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: h.key }) });
         if (!r.ok) log(`OPEN FAILED · ${h.label} (${r.status})`);
       } catch { log('OPEN FAILED · API OFFLINE'); }
     });

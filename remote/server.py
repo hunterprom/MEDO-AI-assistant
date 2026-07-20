@@ -26,8 +26,13 @@ Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
 ``POST /provider`` is stored in settings but never echoed back or logged.
 
-No auth by design: the assistant is 100 % local and the server binds to the
-local network. Do not expose this port beyond your LAN.
+Auth: with ``remote.auth_enabled`` (default on) every endpoint requires
+``Authorization: Bearer <token>`` — or ``?token=`` for clients that can't set
+headers (EventSource/MJPEG embeds). The token is generated on the first
+--serve run into git-ignored ``secrets.local.yaml`` (``remote.token``).
+Requests from 127.0.0.1 are exempt so the HUD and vision sidecar keep their
+zero-config startup. Still LAN-only: never forward this port beyond your
+local network.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import secrets
 import threading
 
 import psutil
@@ -53,9 +59,12 @@ MAX_TEXT_CHARS = 2000
 #: Permissive CORS for the browser HUD; the API is LAN-only anyway.
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 }
+
+#: Peer addresses that skip token auth — the machine MEDO itself runs on.
+LOCAL_ADDRS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
 
 #: Providers accepted by ``POST /provider`` (mirrors LLMConfig.provider).
 VALID_PROVIDERS = ("ollama", "openai")
@@ -106,7 +115,19 @@ class RemoteServer:
 
     def build_app(self) -> web.Application:
         """Create the aiohttp application (separated out for tests)."""
-        app = web.Application(middlewares=[cors_middleware])
+
+        @web.middleware
+        async def auth_middleware(request: web.Request, handler):
+            if self._authorized(request):
+                return await handler(request)
+            return web.json_response(
+                {"ok": False, "error": "missing or invalid token"},
+                status=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # cors first so even 401 responses carry the CORS headers the HUD needs.
+        app = web.Application(middlewares=[cors_middleware, auth_middleware])
         app.router.add_get("/ping", self._handle_ping)
         app.router.add_post("/ask", self._handle_ask)
         app.router.add_get("/status", self._handle_status)
@@ -131,11 +152,39 @@ class RemoteServer:
         app.router.add_route("OPTIONS", "/{tail:.*}", self._handle_options)
         return app
 
+    # --- auth ---
+
+    def _peer_is_local(self, request: web.Request) -> bool:
+        """True when the request comes from this machine (HUD, sidecar)."""
+        return request.remote in LOCAL_ADDRS
+
+    def _authorized(self, request: web.Request) -> bool:
+        """Bearer-token gate for LAN clients; localhost is always exempt.
+
+        CORS preflights pass unauthenticated (browsers never attach
+        Authorization to OPTIONS), and ``?token=`` is accepted for clients
+        that can't set headers. Auth enabled with no token provisioned fails
+        closed, not open.
+        """
+        cfg = self._settings.remote
+        if not cfg.auth_enabled or request.method == "OPTIONS":
+            return True
+        if self._peer_is_local(request):
+            return True
+        if not cfg.token:
+            return False
+        header = request.headers.get("Authorization", "")
+        supplied = header[7:].strip() if header.startswith("Bearer ") else ""
+        supplied = supplied or request.query.get("token", "")
+        return bool(supplied) and secrets.compare_digest(supplied, cfg.token)
+
     async def start(self) -> None:
         """Bind and start serving; returns once the socket is listening."""
         host = self._settings.remote.host
         port = self._settings.remote.port
-        self._runner = web.AppRunner(self.build_app())
+        # access_log off: request lines would echo ?token= query strings into
+        # the console; the handlers already log everything meaningful.
+        self._runner = web.AppRunner(self.build_app(), access_log=None)
         await self._runner.setup()
         await web.TCPSite(self._runner, host, port).start()
         self._sys_task = asyncio.create_task(self._collect_sys_forever())

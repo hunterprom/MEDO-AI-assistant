@@ -301,3 +301,33 @@ async def test_facts_endpoints_crud(tmp_path):
         assert body["facts"] == []
     finally:
         await client.close()
+
+
+# --- companion-API bearer token (remote.token) ------------------------------
+
+
+def test_ensure_remote_token_generates_persists_and_reloads(tmp_path: pathlib.Path):
+    path = tmp_path / "secrets.local.yaml"
+    settings = load_settings()
+    settings.remote.token = ""
+
+    token = config.ensure_remote_token(settings, path)
+    assert token and settings.remote.token == token
+
+    # Stable across "restarts": a fresh settings object gets the same token.
+    again = load_settings()
+    again.remote.token = ""
+    assert config.ensure_remote_token(again, path) == token
+
+    # apply_local_secrets overlays it at startup too (HUD-only runs).
+    fresh = load_settings()
+    fresh.remote.token = ""
+    apply_local_secrets(fresh, path)
+    assert fresh.remote.token == token
+
+    # It coexists with the llm section in the same overrides file.
+    save_llm_secrets(path, provider="openai")
+    assert load_llm_secrets(path)["provider"] == "openai"
+    fresh2 = load_settings()
+    fresh2.remote.token = ""
+    assert config.ensure_remote_token(fresh2, path) == token

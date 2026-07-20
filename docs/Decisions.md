@@ -33,6 +33,16 @@ Why the super project is shaped the way it is.
   level; short-lived connections per op (no cross-thread sharing).
 - **Pointer mode always boots OFF** and turning it on can be refused by
   config — a stray API call must never grab the mouse unasked.
+- **Bearer token + localhost exemption on :8710, not TLS.** The companion API
+  can open files and (via skills) type/control power, so LAN clients now
+  authenticate: a random token generated into git-ignored secrets.local.yaml
+  (`remote.token`), checked constant-time on every request, `?token=` fallback
+  for clients that can't set headers. Full TLS would mean self-signed-cert
+  management on a watch for a LAN-only port — pain without covering any threat
+  this doesn't. 127.0.0.1 is exempt so the HUD and vision sidecar keep
+  zero-config startup; `remote.auth_enabled: false` restores the old open API
+  (documented as unsafe). Access logging is off so `?token=` never lands in
+  the console.
 - **Design provenance.** The HUD implements `Medo.dc.html` from the user's
   claude.ai/design handoff zip (the earlier share link had expired; the zip
   in `design/` is the source of truth). `support.js` in the handoff is the

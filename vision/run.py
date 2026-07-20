@@ -81,7 +81,7 @@ class VisionRunConfig:
 
 
 def load_config(path: Path) -> tuple[VisionRunConfig, str]:
-    """Read the vision + remote sections from config.yaml. Returns (config, api_url)."""
+    """Read config.yaml (+ the API token). Returns (config, api_url, token)."""
     import yaml
 
     data = yaml.safe_load(path.read_text()) if path.exists() else {}
@@ -113,7 +113,17 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
     host = r.get("host", "127.0.0.1")
     host = "127.0.0.1" if host in ("0.0.0.0", "") else host
     api_url = f"http://{host}:{r.get('port', 8710)}"
-    return cfg, api_url
+    # The API bearer token lives in git-ignored secrets.local.yaml. Requests to
+    # 127.0.0.1 are auth-exempt, but a --api override may point elsewhere.
+    token = ""
+    try:
+        sec = path.parent / "secrets.local.yaml"
+        if sec.exists():
+            data = yaml.safe_load(sec.read_text(encoding="utf-8")) or {}
+            token = str((data.get("remote") or {}).get("token") or "")
+    except Exception:
+        token = ""
+    return cfg, api_url, token
 
 
 def _make_video_handler(engine: GestureEngine):
@@ -193,14 +203,17 @@ def _make_video_handler(engine: GestureEngine):
     return Handler
 
 
-def make_gesture_poster(api_url: str):
+def make_gesture_poster(api_url: str, token: str = ""):
     """A gesture handler that POSTs the mapped utterance to the companion API."""
+
+    headers = {"Content-Type": "application/json"}
+    if token:  # 127.0.0.1 is auth-exempt, but a --api override may not be
+        headers["Authorization"] = f"Bearer {token}"
 
     def handler(gesture: str, utterance: str) -> None:
         payload = json.dumps({"text": utterance}).encode()
         req = urllib.request.Request(
-            f"{api_url}/ask", data=payload,
-            headers={"Content-Type": "application/json"}, method="POST",
+            f"{api_url}/ask", data=payload, headers=headers, method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -219,11 +232,11 @@ def main() -> None:
     parser.add_argument("--api", default=None, help="override companion API URL")
     args = parser.parse_args()
 
-    cfg, api_url = load_config(Path(args.config))
+    cfg, api_url, token = load_config(Path(args.config))
     if args.api:
         api_url = args.api.rstrip("/")
 
-    engine = GestureEngine(cfg, make_gesture_poster(api_url))
+    engine = GestureEngine(cfg, make_gesture_poster(api_url, token))
     engine.start()
 
     server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port), _make_video_handler(engine))
