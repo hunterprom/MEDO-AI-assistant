@@ -84,7 +84,9 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
     """Read the vision + remote sections from config.yaml. Returns (config, api_url)."""
     import yaml
 
-    data = yaml.safe_load(path.read_text()) if path.exists() else {}
+    # utf-8 explicitly: config.yaml carries Cyrillic comments, and Windows'
+    # default cp1252 read crashed the whole sidecar at startup (camera dead).
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
     v = data.get("vision", {}) or {}
     r = data.get("remote", {}) or {}
     p = v.get("pointer", {}) or {}
@@ -127,7 +129,7 @@ def load_api_token(config_path: Path) -> str:
 
     path = config_path.parent / "secrets.local.yaml"
     try:
-        data = yaml.safe_load(path.read_text()) if path.exists() else {}
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else {}
         return str((data.get("remote", {}) or {}).get("token") or "")
     except Exception:
         return ""
