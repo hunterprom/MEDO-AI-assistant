@@ -225,8 +225,12 @@ news:                               # M3
     - "https://feeds.bbci.co.uk/news/rss.xml"
     - "https://hnrss.org/frontpage"
 
-vision_llm:                         # "what do you see" / "read my screen"
-  model: "moondream"                # local Ollama vision model
+vision_llm:                         # "what do you see" / "read my screen" / bench
+  # qwen2.5vl:3b replaced moondream (2026-07-20): the re-published moondream
+  # decodes to 2-token garbage on every runtime/endpoint (fresh pull, GPU and
+  # CPU, old and new Ollama — see Bug Log 28). qwen2.5vl also reads text far
+  # better, which the see_bench part-marking answers benefit from.
+  model: "qwen2.5vl:3b"             # local Ollama vision model
   timeout_s: 60                     # describe calls are slow on first load
 
 memory:                             # M4
