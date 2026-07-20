@@ -146,3 +146,10 @@ def test_clamp_all_english_falls_back_to_first():
     from voice.stt import pick_forced_language
 
     assert pick_forced_language("de", ["en"]) == "en"
+
+
+def test_wake_display_phrase():
+    from voice.wakeword import display_phrase
+    assert display_phrase("models/wakeword/hey_medo.onnx") == "hey medo"
+    assert display_phrase("hey_jarvis") == "hey jarvis"
+    assert display_phrase("/abs/path/custom_word.tflite") == "custom word"

@@ -54,6 +54,7 @@ from voice.audio import (
 from voice.stt import Transcriber
 from voice.tts import EdgeTTS, TextToSpeech, contains_cyrillic, drain_sentences
 from voice.wakeword import WakeWord
+from voice.wakeword import display_phrase as _wake_display
 
 logger = logging.getLogger("voice")
 console = Console()
@@ -481,7 +482,7 @@ class VoiceLoop:
         self._announcer.speak = self._speak
 
         self._ui.banner(
-            "voice mode — say “%s”" % self._settings.wakeword.phrase.replace("_", " "),
+            "voice mode — say “%s”" % _wake_display(self._settings.wakeword.phrase),
             self._router.model,
         )
         require_wake = True

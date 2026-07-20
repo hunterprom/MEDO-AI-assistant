@@ -19,6 +19,7 @@ from aiohttp import web
 
 from core import dirs
 from core.config import Settings
+from voice.wakeword import display_phrase as _wake_display
 from core.events import Event, EventBus, EventType
 from core.router import RouteResult
 
@@ -69,7 +70,7 @@ class HudServer:
             # from another device (localhost requests are exempt); the HUD is
             # already the trust boundary — it serves folder paths and config.
             "apiToken": self._settings.remote.token,
-            "wakePhrase": self._settings.wakeword.phrase.replace("_", " "),
+            "wakePhrase": _wake_display(self._settings.wakeword.phrase),
             "weather": {
                 "city": self._settings.weather.default_city,
                 "lat": self._settings.weather.latitude,

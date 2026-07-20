@@ -24,6 +24,18 @@ from core.config import PROJECT_ROOT, WakeWordConfig
 logger = logging.getLogger(__name__)
 
 
+def display_phrase(phrase: str) -> str:
+    """Human-friendly wake phrase for banners/HUD.
+
+    A model PATH ("models/wakeword/hey_medo.onnx") becomes its spoken form
+    ("hey medo"); a bundled name ("hey_jarvis") just has underscores spaced.
+    """
+    stem = phrase
+    if stem.lower().endswith((".onnx", ".tflite")):
+        stem = Path(stem).stem
+    return stem.replace("_", " ").strip()
+
+
 def _resolve_model_path(phrase: str) -> str:
     """Map ``wakeword.phrase`` to a model file.
 
