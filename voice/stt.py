@@ -296,6 +296,14 @@ class Transcriber:
         FIRST encode. That used to kill the whole voice loop mid-"PROCESSING";
         now the model is rebuilt on CPU/int8 once and the utterance retried.
         """
+        return self.transcribe_with_language(audio)[0]
+
+    def transcribe_with_language(self, audio: np.ndarray) -> tuple[str, str | None]:
+        """Like :meth:`transcribe` but also returns the detected language code.
+
+        Used by interpreter mode to know which way to translate. The same
+        GPU-stack self-heal applies.
+        """
         try:
             return self._transcribe(audio)
         except RuntimeError as exc:
@@ -334,11 +342,12 @@ class Transcriber:
         ]
         return segments_data, getattr(info, "language", None)
 
-    def _transcribe(self, audio: np.ndarray) -> str:
+    def _transcribe(self, audio: np.ndarray) -> tuple[str, str | None]:
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
         audio = self._normalize(audio)
         segments_data, detected = self._decode(audio, self._language)
+        language = self._language or detected
         # Auto-detect landed outside the allowed set (e.g. Macedonian heard as
         # Bulgarian): the decode used the wrong tokenizer context. Redo it with
         # the language forced — one extra pass, only on misdetection.
@@ -350,6 +359,8 @@ class Transcriber:
                     detected, self._allowed, forced,
                 )
                 segments_data, _ = self._decode(audio, forced)
+                language = forced
         if getattr(self._config, "filter_hallucinations", True):
-            return filter_transcript(segments_data)
-        return " ".join(text.strip() for text, _, _ in segments_data).strip()
+            return filter_transcript(segments_data), language
+        text = " ".join(t.strip() for t, _, _ in segments_data).strip()
+        return text, language

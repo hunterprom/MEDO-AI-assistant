@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -326,6 +327,77 @@ class VoiceLoop:
             finally:
                 mic.close()
 
+    # --- interpreter mode: transcribe -> translate -> speak ------------------
+
+    _LANG_NAME = {"en": "English", "mk": "Macedonian"}
+    # Spoken in either language, this leaves interpreter mode (routed normally
+    # so the session_mode skill flips the flag off).
+    _INTERP_EXIT = re.compile(
+        r"\b(?:stop|exit|end|quit)\s+(?:interpreting|translating|interpreter)\b"
+        r"|\binterpreter\s+(?:mode\s+)?off\b"
+        r"|\bпрекини\s+(?:со\s+)?(?:преведување|толкување)\b"
+        r"|\bстоп\s+преведување\b",
+        re.IGNORECASE,
+    )
+
+    async def _interpret_turn(self, audio) -> bool:
+        """Transcribe one utterance; translate + speak it, or exit the mode.
+
+        Returns True to keep interpreting (listen wake-less for the next line),
+        False when an exit phrase was heard and routed (back to standby).
+
+        Source language is whatever Whisper detects; MEDO speaks the OTHER of
+        the configured pair. Both the source line and the translation go to the
+        HUD as a CAPTION event. Bypasses the router except for the exit phrase.
+        """
+        from core.events import Event, EventType
+
+        assert self._stt is not None
+        await self._sm.transition(AssistantState.THINKING)
+        text, lang = await asyncio.to_thread(
+            self._stt.transcribe_with_language, normalize_peak(audio))
+        if not text.strip():
+            return True
+        if self._INTERP_EXIT.search(text):
+            result = await self._router.route(text)   # flips the mode off
+            await self._sm.transition(AssistantState.SPEAKING)
+            await self._speak(result.speech)
+            return False
+        a, b = self._modes.interpreter_langs
+        # Detected language decides direction; anything unexpected is treated as
+        # the first-of-pair so we still translate to the other.
+        src = lang if lang in (a, b) else a
+        dst = b if src == a else a
+        self._ui.transcript(f"[{src}] {text}")
+        translated = await self._translate(text, src, dst)
+        await self._sm.bus.emit(Event(EventType.CAPTION, {
+            "src": src, "src_text": text, "dst": dst, "dst_text": translated,
+        }))
+        await self._sm.transition(AssistantState.SPEAKING)
+        await self._speak(translated)
+        return True
+
+    async def _translate(self, text: str, src: str, dst: str) -> str:
+        """Translate ``text`` from ``src`` to ``dst`` via the active LLM."""
+        model = self._router.model
+        if not model:
+            return text  # no model — echo rather than drop the line
+        src_name = self._LANG_NAME.get(src, src)
+        dst_name = self._LANG_NAME.get(dst, dst)
+        messages = [
+            {"role": "system", "content": (
+                f"You are a translation engine. Translate the user's {src_name} "
+                f"text into {dst_name}. Output ONLY the translation — no quotes, "
+                f"no notes, no transliteration, nothing else.")},
+            {"role": "user", "content": text},
+        ]
+        try:
+            reply = await self._router.llm.chat(model, messages)
+        except Exception:
+            logger.warning("interpreter translation failed", exc_info=True)
+            return text
+        return (reply.get("content") or "").strip() or text
+
     # --- one turn: transcribe -> route -> speak ------------------------------
 
     async def _run_turn(self, audio, wake_to_listen_ms: float, require_wake: bool) -> bool:
@@ -414,10 +486,16 @@ class VoiceLoop:
         )
         require_wake = True
         while True:
-            if require_wake:
+            # Interpreter mode listens continuously (no wake word between lines)
+            # so it works like a live interpreter until you say "stop".
+            interpreting = self._modes.interpreter
+            cap_require_wake = require_wake and not interpreting
+            if cap_require_wake:
                 await self._sm.transition(AssistantState.IDLE)
-            audio, wake_to_listen_ms = await self._capture(require_wake)
+            audio, wake_to_listen_ms = await self._capture(cap_require_wake)
             if audio.size == 0:
+                if interpreting:
+                    continue  # silent gap — keep the interpreter open
                 if require_wake:
                     console.print("[dim](heard nothing — back to sleep)[/dim]")
                 require_wake = True
@@ -428,7 +506,12 @@ class VoiceLoop:
             # forever (state frozen in THINKING, nothing consuming wake/interrupt)
             # while typing kept working — the classic "voice is broken" state.
             try:
-                require_wake = await self._run_turn(audio, wake_to_listen_ms, require_wake)
+                if interpreting:
+                    still = await self._interpret_turn(audio)
+                    require_wake = not still  # exited -> back to standby
+                else:
+                    require_wake = await self._run_turn(
+                        audio, wake_to_listen_ms, require_wake)
             except (KeyboardInterrupt, asyncio.CancelledError):
                 raise
             except Exception:

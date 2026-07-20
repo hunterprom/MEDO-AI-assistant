@@ -42,6 +42,7 @@ class EventType(str, Enum):
     TRANSCRIPT = "transcript"          # user text (typed or from STT)
     RESPONSE = "response"              # assistant text (before/for TTS)
     ROUTED = "routed"                  # a RouteResult was produced
+    CAPTION = "caption"                # interpreter mode: source + translation
     ERROR = "error"
 
 

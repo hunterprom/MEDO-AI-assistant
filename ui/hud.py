@@ -37,6 +37,7 @@ class HudServer:
         bus.subscribe(EventType.STATE_CHANGED, self._on_state)
         bus.subscribe(EventType.TRANSCRIPT, self._on_transcript)
         bus.subscribe(EventType.ROUTED, self._on_routed)
+        bus.subscribe(EventType.CAPTION, self._on_caption)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -120,6 +121,11 @@ class HudServer:
 
     def _on_transcript(self, event: Event) -> None:
         self._broadcast({"type": "transcript", "text": event.payload})
+
+    def _on_caption(self, event: Event) -> None:
+        # Interpreter mode: {src, src_text, dst, dst_text} — the HUD shows the
+        # heard line and its translation as a live caption.
+        self._broadcast({"type": "caption", **event.payload})
 
     def _on_routed(self, event: Event) -> None:
         result: RouteResult = event.payload
