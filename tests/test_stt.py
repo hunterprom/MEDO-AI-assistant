@@ -116,3 +116,33 @@ def test_build_hotwords_extracts_command_phrases():
 
 def test_build_hotwords_without_colon_uses_whole_prompt():
     assert build_hotwords("open chrome, volume up") == "open chrome, volume up"
+
+
+# --- bilingual auto-detect clamp (pick_forced_language) ----------------------
+
+
+def test_clamp_keeps_allowed_detections():
+    from voice.stt import pick_forced_language
+
+    assert pick_forced_language("en", ["en", "mk"]) is None
+    assert pick_forced_language("mk", ["en", "mk"]) is None
+
+
+def test_clamp_forces_first_non_english_on_misdetection():
+    # Macedonian heard as Bulgarian/Serbian/Russian -> re-decode as mk.
+    from voice.stt import pick_forced_language
+
+    for wrong in ("bg", "sr", "sl", "ru", "hr"):
+        assert pick_forced_language(wrong, ["en", "mk"]) == "mk"
+
+
+def test_clamp_disabled_with_empty_allowed_list():
+    from voice.stt import pick_forced_language
+
+    assert pick_forced_language("bg", []) is None
+
+
+def test_clamp_all_english_falls_back_to_first():
+    from voice.stt import pick_forced_language
+
+    assert pick_forced_language("de", ["en"]) == "en"

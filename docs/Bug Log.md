@@ -28,6 +28,7 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 | 19 | "close browser" killed a nonexistent `browser.exe` | image name derived from the launch command (session fix, carried over) |
 | 20 | Missing Piper voice crashed `--voice` and took the HUD+API down with it | launcher downloads the voice; TTS optional; servers survive voice-stack failure (session fixes, carried over) |
 
+
 ## Fixed in the evaluator-hardening pass (2026-07-14)
 
 | # | Bug | Fix |
@@ -38,6 +39,8 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
 | 24 | "type <Cyrillic>" **silently typed nothing on macOS**: the clipboard-paste fallback pressed Ctrl+V, a no-op on a Mac (paste is Cmd+V). The tests "passed" because they pinned the Windows chord on every OS | platform-aware paste modifier in `TypeTextSkill`; tests now assert the running platform's chords |
 | 25 | Window actions and the spoken "command"/"windows" key were **Windows chords on every OS** — Alt+F4, Win+Down, Win+D are dead keys on a Mac, and "press command …" resolved to a `win` key | per-OS `WindowActionSkill.ACTIONS` (Cmd+M / Ctrl+Cmd+F / Cmd+W / F11 / Cmd+Tab on macOS); `KEY_MAP` maps windows/command/cmd to this machine's super key |
 | 26 | `python -m voice.wakeword` printed a mic **priority list** as `device #['A25', 'FHD Webcam']` (looked like a broken index) | tester now prints "first available of A25 > FHD Webcam" |
+| 27 | Macedonian STT only understood trivial phrases ("Како си?" worked, complex sentences decoded as garbage): Whisper `small` is too weak for mk, auto-detect misheard mk as Bulgarian/Serbian (wrong tokenizer → garbled decode), CUDA math DLLs were missing (CPU int8), and the 1.0 s silence gate cut sentences at mid-thought pauses | `large-v3-turbo` on GPU — pip `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` wheels + DLL-dir registration in stt.py; en/mk detection clamp (one forced re-decode on misdetection); silence gate 1.4 s. A/B on a synthesized complex mk sentence: small → gibberish, turbo → the full sentence (decode 1.5 s, warm load 3.1 s) |
+
 
 ## Known limitations (open, by design or deferred)
 

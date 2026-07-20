@@ -35,3 +35,7 @@ feedparser>=6.0      # news via RSS
 # --- tooling ---
 pytest>=8.0
 pytest-asyncio>=0.23
+# GPU speech recognition (Windows/NVIDIA): ctranslate2 needs cuBLAS 12 + cuDNN 9.
+# Already installed in this machine's venv; uncomment on a fresh GPU setup (~1.5 GB):
+# nvidia-cublas-cu12
+# nvidia-cudnn-cu12
