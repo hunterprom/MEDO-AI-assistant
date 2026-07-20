@@ -48,3 +48,21 @@ def test_system_prompt_forbids_claiming_blindness():
     prompt = system_prompt(PersonalityConfig())
     assert "see_camera" in prompt and "see_screen" in prompt
     assert "Never claim you lack cameras" in prompt
+
+
+def test_shrink_downscales_big_images_and_passes_junk_through():
+    import io as _io
+
+    from PIL import Image
+
+    from skills.vision_skill import _shrink
+
+    big = _io.BytesIO()
+    Image.new("RGB", (2560, 1440), "white").save(big, format="PNG")
+    small = Image.open(_io.BytesIO(_shrink(big.getvalue())))
+    assert max(small.size) == 1280 and small.size == (1280, 720)
+
+    tiny = _io.BytesIO()
+    Image.new("RGB", (640, 480)).save(tiny, format="PNG")
+    assert _shrink(tiny.getvalue()) == tiny.getvalue()  # small stays untouched
+    assert _shrink(b"not an image") == b"not an image"  # junk passes through

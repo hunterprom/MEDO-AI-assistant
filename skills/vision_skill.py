@@ -35,6 +35,31 @@ READ_SCREEN_PROMPT = (
 )
 
 
+def _shrink(image_bytes: bytes, max_side: int = 1280) -> bytes:
+    """Downscale big captures before the vision model sees them.
+
+    qwen2.5-vl uses dynamic resolution: a full 2560x1440 screenshot explodes
+    into thousands of image tokens and blows the 60 s timeout on a 12 GB GPU
+    (surfaced as "can't reach my vision model"). ~1280 px keeps screen text
+    legible and answers in seconds. Best-effort — undecodable bytes pass
+    through untouched.
+    """
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes))
+        scale = max_side / max(img.size)
+        if scale >= 1.0:
+            return image_bytes
+        img = img.resize((round(img.width * scale), round(img.height * scale)),
+                         Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return image_bytes
+
+
 async def _describe(settings: Settings, image_b64: str, prompt: str) -> SkillResult:
     """Send one base64 image to the local Ollama vision model."""
     import httpx
@@ -139,11 +164,12 @@ class SeeScreenSkill(Skill):
             shot = await asyncio.to_thread(pyautogui.screenshot)
             buf = io.BytesIO()
             shot.save(buf, format="PNG")
+            small = await asyncio.to_thread(_shrink, buf.getvalue())
         except Exception as exc:
             return SkillResult(f"I couldn't capture the screen: {exc}", success=False)
         prompt = READ_SCREEN_PROMPT if wants_read else DESCRIBE_SCREEN_PROMPT
         return await _describe(
-            self._settings, base64.b64encode(buf.getvalue()).decode(), prompt
+            self._settings, base64.b64encode(small).decode(), prompt
         )
 
     def tool_schema(self) -> dict[str, Any]:
