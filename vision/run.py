@@ -295,19 +295,32 @@ def main() -> None:
 
     try:
         while True:
-            engine._thread.join(5.0)  # type: ignore[union-attr]
-            if engine._thread.is_alive():  # type: ignore[union-attr]
-                continue
+            thread = getattr(engine, "_thread", None)
+            if thread is not None:
+                thread.join(5.0)
+                if thread.is_alive():
+                    continue
             # The capture thread died (camera unplugged, driver hiccup,
             # MediaPipe error). This used to exit the WHOLE sidecar - the HUD
             # showed "optical feed offline" until a manual restart. Now the
-            # HTTP server stays up and the engine relaunches itself.
+            # HTTP server stays up and the engine relaunches itself — and a
+            # FAILED relaunch (camera still held by another app) retries
+            # forever instead of raising out of the loop and killing the
+            # process, which is exactly how "camera offline" came back.
             logger.warning("gesture engine stopped - restarting in 3 s")
             time.sleep(3.0)
-            engine.stop()
-            engine = GestureEngine(cfg, poster)
-            engine.start()
-            holder["engine"] = engine
+            try:
+                engine.stop()
+            except Exception:
+                pass
+            try:
+                engine = GestureEngine(cfg, poster)
+                engine.start()
+                holder["engine"] = engine
+                logger.info("gesture engine restarted")
+            except Exception:
+                logger.exception("engine restart failed - retrying in 10 s")
+                time.sleep(10.0)
     except KeyboardInterrupt:
         pass
     finally:
