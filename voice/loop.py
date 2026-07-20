@@ -81,6 +81,7 @@ class VoiceLoop:
         ui: ConsoleUI,
         log: LatencyLog,
         wake_event: threading.Event | None = None,
+        modes: Any = None,
     ) -> None:
         self._settings = settings
         self._router = router
@@ -89,6 +90,13 @@ class VoiceLoop:
         self._ui = ui
         self._log = log
         self._wake_event = wake_event
+        # Shared runtime toggles (continuous conversation, interpreter mode).
+        # Defaults to a fresh SessionModes so the loop works without one.
+        if modes is None:
+            from core.modes import SessionModes
+
+            modes = SessionModes(continuous=settings.conversation.continuous)
+        self._modes = modes
         # Loaded by run() -> _load_models(); None until then.
         self._wakeword: WakeWord | None = None
         self._stt: Transcriber | None = None
@@ -280,7 +288,13 @@ class VoiceLoop:
         device when the HUD mic picker changes settings mid-wait, and falls back
         to the system default when a picked device can't be opened — so a bad
         pick degrades instead of killing voice mode.
+
+        A wake-less capture (a confirmation follow-up, or continuous mode)
+        waits ``followup_window_s`` for speech to begin, then returns empty —
+        so a silent follow-up window naturally falls back to standby.
         """
+        start_timeout = (self._settings.conversation.followup_window_s
+                         if not require_wake else 6.0)
         while True:
             device = self._settings.audio.input_device
             mic = Microphone(self._settings.audio.sample_rate, device=device)
@@ -306,6 +320,7 @@ class VoiceLoop:
                     mic,
                     silence_threshold=self._settings.audio.silence_threshold,
                     silence_duration_s=self._settings.audio.silence_duration_s,
+                    start_timeout_s=start_timeout,
                 )
                 return audio, wake_to_listen_ms
             finally:
@@ -375,8 +390,13 @@ class VoiceLoop:
         ))
         self._ui.turn(result, self._log.turns[-1])
         # Listen again right away (no wake word) when MEDO asked "are you
-        # sure?" or the user just interrupted — they clearly want to talk.
-        next_require_wake = not (self._router.awaiting_confirmation or self._barged_in)
+        # sure?", the user just interrupted, or continuous mode is on — in all
+        # three cases they clearly want to keep talking.
+        next_require_wake = not (
+            self._modes.continuous
+            or self._router.awaiting_confirmation
+            or self._barged_in
+        )
         self._barged_in = False
         return next_require_wake
 

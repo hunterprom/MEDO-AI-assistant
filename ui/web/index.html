@@ -524,6 +524,14 @@
         <button class="toggle on" id="cfg-pc"><span class="knob"></span></button>
       </div>
       <div class="setting">
+        <div class="info"><span class="name">Continuous conversation</span><span class="desc">KEEP LISTENING AFTER EACH REPLY — NO WAKE WORD BETWEEN TURNS</span></div>
+        <button class="toggle" id="cfg-continuous"><span class="knob"></span></button>
+      </div>
+      <div class="setting">
+        <div class="info"><span class="name">Interpreter mode</span><span class="desc">LIVE EN↔MK TRANSLATION — MEDO SPEAKS EACH LINE BACK IN THE OTHER LANGUAGE</span></div>
+        <button class="toggle" id="cfg-interpreter"><span class="knob"></span></button>
+      </div>
+      <div class="setting">
         <div class="info"><span class="name">Camera feed</span><span class="desc">SHOW THE OPTICAL FEED PANEL ON CORE</span></div>
         <button class="toggle on" id="cfg-cam"><span class="knob"></span></button>
       </div>
@@ -976,6 +984,29 @@
     } catch { log('PC CONTROL — API offline'); }
   };
   (async () => { try { const d = await (await fetch(`${API}/status`)).json(); if ('pc_control' in d) setPcUI(d.pc_control); } catch { } })();
+
+  /* ---- session modes: continuous conversation + interpreter ---- */
+  function setModeUI(id, on) { $(id).classList.toggle('on', !!on); }
+  async function toggleMode(mode, id) {
+    const on = !$(id).classList.contains('on');
+    try {
+      const r = await (await fetch(`${API}/control/modes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, on }),
+      })).json();
+      setModeUI(id, r.on);
+      log(`${mode.toUpperCase()} ${r.on ? 'ON' : 'OFF'}`);
+    } catch { log(`${mode.toUpperCase()} — API offline`); }
+  }
+  $('cfg-continuous').onclick = () => toggleMode('continuous', 'cfg-continuous');
+  $('cfg-interpreter').onclick = () => toggleMode('interpreter', 'cfg-interpreter');
+  (async () => {
+    try {
+      const d = await (await fetch(`${API}/status`)).json();
+      if ('continuous' in d) setModeUI('cfg-continuous', d.continuous);
+      if ('interpreter' in d) setModeUI('cfg-interpreter', d.interpreter);
+    } catch { }
+  })();
 
   let scan = localStorage.getItem('medo_scanlines') !== 'off';
   function applyScan() {

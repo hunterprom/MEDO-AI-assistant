@@ -143,6 +143,7 @@ class RemoteServer:
         doc_index=None,
         mcp_manager=None,
         link=None,
+        modes=None,
     ) -> None:
         self._settings = settings
         self._router = router
@@ -151,6 +152,13 @@ class RemoteServer:
         self._mcp = mcp_manager
         # MEDO Link device registry (link/registry.py); None disables /link/*.
         self._link = link
+        # Shared session-mode toggles (continuous / interpreter); None -> a
+        # fresh holder so /control/modes and /status still work in tests.
+        if modes is None:
+            from core.modes import SessionModes
+
+            modes = SessionModes()
+        self._modes = modes
         # When True, a /provider switch writes the key/model to the git-ignored
         # secrets file so it survives a restart. Off by default (and in tests).
         self._persist_secrets = persist_secrets
@@ -200,6 +208,7 @@ class RemoteServer:
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
         app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_post("/control/pc", self._handle_pc_control)
+        app.router.add_post("/control/modes", self._handle_modes)
         # MEDO Link (M9): manifest-driven device layer. Token-authed like
         # everything else — LAN devices must present the bearer token.
         app.router.add_post("/link/register", self._handle_link_register)
@@ -390,6 +399,9 @@ class RemoteServer:
                 "has_anthropic_key": bool(self._settings.llm.anthropic_api_key),
                 # The PC CONTROL switch (may MEDO act on this computer?).
                 "pc_control": self._settings.safety.pc_control_enabled,
+                # Session modes (continuous conversation, interpreter).
+                "continuous": self._modes.continuous,
+                "interpreter": self._modes.interpreter,
                 # Which local CLI agents exist on this machine (for the HUD).
                 "cli_available": await asyncio.to_thread(self._cli_availability),
             }
@@ -703,6 +715,29 @@ class RemoteServer:
         logger.info("PC control switched %s via companion API",
                     "ON" if enabled else "OFF")
         return web.json_response({"ok": True, "on": enabled})
+
+    async def _handle_modes(self, request: web.Request) -> web.Response:
+        """Flip a session mode from the HUD: continuous conversation / interpreter.
+
+        Body ``{"mode": "continuous"|"interpreter", "on": bool}``. The voice
+        loop reads the shared SessionModes live, so the change takes effect on
+        the next turn. Runtime-only (not persisted) — a mode is a per-session
+        choice, not a machine setting.
+        """
+        try:
+            payload = await request.json()
+            mode = str(payload["mode"])
+            on = bool(payload["on"])
+        except (ValueError, KeyError, TypeError):
+            return _error(400, "body must be JSON like {\"mode\": \"continuous\", \"on\": true}")
+        if mode == "continuous":
+            self._modes.continuous = on
+        elif mode == "interpreter":
+            self._modes.interpreter = on
+        else:
+            return _error(400, "mode must be 'continuous' or 'interpreter'")
+        logger.info("session mode %r set to %s via companion API", mode, on)
+        return web.json_response({"ok": True, "mode": mode, "on": on})
 
     # --- MEDO Link (M9): manifest-driven device layer -----------------------
 

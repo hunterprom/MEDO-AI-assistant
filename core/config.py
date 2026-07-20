@@ -78,6 +78,18 @@ class RouterConfig(BaseModel):
     fast_path_enabled: bool = True
 
 
+class ConversationConfig(BaseModel):
+    """Continuous-conversation mode (voice/loop.py + core/modes.py)."""
+
+    # When on, MEDO keeps listening after each reply for a natural follow-up
+    # without the wake word. Toggle live by voice ("continuous mode on") or the
+    # HUD; this is just the boot default.
+    continuous: bool = False
+    # How long the mic stays open for a follow-up before falling back to
+    # standby on silence.
+    followup_window_s: float = 8.0
+
+
 class PersonalityConfig(BaseModel):
     name: str = "MEDO"
     address_user_as: str = "sir"
@@ -330,6 +342,7 @@ class Settings(BaseSettings):
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
     router: RouterConfig = Field(default_factory=RouterConfig)
+    conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)

@@ -38,6 +38,14 @@ llm:
 router:
   fast_path_enabled: true           # deterministic skills before touching the LLM
 
+conversation:                       # continuous mode (voice/loop.py, core/modes.py)
+  # When on, MEDO keeps listening after each reply for a natural follow-up
+  # WITHOUT the wake word. Toggle live by voice ("continuous mode on") or the
+  # HUD CONFIG switch — this is only the boot default.
+  continuous: false
+  followup_window_s: 8.0            # mic stays open this long for a follow-up,
+                                    # then falls back to standby on silence
+
 personality:
   name: "MEDO"
   address_user_as: "sir"            # used sparingly by the system prompt (M4)

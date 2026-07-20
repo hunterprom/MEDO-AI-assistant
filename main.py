@@ -120,6 +120,7 @@ def build_registry(
     reminder_store: ReminderStore | None = None,
     doc_index=None,
     briefing_rewrite=None,
+    modes=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -143,6 +144,13 @@ def build_registry(
 
     registry.register(DateTimeSkill())
     registry.register(TimerSkill(announcer, reminder_store))
+    # Session-mode toggles (continuous conversation / interpreter). Registered
+    # early so its phrases can't be stolen; flips the shared SessionModes the
+    # voice loop reads. A no-op holder when modes weren't provided (tests).
+    if modes is not None:
+        from skills.modes_skill import ModesSkill
+
+        registry.register(ModesSkill(modes))
     # Morning briefing (M8): chains weather/news/reminders/facts; registered
     # early so "brief me" can't be stolen by broader patterns.
     from skills.briefing import BriefingSkill
@@ -425,8 +433,14 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             _roots,
         )
 
+    # Shared runtime toggles (continuous conversation, interpreter mode): one
+    # instance seen by the modes skill, the voice loop, and the companion API.
+    from core.modes import SessionModes
+
+    modes = SessionModes(continuous=settings.conversation.continuous)
+
     registry = build_registry(settings, announcer, summarize, reminders, doc_index,
-                              briefing_rewrite=briefing_rewrite)
+                              briefing_rewrite=briefing_rewrite, modes=modes)
 
     # MCP: connect configured servers and register their tools as skills, so
     # any application that speaks the Model Context Protocol becomes callable
@@ -497,7 +511,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         remote = RemoteServer(settings, router, sm, persist_secrets=True,
                               wake_event=wake_event if voice else None,
                               doc_index=doc_index, mcp_manager=mcp_manager,
-                              link=link)
+                              link=link, modes=modes)
         try:
             await remote.start()
         except OSError as exc:
@@ -536,7 +550,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             # serves alongside it.
             try:
                 await VoiceLoop(settings, router, sm, announcer, ui, log,
-                                wake_event=wake_event).run()
+                                wake_event=wake_event, modes=modes).run()
             except (KeyboardInterrupt, asyncio.CancelledError):
                 raise
             except Exception as exc:
