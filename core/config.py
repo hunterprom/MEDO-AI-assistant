@@ -286,6 +286,14 @@ class RoutineItem(BaseModel):
     enabled: bool = True
 
 
+class BriefingConfig(BaseModel):
+    """Morning briefing sections (M8, skills/briefing.py) — order matters."""
+
+    sections: list[str] = Field(
+        default_factory=lambda: ["weather", "news", "reminders", "upcoming"]
+    )
+
+
 class LoggingConfig(BaseModel):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     routing_stats: bool = True
@@ -319,6 +327,7 @@ class Settings(BaseSettings):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     routines: list[RoutineItem] = Field(default_factory=list)
+    briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
     skills: dict = Field(default_factory=dict)

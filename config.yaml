@@ -252,14 +252,19 @@ mcp:                                # Model Context Protocol client (core/mcp.py
   call_timeout_s: 60
   servers: {}
 
-routines:                           # proactive briefings (core/routines.py)
+routines:                           # proactive schedule (core/routines.py)
   - name: "morning briefing"
     at: "08:00"                     # HH:MM local time
     days: []                        # empty = every day; or [mon, tue, wed, thu, fri]
     ask:
-      - "what's the weather"
-      - "what's the news"
+      - "morning briefing"          # the M8 briefing skill: one flowing summary
     enabled: true
+
+briefing:                           # morning briefing content (skills/briefing.py)
+  # Sections in speaking order; remove one to drop it. Each degrades on its
+  # own (offline weather, empty reminders, ...) — the briefing never fails.
+  # Also on demand: say "morning briefing", "brief me", or "добро утро медо".
+  sections: ["weather", "news", "reminders", "upcoming"]
 
 logging:
   level: "INFO"                     # DEBUG for state transitions + routing detail

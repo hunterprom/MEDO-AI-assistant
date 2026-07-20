@@ -119,6 +119,7 @@ def build_registry(
     summarize: "callable[[str, str], Awaitable[str]] | None" = None,
     reminder_store: ReminderStore | None = None,
     doc_index=None,
+    briefing_rewrite=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -126,6 +127,8 @@ def build_registry(
     about memory" aren't stolen by the broad ``sleep`` / ``memory`` patterns.
     Web skills come last (broad "search for …"). ``summarize`` (LLM) powers the
     fast-path web-search summary; None => it returns raw results.
+    ``briefing_rewrite`` is the LLM pass that turns briefing sections into one
+    flowing spoken paragraph; None => the briefing speaks its raw sections.
     """
     registry = SkillRegistry()
     apps_table = settings.skills.get("apps", {})
@@ -133,9 +136,21 @@ def build_registry(
     notes = NoteStore(settings.memory.db_path)
     facts = FactsStore(settings.memory.db_path)
     shots = PROJECT_ROOT / "screenshots"
+    # Weather/news are registered LAST (broad patterns) but constructed here so
+    # the briefing chains the very same instances instead of duplicating them.
+    weather_skill = WeatherSkill(settings.weather)
+    news_skill = NewsSkill(settings.news)
 
     registry.register(DateTimeSkill())
     registry.register(TimerSkill(announcer, reminder_store))
+    # Morning briefing (M8): chains weather/news/reminders/facts; registered
+    # early so "brief me" can't be stolen by broader patterns.
+    from skills.briefing import BriefingSkill
+
+    registry.register(BriefingSkill(
+        settings.briefing.sections, weather_skill, news_skill,
+        reminders=reminder_store, facts=facts, rewrite=briefing_rewrite,
+    ))
     registry.register(NotesSkill(notes))
     # Long-term facts. Recall/forget register before remember so "what do you
     # remember" is answered, never stored.
@@ -179,8 +194,8 @@ def build_registry(
     })
 
     # Web skills (network; degrade gracefully offline; broad patterns last).
-    registry.register(WeatherSkill(settings.weather))
-    registry.register(NewsSkill(settings.news))
+    registry.register(weather_skill)
+    registry.register(news_skill)
     registry.register(WebSearchSkill(summarize))
     return registry
 
@@ -336,6 +351,33 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return "I found results, but my summarizer is offline."
         return (message.get("content") or "").strip() or "I couldn't summarize that."
 
+    async def briefing_rewrite(macedonian: bool, raw_sections: str) -> str:
+        """One LLM pass: briefing sections -> a flowing spoken paragraph (M8).
+
+        Persona-aware (M7 fragment) and language-matched. Returns "" when no
+        model is available — the briefing then speaks its raw sections.
+        """
+        if not router.model:
+            return ""
+        from core.persona import Persona
+
+        language = "Macedonian" if macedonian else "English"
+        prompt = [
+            {"role": "system", "content": (
+                f"You are {settings.personality.name}, a voice assistant. "
+                f"{Persona(settings.personality).prompt_fragment()} "
+                f"Rewrite the user's briefing sections into ONE flowing spoken "
+                f"morning briefing in {language}, 30 to 60 seconds when read "
+                f"aloud. Plain text only — no markdown, no lists, no headings. "
+                f"Keep every fact; invent nothing.")},
+            {"role": "user", "content": raw_sections},
+        ]
+        try:
+            message = await llm.chat(router.model, prompt)
+        except LLMUnavailableError:
+            return ""
+        return (message.get("content") or "").strip()
+
     reminders = ReminderStore(settings.memory.db_path)
 
     # Documents RAG index: same local embedder as semantic facts, same safety
@@ -357,7 +399,8 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             _roots,
         )
 
-    registry = build_registry(settings, announcer, summarize, reminders, doc_index)
+    registry = build_registry(settings, announcer, summarize, reminders, doc_index,
+                              briefing_rewrite=briefing_rewrite)
 
     # MCP: connect configured servers and register their tools as skills, so
     # any application that speaks the Model Context Protocol becomes callable
