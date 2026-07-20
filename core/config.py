@@ -81,6 +81,13 @@ class RouterConfig(BaseModel):
 class PersonalityConfig(BaseModel):
     name: str = "MEDO"
     address_user_as: str = "sir"
+    # The Jarvis charm (core/persona.py). style sets the LLM manner fragment
+    # AND gates fast-path quips; wit_level is the per-reply quip probability
+    # (0 = never, 1 = always; fast path only). quips_language "match" answers
+    # Macedonian input with Macedonian quips; or pin "en"/"mk".
+    style: Literal["dry_wit", "professional", "minimal"] = "dry_wit"
+    wit_level: float = 0.3
+    quips_language: str = "match"
 
 
 class RemoteConfig(BaseModel):

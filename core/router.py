@@ -112,6 +112,11 @@ class Router:
                 return embed_texts(texts, embed_model, embed_host)
 
         self.facts = FactsStore(settings.memory.db_path, embedder)
+        #: Personality layer (M7): occasionally decorates fast-path replies.
+        #: Tests may replace it (or inject a seeded rng) for determinism.
+        from core.persona import Persona
+
+        self._persona = Persona(settings.personality)
 
     @property
     def llm(self) -> OllamaClient:
@@ -186,6 +191,12 @@ class Router:
         if outcome.needs_confirmation and self._settings.safety.confirm_destructive:
             # Stash the request; the next utterance is treated as the yes/no.
             self._pending = (skill, request)
+        elif outcome.success and not skill.requires_confirmation:
+            # Personality (M7) decorates only successful, non-gated outcomes —
+            # errors, safety prompts, and destructive actions stay literal.
+            outcome.speech = self._persona.decorate(
+                outcome.speech, skill_name=skill.name, user_text=request.text
+            )
         return RouteResult(
             path=RoutePath.FAST,
             speech=outcome.speech,

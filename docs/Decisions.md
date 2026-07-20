@@ -38,6 +38,14 @@ Why the super project is shaped the way it is.
   level; short-lived connections per op (no cross-thread sharing).
 - **Pointer mode always boots OFF** and turning it on can be refused by
   config — a stray API call must never grab the mouse unasked.
+- **Personality is a decorator layer, not baked into skill strings.** Skills
+  return literal, testable replies; `core/persona.py` occasionally appends a
+  curated quip (probability `wit_level`) at ONE choke point in the router,
+  which by construction skips errors, safety confirmations, and destructive
+  actions — the "never joke at a safety prompt" rule lives in one place
+  instead of thirty skill files. The LLM path gets the same persona as a 2–3
+  sentence manner fragment (num_ctx is 4096; no prompt bloat). Swapping
+  `style: professional` changes the whole assistant without touching a skill.
 - **Design provenance.** The HUD implements `Medo.dc.html` from the user's
   claude.ai/design handoff zip (the earlier share link had expired; the zip
   in `design/` is the source of truth). `support.js` in the handoff is the

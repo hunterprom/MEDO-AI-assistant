@@ -41,6 +41,12 @@ router:
 personality:
   name: "MEDO"
   address_user_as: "sir"            # used sparingly by the system prompt (M4)
+  # The Jarvis charm (core/persona.py, M7). A decorator layer over the fast
+  # path plus a manner fragment in the LLM system prompt — skills stay literal.
+  style: "dry_wit"                  # dry_wit | professional | minimal
+  wit_level: 0.3                    # 0 = never quip, 1 = quip often (fast path only;
+                                    # never on errors, confirmations, or destructive acts)
+  quips_language: "match"           # match user's language (mk quips for mk input) | en | mk
 
 remote:
   # Companion API for the watch app (remote/server.py). LAN-only; there is no

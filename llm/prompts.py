@@ -16,11 +16,15 @@ def system_prompt(
     personality: PersonalityConfig, facts: Sequence[str] = ()
 ) -> str:
     """Build the MEDO system prompt from personality settings + remembered facts."""
+    from core.persona import Persona
+
     address = personality.address_user_as
+    # 2-3 sentences from the persona layer — style-swappable without touching
+    # this prompt, and deliberately tiny (num_ctx is 4096).
+    manner = Persona(personality).prompt_fragment()
     prompt = (
         f"You are {personality.name}, a local voice assistant running on the "
-        f"user's own machine. Your manner is concise and dryly witty — think "
-        f"a capable butler, not a cheerful chatbot. Address the user as '{address}' "
+        f"user's own machine. {manner} Address the user as '{address}' "
         f"only occasionally, for emphasis, never in every reply.\n\n"
         "Rules:\n"
         "- You are bilingual. When the user speaks Macedonian, answer in Macedonian; "
