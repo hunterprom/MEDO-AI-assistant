@@ -47,6 +47,11 @@ class OpenWebsiteSkill(Skill):
         re.compile(r"\b(?:open|go\s+to|visit)\s+(?:the\s+)?"
                    r"(?P<url>(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?)",
                    re.IGNORECASE),
+        # Voice: Whisper transcribes "tinkercad.com" as "tinkercad dot com" —
+        # words, not a dot — which used to fall through to the LLM.
+        re.compile(r"\b(?:open|go\s+to|visit)\s+(?:the\s+)?"
+                   r"(?P<spoken>[\w-]+(?:\s+(?:dot|точка)\s+[\w-]+)+)\b",
+                   re.IGNORECASE),
         # "open the website tinkercad" — explicit keyword, no dot needed.
         re.compile(r"\bopen\s+(?:the\s+)?(?:web\s?site|web\s?page)\s+(?P<name>.+)$",
                    re.IGNORECASE),
@@ -66,9 +71,12 @@ class OpenWebsiteSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         target = (request.args.get("url") or request.args.get("query")
-                  or gd.get("url") or gd.get("name") or gd.get("query") or "").strip()
+                  or gd.get("url") or gd.get("spoken") or gd.get("name")
+                  or gd.get("query") or "").strip()
         if not target:
             return SkillResult("Which website should I open?", success=False)
+        # Spoken separators back to real ones ("tinkercad dot com" -> ".").
+        target = re.sub(r"\s+(?:dot|точка)\s+", ".", target, flags=re.IGNORECASE)
         url = to_url(target)
         ok = await asyncio.to_thread(self._opener, url)
         if ok is False:  # webbrowser.open returns False when no browser exists

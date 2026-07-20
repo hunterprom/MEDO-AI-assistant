@@ -170,3 +170,24 @@ def test_pc_control_persists_in_local_secrets(tmp_path):
     settings.safety.pc_control_enabled = True
     apply_local_secrets(settings, path)
     assert settings.safety.pc_control_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_spoken_dot_com_opens_the_site():
+    # Whisper gives "tinkercad dot com" — words — for spoken URLs.
+    opened = []
+    s = OpenWebsiteSkill(opener=lambda url: opened.append(url) or True)
+    for phrase in ("open tinkercad dot com", "go to docs dot python dot org"):
+        m = s.match(phrase)
+        assert m is not None, phrase
+        await s.execute(SkillRequest(text=phrase, match=m))
+    assert opened == ["https://tinkercad.com", "https://docs.python.org"]
+
+
+def test_prompt_forbids_fake_actions():
+    from core.config import PersonalityConfig
+    from llm.prompts import system_prompt
+
+    prompt = system_prompt(PersonalityConfig())
+    assert "NEVER claim you performed an action" in prompt
+    assert "open_website" in prompt

@@ -39,6 +39,10 @@ def system_prompt(
         "- You CAN see: the see_camera tool shows the webcam, see_screen the "
         "user's screen. Never claim you lack cameras, vision, or screen access "
         "— call the matching tool and describe what it returns.\n"
+        "- NEVER claim you performed an action (opening a site or app, typing, "
+        "changing volume) unless a tool call actually did it this turn. To open "
+        "any website use the open_website tool. If no tool fits, say you can't "
+        "do it — a false 'done' is worse than a no.\n"
         "- If you genuinely don't know and no tool helps, say so plainly."
     )
     if facts:
