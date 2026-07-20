@@ -191,3 +191,16 @@ def test_prompt_forbids_fake_actions():
     prompt = system_prompt(PersonalityConfig())
     assert "NEVER claim you performed an action" in prompt
     assert "open_website" in prompt
+
+
+@pytest.mark.asyncio
+async def test_bare_site_shortcuts_open_deterministically():
+    opened = []
+    s = OpenWebsiteSkill(opener=lambda url: opened.append(url) or True)
+    m = s.match("open tinkercad")
+    assert m is not None
+    await s.execute(SkillRequest(text="open tinkercad", match=m))
+    assert opened == ["https://tinkercad.com"]
+    # Curated list only: apps and folders are never stolen.
+    for phrase in ("open chrome", "open notepad", "open downloads"):
+        assert s.match(phrase) is None, phrase

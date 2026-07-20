@@ -24,6 +24,17 @@ _DOMAIN_RE = re.compile(r"^(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?$", re.IGNO
 
 SEARCH_URL = "https://duckduckgo.com/?q={query}"
 
+#: Bare names that open as <name>.com without saying "dot com" — a CURATED
+#: list on purpose: a generic "open <word>" rule would steal app launches
+#: ("open notepad") and folder commands ("open downloads"). The LLM path
+#: otherwise tends to *claim* it opened the site without calling any tool.
+SITE_SHORTCUTS = (
+    "tinkercad", "youtube", "google", "github", "gmail", "wikipedia",
+    "reddit", "twitch", "instagram", "facebook", "twitter", "chatgpt",
+    "claude", "stackoverflow", "amazon", "ebay", "netflix", "canva",
+    "figma", "discord", "whatsapp",
+)
+
 
 def to_url(target: str) -> str:
     """A spoken target -> the URL to open (site directly, else a web search)."""
@@ -55,6 +66,10 @@ class OpenWebsiteSkill(Skill):
         # "open the website tinkercad" — explicit keyword, no dot needed.
         re.compile(r"\bopen\s+(?:the\s+)?(?:web\s?site|web\s?page)\s+(?P<name>.+)$",
                    re.IGNORECASE),
+        # "open tinkercad" — curated bare names only (see SITE_SHORTCUTS).
+        re.compile(r"\b(?:open|go\s+to|visit)\s+(?:the\s+)?(?P<shortcut>"
+                   + "|".join(SITE_SHORTCUTS) + r")\b",
+                   re.IGNORECASE),
         # "search for arduino sensors in the browser".
         re.compile(r"\bsearch\s+(?:for\s+)?(?P<query>.+?)\s+in\s+(?:the\s+|my\s+)?browser\b",
                    re.IGNORECASE),
@@ -70,9 +85,12 @@ class OpenWebsiteSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
+        shortcut = gd.get("shortcut")
+        if shortcut:
+            shortcut = f"{shortcut.lower()}.com"
         target = (request.args.get("url") or request.args.get("query")
-                  or gd.get("url") or gd.get("spoken") or gd.get("name")
-                  or gd.get("query") or "").strip()
+                  or gd.get("url") or gd.get("spoken") or shortcut
+                  or gd.get("name") or gd.get("query") or "").strip()
         if not target:
             return SkillResult("Which website should I open?", success=False)
         # Spoken separators back to real ones ("tinkercad dot com" -> ".").
