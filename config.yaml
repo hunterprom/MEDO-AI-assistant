@@ -248,6 +248,10 @@ skills:
       darwin:  "open -a Calculator"
       windows: "start calc"
       linux:   "gnome-calculator"
+    notepad:
+      darwin:  "open -a TextEdit"
+      windows: "start notepad"
+      linux:   "gedit"
     steam:
       darwin:  "open -a Steam"
       windows: "start steam://open/main"

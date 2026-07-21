@@ -18,6 +18,27 @@ from skills.base import Skill, SkillRequest, SkillResult
 
 _MAX_RESULTS = 25
 
+
+def search_files(whitelist: PathWhitelist, query: str,
+                 limit: int = _MAX_RESULTS) -> list[Path]:
+    """Filename substring search across the whitelisted trees.
+
+    Shared with :mod:`skills.file_edit`, which must resolve a spoken file name
+    the same way this skill does — and, more importantly, must be confined to
+    exactly the same directories.
+    """
+    query = query.lower().strip().strip("?.!")
+    hits: list[Path] = []
+    for root in whitelist.roots:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if query in path.name.lower() and whitelist.is_allowed(path):
+                hits.append(path)
+                if len(hits) >= limit:
+                    return hits
+    return hits
+
 #: "file" in Macedonian, bare and with the definite article, plus the
 #: colloquial borrowing. Longest first — "датотеката" must win over "датотека".
 _MK_FILE = r"датотеките|датотеката|датотека|документот|документ|фајлот|фајл"
@@ -58,17 +79,7 @@ class FilesSkill(Skill):
         self._whitelist = whitelist
 
     def _search(self, query: str) -> list[Path]:
-        query = query.lower().strip().strip("?.!")
-        hits: list[Path] = []
-        for root in self._whitelist.roots:
-            for path in root.rglob("*"):
-                if not path.is_file():
-                    continue
-                if query in path.name.lower() and self._whitelist.is_allowed(path):
-                    hits.append(path)
-                    if len(hits) >= _MAX_RESULTS:
-                        return hits
-        return hits
+        return search_files(self._whitelist, query, _MAX_RESULTS)
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         speak_mk = mk.is_cyrillic(request.text)

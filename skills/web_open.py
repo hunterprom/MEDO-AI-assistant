@@ -24,8 +24,22 @@ from core import mk
 from skills.base import Skill, SkillRequest, SkillResult
 from skills.sites import SITES, alias_alternation, open_with, resolve_site
 
-#: something.tld[/path...] — enough to tell a site from a search phrase.
-_DOMAIN_RE = re.compile(r"^(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?$", re.IGNORECASE)
+#: File extensions that must NOT read as a top-level domain. Without this,
+#: "open notes.md" and "open report.pdf" look exactly like domains and get
+#: browsed to instead of opened. Deliberately excludes suffixes that ARE real
+#: TLDs (.io, .co, .ai, .sh, .me) — those stay ambiguous and resolve as sites.
+_FILE_EXT = (
+    r"(?:md|markdown|txt|rtf|pdf|docx?|xlsx?|pptx?|odt|csv|tsv|json|ya?ml|toml"
+    r"|ini|cfg|conf|log|py|js|ts|jsx|tsx|html?|css|scss|xml|sql|bat|ps1|exe|dll"
+    r"|png|jpe?g|gif|bmp|svg|webp|ico|zip|rar|7z|tar|gz|mp3|mp4|wav|flac|mkv"
+    r"|mov|avi|bak|tmp)"
+)
+
+#: something.tld[/path...] — enough to tell a site from a search phrase, and
+#: (via the lookahead) from a filename.
+_DOMAIN = (r"(?:https?://)?[\w-]+(?:\.[\w-]+)*\.(?!" + _FILE_EXT
+           + r"\b)[\w-]+(?:/\S*)?")
+_DOMAIN_RE = re.compile(rf"^{_DOMAIN}$", re.IGNORECASE)
 
 SEARCH_URL = "https://duckduckgo.com/?q={query}"
 
@@ -83,7 +97,7 @@ class OpenWebsiteSkill(Skill):
         # Known bare names: every alias in the site table plus the extras above.
         shortcuts = "|".join((alias_alternation(SITES),
                               *(re.escape(s) for s in SITE_SHORTCUTS)))
-        domain = r"(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?"
+        domain = _DOMAIN
         spoken = r"[\w-]+(?:\s+(?:dot|точка)\s+[\w-]+)+"
         # "open ME youtube" — the spoken dative. Without it the site name never
         # lines up and the whole request falls through to a web search.

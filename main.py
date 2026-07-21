@@ -229,6 +229,13 @@ def build_registry(
         from skills.documents import DocumentsSkill
 
         registry.register(DocumentsSkill(doc_index))
+    # Editing before finding: "edit notes.md" is a specific action, while
+    # FilesSkill's verbs (find/search/open) don't overlap with it. Both are
+    # confined to the same whitelist.
+    from skills.file_edit import FileEditSkill, OpenInEditorSkill
+
+    registry.register(FileEditSkill(whitelist))
+    registry.register(OpenInEditorSkill(whitelist, apps_table))
     registry.register(FilesSkill(whitelist))
     registry.register(VolumeSkill())
     registry.register(MediaSkill())
