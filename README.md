@@ -228,10 +228,16 @@ A: The HUD (port 8730) is served but the companion API (8710) isn't —
 start MEDO with `--serve` (or set `remote.enabled: true`), and hard-refresh
 the page after a restart.
 
-**Q: The camera feed is black / the sidecar exits immediately.**
-A: Another app is holding the webcam (close it), or the wrong camera is
-selected — try `vision.camera_index: 1`. On macOS, grant Terminal the
-Camera permission when prompted.
+**Q: The camera feed is black / the sidecar exits immediately / "could not
+open camera".**
+A: On **macOS** this is almost always the **Camera permission** — and macOS
+usually does *not* pop a prompt for OpenCV, it just denies silently. Grant it
+to the app that launches the sidecar (Terminal / `run.command`) in System
+Settings → Privacy & Security → **Camera**. If it isn't in the list, run
+`tccutil reset Camera` in that terminal and relaunch so macOS re-asks. Also
+make sure no other app is holding the webcam, and try `vision.camera_index: 1`
+if you have more than one. (The sidecar also needs its own venv — a fresh
+clone has no `.venv-vision` yet; `run.command` builds it on first launch.)
 
 **Q: "Type …" works in English but does nothing with Macedonian text.**
 A: Fixed — Cyrillic goes through a clipboard paste, which now uses Cmd+V on
