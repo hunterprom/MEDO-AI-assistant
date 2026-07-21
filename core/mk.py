@@ -63,6 +63,33 @@ ON = r"на|во|од|кај|преку"
 BROWSER = r"прелистувачот|прелистувач|пребарувачот|пребарувач|браузерот|браузер|интернет"
 
 
+#: Macedonian Cyrillic -> Latin, the standard romanisation. Digraphs first so
+#: "ѓ" doesn't decay to "g". Used for services that only index Latin names —
+#: Open-Meteo's geocoder finds "Skopje" but not "Скопје".
+_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "ѓ": "gj", "е": "e",
+    "ж": "zh", "з": "z", "ѕ": "dz", "и": "i", "ј": "j", "к": "k", "л": "l",
+    "љ": "lj", "м": "m", "н": "n", "њ": "nj", "о": "o", "п": "p", "р": "r",
+    "с": "s", "т": "t", "ќ": "kj", "у": "u", "ф": "f", "х": "h", "ц": "c",
+    "ч": "ch", "џ": "dj", "ш": "sh",
+}
+
+
+def to_latin(text: str) -> str:
+    """Romanise Macedonian Cyrillic ("Скопје" -> "Skopje"). Non-Cyrillic passes through."""
+    out = []
+    for char in text:
+        lower = char.lower()
+        mapped = _LATIN.get(lower)
+        if mapped is None:
+            out.append(char)
+        elif char == lower:
+            out.append(mapped)
+        else:
+            out.append(mapped.capitalize())
+    return "".join(out)
+
+
 def is_cyrillic(text: str) -> bool:
     """True when ``text`` contains Cyrillic — i.e. the user spoke Macedonian.
 

@@ -301,6 +301,9 @@ class WeatherConfig(BaseModel):
 
 class NewsConfig(BaseModel):
     feeds: list[str] = Field(default_factory=list)
+    #: Macedonian-language sources, used when the question was asked in
+    #: Macedonian. Empty => ``feeds`` is used for both languages.
+    feeds_mk: list[str] = Field(default_factory=list)
 
 
 class VisionLLMConfig(BaseModel):

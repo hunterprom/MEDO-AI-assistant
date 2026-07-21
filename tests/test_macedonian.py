@@ -12,12 +12,15 @@ from __future__ import annotations
 import pytest
 
 from core import mk
-from core.config import load_settings
+from core.config import NewsConfig, WeatherConfig, load_settings
 from core.safety import PathWhitelist
 from main import Announcer, build_registry
 from skills.apps import AppsSkill
 from skills.base import SkillRequest
+from skills.datetime_skill import DateTimeSkill
 from skills.files import FilesSkill
+from skills.news import NewsSkill
+from skills.weather import WeatherSkill
 from skills.web_open import OpenWebsiteSkill
 from skills.websearch import WebSearchSkill
 
@@ -35,6 +38,15 @@ def test_is_cyrillic_separates_the_languages():
     assert mk.is_cyrillic("барај мачки на јутјуб")
     assert not mk.is_cyrillic("open chrome")
     assert not mk.is_cyrillic("")
+
+
+def test_to_latin_romanises_place_names():
+    # Open-Meteo's geocoder indexes Latin names only.
+    assert mk.to_latin("Скопје") == "Skopje"
+    assert mk.to_latin("Битола") == "Bitola"
+    assert mk.to_latin("Охрид") == "Ohrid"
+    assert mk.to_latin("Ѓорче") == "Gjorche"      # digraph, capitalised
+    assert mk.to_latin("Skopje") == "Skopje"      # already Latin, untouched
 
 
 # --- apps --------------------------------------------------------------------
@@ -194,6 +206,100 @@ async def test_macedonian_offline_message_is_macedonian(monkeypatch):
     assert r.success is False and "офлајн" in r.speech
 
 
+# --- news / weather / time ----------------------------------------------------
+#
+# These three are why the bilingual gap actually bit: a Macedonian news or
+# weather question matched no pattern, fell through to the LLM path, and — on a
+# CLI-agent provider, which by design gets none of MEDO's tool schemas — came
+# back as "I don't have permission to search the web in this session". The fast
+# path has to answer these itself, whatever brain is loaded.
+
+
+@pytest.mark.parametrize("phrase", [
+    "вести", "најсвежи вести за Скопје", "дај ми ги вестите",
+    "новости", "наслови", "што има ново",
+])
+def test_macedonian_news_patterns(phrase):
+    assert NewsSkill(NewsConfig(feeds=["x"])).match(phrase) is not None, phrase
+
+
+def test_news_does_not_steal_a_topic_web_search():
+    # "што е ново за X" names a topic — that's a web search, not the headlines.
+    assert NewsSkill(NewsConfig(feeds=["x"])).match(
+        "што е ново за вештачка интелигенција") is None
+
+
+def test_macedonian_news_uses_macedonian_feeds():
+    config = NewsConfig(feeds=["https://en.example/rss"],
+                        feeds_mk=["https://mk.example/rss"])
+    skill = NewsSkill(config)
+    assert skill._pick_feeds(speak_mk=True) == ["https://mk.example/rss"]
+    assert skill._pick_feeds(speak_mk=False) == ["https://en.example/rss"]
+    # No Macedonian sources configured => fall back rather than answer nothing.
+    assert NewsSkill(NewsConfig(feeds=["https://en.example/rss"]))._pick_feeds(
+        speak_mk=True) == ["https://en.example/rss"]
+
+
+@pytest.mark.parametrize("phrase,city", [
+    ("какво е времето", None),
+    ("какво е времето во Скопје", "Скопје"),
+    ("времето во Битола", "Битола"),
+    ("прогноза за Охрид", "Охрид"),
+    ("колку степени е надвор", None),
+    ("дали ќе врне утре", None),
+])
+def test_macedonian_weather_patterns_capture_cyrillic_cities(phrase, city):
+    m = WeatherSkill(WeatherConfig()).match(phrase)
+    assert m is not None, phrase
+    gd = m.groupdict()
+    got = next((v for k, v in gd.items() if k.startswith("city") and v), None)
+    assert (got.strip() if got else None) == city
+
+
+def test_weather_leaves_bare_vreme_alone():
+    # "време" is both "weather" and "time" — claiming it would break the clock.
+    assert WeatherSkill(WeatherConfig()).match("колку е часот") is None
+
+
+@pytest.mark.asyncio
+async def test_weather_geocode_retries_romanised():
+    """Cyrillic finds nothing, so the romanised name is tried before giving up."""
+    tried: list[str] = []
+
+    class _Client:
+        async def get(self, url, params):
+            tried.append(params["name"])
+            hit = params["name"] == "Skopje"
+
+            class _R:
+                @staticmethod
+                def raise_for_status(): ...
+                @staticmethod
+                def json():
+                    return {"results": [{"latitude": 42.0, "longitude": 21.4,
+                                         "name": "Skopje"}]} if hit else {"results": []}
+            return _R()
+
+    geo = await WeatherSkill(WeatherConfig())._geocode(_Client(), "Скопје")
+    assert tried == ["Скопје", "Skopje"]
+    assert geo is not None and geo[2] == "Skopje"
+
+
+@pytest.mark.asyncio
+async def test_macedonian_time_and_date_answer_in_macedonian():
+    skill = DateTimeSkill()
+    time_r = await skill.execute(SkillRequest(text="колку е часот",
+                                              match=skill.match("колку е часот")))
+    date_r = await skill.execute(SkillRequest(text="кој датум е денес",
+                                              match=skill.match("кој датум е денес")))
+    assert time_r.speech.startswith("Часот е") and time_r.data["kind"] == "time"
+    assert date_r.speech.startswith("Денес е") and date_r.data["kind"] == "date"
+    # English is untouched.
+    en = await skill.execute(SkillRequest(text="what time is it",
+                                          match=skill.match("what time is it")))
+    assert en.speech.startswith("It's")
+
+
 # --- routing (the part that actually breaks) ---------------------------------
 
 
@@ -208,6 +314,10 @@ async def test_macedonian_offline_message_is_macedonian(monkeypatch):
     ("провери во пошта за сметката", "site_search"),
     ("најди ја датотеката извештај", "files"),
     ("барај рецепт за пица", "web_search"),
+    # The exact request that used to reach the LLM and get refused.
+    ("најсвежи вести за Скопје", "news"),
+    ("какво е времето во Скопје", "weather"),
+    ("колку е часот", "datetime"),
     # …and the English side is untouched.
     ("open chrome", "apps"),
     ("open youtube", "open_website"),

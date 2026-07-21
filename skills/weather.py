@@ -10,12 +10,14 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from core import mk
 from core.config import WeatherConfig
 from skills.base import Skill, SkillRequest, SkillResult
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 _OFFLINE = "I can't reach the weather service. I appear to be offline."
+_OFFLINE_MK = "Не можам да ја добијам прогнозата — изгледа дека сум офлајн."
 
 # Condensed WMO weather-code descriptions.
 _WMO = {
@@ -28,23 +30,46 @@ _WMO = {
     96: "thunderstorms with hail", 99: "thunderstorms with hail",
 }
 
+_WMO_MK = {
+    0: "ведро", 1: "претежно ведро", 2: "делумно облачно", 3: "облачно",
+    45: "магливо", 48: "магливо", 51: "слаба ројна", 53: "ројна", 55: "силна ројна",
+    61: "слаб дожд", 63: "дожд", 65: "силен дожд", 66: "леден дожд", 67: "леден дожд",
+    71: "слаб снег", 73: "снег", 75: "силен снег", 77: "снежни зрна",
+    80: "плускавици", 81: "плускавици", 82: "силни плускавици",
+    85: "снежни плускавици", 86: "снежни плускавици", 95: "грмежи",
+    96: "грмежи со град", 99: "грмежи со град",
+}
+
+#: City names may be Cyrillic ("времето во Скопје"), so \w — not [a-z] — and a
+#: leading "во/за" is stripped by the pattern rather than the geocoder.
+_CITY = r"[\w .'-]+"
+
 
 class WeatherSkill(Skill):
     name = "weather"
     description = "Report current weather or tomorrow's forecast for a city."
 
     patterns = [
-        re.compile(r"\bweather\b(?:\s+(?:in|for|at)\s+(?P<city>[a-z .'-]+))?", re.IGNORECASE),
-        re.compile(r"\bforecast\b(?:\s+(?:in|for)\s+(?P<city2>[a-z .'-]+))?", re.IGNORECASE),
+        re.compile(rf"\bweather\b(?:\s+(?:in|for|at)\s+(?P<city>{_CITY}))?", re.IGNORECASE),
+        re.compile(rf"\bforecast\b(?:\s+(?:in|for)\s+(?P<city2>{_CITY}))?", re.IGNORECASE),
         re.compile(r"\b(?:how\s+(?:hot|cold)|temperature)\b", re.IGNORECASE),
         re.compile(r"\b(?:will\s+it|is\s+it\s+going\s+to)\s+rain\b", re.IGNORECASE),
+        # MK. "време" alone is skipped on purpose — it means both "weather" and
+        # "time", so only the unambiguous phrasings are claimed here.
+        re.compile(rf"\bкакво\s+е\s+времето\b(?:\s+(?:во|за)\s+(?P<city3>{_CITY}))?",
+                   re.IGNORECASE),
+        re.compile(rf"\bвремето\s+(?:во|за)\s+(?P<city4>{_CITY})", re.IGNORECASE),
+        re.compile(rf"\bпрогноза(?:та)?\b(?:\s+(?:во|за)\s+(?P<city5>{_CITY}))?",
+                   re.IGNORECASE),
+        re.compile(r"\bколку\s+степени\b|\bтемператур(?:а|ата)\b", re.IGNORECASE),
+        re.compile(r"\bќе\s+врне\b|\bдали\s+ќе\s+врне\b", re.IGNORECASE),
     ]
 
     def __init__(self, config: WeatherConfig) -> None:
         self._config = config
 
-    async def _geocode(self, client: Any, city: str) -> tuple[float, float, str] | None:
-        resp = await client.get(_GEOCODE_URL, params={"name": city, "count": 1})
+    async def _lookup(self, client: Any, name: str) -> tuple[float, float, str] | None:
+        resp = await client.get(_GEOCODE_URL, params={"name": name, "count": 1})
         resp.raise_for_status()
         results = resp.json().get("results") or []
         if not results:
@@ -52,13 +77,28 @@ class WeatherSkill(Skill):
         r = results[0]
         return r["latitude"], r["longitude"], r["name"]
 
+    async def _geocode(self, client: Any, city: str) -> tuple[float, float, str] | None:
+        """Find a city, retrying romanised when it was spoken in Cyrillic.
+
+        Open-Meteo's geocoder indexes Latin names: "Скопје" returns nothing
+        while "Skopje" resolves, so a Macedonian weather question would fail on
+        its own capital without this fallback.
+        """
+        found = await self._lookup(client, city)
+        if found is None and mk.is_cyrillic(city):
+            found = await self._lookup(client, mk.to_latin(city))
+        return found
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         import httpx
 
         gd = request.match.groupdict() if request.match else {}
-        city = (request.args.get("city") or gd.get("city") or gd.get("city2") or "").strip(" ?.!")
+        speak_mk = mk.is_cyrillic(request.text)
+        city = (request.args.get("city") or gd.get("city") or gd.get("city2")
+                or gd.get("city3") or gd.get("city4") or gd.get("city5")
+                or "").strip(" ?.!")
         when = (request.args.get("when") or "").lower()
-        if "tomorrow" in request.text.lower():
+        if "tomorrow" in request.text.lower() or "утре" in request.text.lower():
             when = "tomorrow"
 
         try:
@@ -66,7 +106,10 @@ class WeatherSkill(Skill):
                 if city:
                     geo = await self._geocode(client, city)
                     if geo is None:
-                        return SkillResult(f"I couldn't find a place called {city}.", success=False)
+                        return SkillResult(
+                            f"Не најдов место со име {city}." if speak_mk
+                            else f"I couldn't find a place called {city}.",
+                            success=False)
                     lat, lon, place = geo
                 else:
                     lat, lon, place = self._config.latitude, self._config.longitude, self._config.default_city
@@ -80,21 +123,26 @@ class WeatherSkill(Skill):
                 resp.raise_for_status()
                 data = resp.json()
         except httpx.HTTPError:
-            return SkillResult(_OFFLINE, success=False)
+            return SkillResult(_OFFLINE_MK if speak_mk else _OFFLINE, success=False)
 
+        codes = _WMO_MK if speak_mk else _WMO
+        unclear = "нејасно" if speak_mk else "unclear"
         if when == "tomorrow":
             daily = data["daily"]
-            cond = _WMO.get(daily["weather_code"][1], "unclear")
+            cond = codes.get(daily["weather_code"][1], unclear)
             hi, lo = round(daily["temperature_2m_max"][1]), round(daily["temperature_2m_min"][1])
             return SkillResult(
+                f"Утре во {place}: {cond}, помеѓу {lo} и {hi} степени."
+                if speak_mk else
                 f"Tomorrow in {place}: {cond}, between {lo} and {hi} degrees.",
                 data={"place": place, "when": "tomorrow"},
             )
         cur = data["current"]
-        cond = _WMO.get(cur["weather_code"], "unclear")
+        cond = codes.get(cur["weather_code"], unclear)
         temp = round(cur["temperature_2m"])
         return SkillResult(
-            f"It's {temp} degrees and {cond} in {place}.",
+            f"Во {place} е {temp} степени и {cond}." if speak_mk
+            else f"It's {temp} degrees and {cond} in {place}.",
             data={"place": place, "when": "now", "temp_c": temp},
         )
 

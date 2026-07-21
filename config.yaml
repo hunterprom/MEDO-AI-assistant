@@ -293,6 +293,15 @@ news:                               # M3
   feeds:
     - "https://feeds.bbci.co.uk/news/rss.xml"
     - "https://hnrss.org/frontpage"
+  # Used when the question was asked in Macedonian ("најсвежи вести") — asking
+  # in Macedonian usually means you want local news, which BBC doesn't carry.
+  # Empty => `feeds` serves both languages.
+  feeds_mk:
+    - "https://meta.mk/feed/"
+    - "https://a1on.mk/feed/"
+    - "https://makfax.com.mk/feed/"
+    - "https://www.slobodenpecat.mk/feed/"
+    - "https://kanal5.com.mk/rss.aspx"
 
 vision_llm:                         # "what do you see" / "read my screen" / bench
   # qwen2.5vl:3b replaced moondream (2026-07-20): the re-published moondream
