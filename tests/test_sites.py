@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import quote_plus
+
 import pytest
 
 from skills.base import SkillRequest
@@ -173,3 +175,118 @@ def test_tool_schema_offers_the_known_sites(skill):
     assert schema["name"] == "site_search"
     enum = schema["parameters"]["properties"]["site"]["enum"]
     assert {"youtube", "gmail", "reddit", "steam", "github"} <= set(enum)
+
+
+# --- play (search + open the top result) --------------------------------------
+
+
+class _PlaySession:
+    """Stands in for BrowserSession: records navigation and the clicked selector."""
+
+    def __init__(self, title="Cozy Jazz Mix - YouTube", fail=False):
+        self.title, self.fail = title, fail
+        self.went, self.clicked = [], []
+
+    async def goto(self, url):
+        self.went.append(url)
+
+    async def click_selector(self, selector, timeout_s=10.0):
+        if self.fail:
+            raise RuntimeError("selector never appeared")
+        self.clicked.append(selector)
+        return "3:35:23"                      # YouTube's duration overlay
+
+    async def where(self):
+        return self.title, "https://www.youtube.com/watch?v=abc"
+
+
+@pytest.mark.parametrize("phrase", [
+    "play relaxing jazz on youtube",
+    "play me some lofi on spotify",
+    "play me a video of drone builds",
+    "пушти релаксирачки џез на јутјуб",
+    "пушти ми видео за роботи",
+])
+def test_play_patterns(phrase):
+    from skills.sites import PlaySkill
+
+    assert PlaySkill(opener=lambda u: True).match(phrase) is not None, phrase
+
+
+@pytest.mark.parametrize("phrase", [
+    "play some music",          # local playback -> MediaSkill
+    "pause the music",
+    "search cats on youtube",   # a search, not a play
+])
+def test_play_leaves_other_skills_alone(phrase):
+    from skills.sites import PlaySkill
+
+    assert PlaySkill(opener=lambda u: True).match(phrase) is None, phrase
+
+
+@pytest.mark.asyncio
+async def test_play_opens_the_top_result_and_says_its_title():
+    from skills.sites import PlaySkill
+
+    session = _PlaySession()
+    skill = PlaySkill(opener=lambda u: True, session=session)
+    r = await skill.execute(SkillRequest(text="play relaxing jazz on youtube",
+                                         match=skill.match("play relaxing jazz on youtube")))
+    assert r.success and r.data["played"] is True
+    assert session.went == ["https://www.youtube.com/results?search_query=relaxing+jazz"]
+    # The page title wins over the clicked anchor's text, which on YouTube is
+    # the duration badge — "Playing 3:35:23" is a useless thing to say.
+    assert r.speech == "Playing Cozy Jazz Mix on YouTube."
+
+
+@pytest.mark.asyncio
+async def test_play_without_a_browser_is_honest_about_it():
+    from skills.sites import PlaySkill
+
+    opened = []
+    skill = PlaySkill(opener=lambda u: opened.append(u) or True, session=None)
+    r = await skill.execute(SkillRequest(text="play relaxing jazz on youtube",
+                                         match=skill.match("play relaxing jazz on youtube")))
+    # No controlled browser => it opened results. It must not claim it played.
+    assert r.data["played"] is False and "pick the one" in r.speech
+    assert opened and "search_query=relaxing+jazz" in opened[0]
+
+
+@pytest.mark.asyncio
+async def test_play_reports_a_failed_click_instead_of_lying():
+    from skills.sites import PlaySkill
+
+    skill = PlaySkill(opener=lambda u: True, session=_PlaySession(fail=True))
+    r = await skill.execute(SkillRequest(text="play relaxing jazz on youtube",
+                                         match=skill.match("play relaxing jazz on youtube")))
+    assert r.success is False and r.data["played"] is False
+
+
+@pytest.mark.asyncio
+async def test_macedonian_play_answers_in_macedonian():
+    from skills.sites import PlaySkill
+
+    skill = PlaySkill(opener=lambda u: True, session=_PlaySession())
+    phrase = "пушти релаксирачки џез на јутјуб"
+    r = await skill.execute(SkillRequest(text=phrase, match=skill.match(phrase)))
+    assert r.speech.startswith("Пуштам")
+
+
+# --- the compound "open X and search Y" ---------------------------------------
+
+
+@pytest.mark.parametrize("phrase,query", [
+    ("could you open me YouTube and search up a relaxing jazz music?", "relaxing jazz music"),
+    ("open youtube and search for relaxing jazz", "relaxing jazz"),
+    ("go to reddit and look for quadruped robots", "quadruped robots"),
+    ("отвори јутјуб и барај релаксирачки џез", "релаксирачки џез"),
+])
+@pytest.mark.asyncio
+async def test_open_site_and_search_is_one_action(skill, phrase, query):
+    # This used to open the site and silently drop the search — or, worse, land
+    # in web_search with "up a relaxing jazz music" as the query.
+    r = await _run(skill, phrase)
+    assert r.success, phrase
+    # Query-string template => quote_plus, so Cyrillic is percent-encoded and
+    # spaces become "+".
+    assert quote_plus(query) in skill.opened[0], skill.opened[0]

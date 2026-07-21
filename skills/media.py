@@ -48,17 +48,25 @@ class MediaSkill(Skill):
     description = "Control music playback: play, pause, resume, next or previous track."
 
     patterns = [
-        re.compile(r"\b(?:play|pause|resume|stop)\s+(?:the\s+)?(?:music|song|track|playback)\b",
-                   re.IGNORECASE),
+        # "play SOME music" / "pause MY song" — a determiner between the verb
+        # and the noun is the common spoken form and used to match nothing.
+        re.compile(r"\b(?:play|pause|resume|stop)\s+(?:the|some|my|a)?\s*"
+                   r"(?:music|song|track|playback)\b", re.IGNORECASE),
         re.compile(r"\b(?:next|skip(?:\s+(?:this|the))?)\s+(?:track|song)\b", re.IGNORECASE),
         re.compile(r"\b(?:previous|last)\s+(?:track|song)\b", re.IGNORECASE),
+        # MK: "пушти музика", "паузирај ја песната", "следна песна"
+        re.compile(r"\b(?:пушти|пуштиј|паузирај|запри|стопирај|продолжи)\s+"
+                   r"(?:ја\s+|го\s+)?(?:музика(?:та)?|песна(?:та)?|нумера(?:та)?)\b",
+                   re.IGNORECASE),
+        re.compile(r"\bследна\s+(?:песна|нумера)\b|\bпретходна\s+(?:песна|нумера)\b",
+                   re.IGNORECASE),
     ]
 
     def _action(self, text: str) -> str:
         """Map the utterance to a canonical action name."""
-        if re.search(r"\b(?:next|skip)\b", text):
+        if re.search(r"\b(?:next|skip|следна)\b", text):
             return "next"
-        if re.search(r"\b(?:previous|last|back)\b", text):
+        if re.search(r"\b(?:previous|last|back|претходна)\b", text):
             return "previous"
         return "playpause"  # play / pause / resume / stop all toggle
 

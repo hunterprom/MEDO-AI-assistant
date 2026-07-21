@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -38,6 +39,8 @@ from urllib.parse import quote, quote_plus
 
 from core import mk
 from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,10 @@ class Site:
     #: Optional localized template used when the *query* is Cyrillic — the
     #: Macedonian Wikipedia is a far better answer for a Macedonian question.
     search_mk: str | None = None
+    #: CSS selector for the first real result on a search page, so "play X on
+    #: YouTube" can actually start playing instead of parking on the results.
+    #: None => this site has no meaningful "first result" to open.
+    first_result: str | None = None
 
     def spoken_names(self) -> tuple[str, ...]:
         return (self.key, self.label.lower(), *self.aliases)
@@ -64,7 +71,14 @@ SITES: tuple[Site, ...] = (
     Site("youtube", "YouTube",
          "https://www.youtube.com/results?search_query={q}",
          "https://www.youtube.com",
-         ("yt", "you tube", "јутјуб", "јутуб", "ју туб", "јутјубе")),
+         ("yt", "you tube", "јутјуб", "јутуб", "ју туб", "јутјубе"),
+         # Scoped to ytd-video-renderer on purpose: a bare
+         # a[href*='/watch?v='] picks up the sponsored slot that YouTube puts
+         # above the real results, so "play relaxing jazz" would play an ad.
+         # Ads live in ytd-promoted-video-renderer / ytd-ad-slot-renderer,
+         # which this selector never enters.
+         first_result="ytd-video-renderer a#video-title, "
+                      "ytd-video-renderer a[href*='/watch?v=']"),
     Site("spotify", "Spotify",
          "https://open.spotify.com/search/{q}",
          "https://open.spotify.com",
@@ -300,14 +314,38 @@ _TRAILING = re.compile(
     r"\s*(?:please|for me|te molam|те молам|ве молам|молам|ајде)\s*$", re.IGNORECASE
 )
 
+#: Leading filler. "search **up** a relaxing jazz" is a phrasal verb — the "up"
+#: belongs to the verb, not the query, and searching for "up a relaxing jazz"
+#: is measurably worse. Articles go too ("a relaxing jazz" -> "relaxing jazz").
+_LEADING = re.compile(
+    r"^\s*(?:up|for|me|to|about|some|a|an|the|ми|за|некоја|некој|едно)\b\s*",
+    re.IGNORECASE,
+)
+
+
+def _clean_title(title: str, site_label: str) -> str:
+    """Page title minus the site's own branding, trimmed for speech.
+
+    "Cozy Coffee Shop Jazz - YouTube" -> "Cozy Coffee Shop Jazz".
+    """
+    title = (title or "").strip()
+    for suffix in (f" - {site_label}", f" | {site_label}", f" — {site_label}"):
+        if title.lower().endswith(suffix.lower()):
+            title = title[: -len(suffix)].strip()
+            break
+    # A leading unread-count badge ("(3) Some Video") is browser chrome.
+    title = re.sub(r"^\(\d+\)\s*", "", title)
+    return title[:110]
+
 
 def clean_query(query: str) -> str:
     """Strip spoken filler and punctuation from a captured query."""
     query = query.strip().strip(".,!?;:\"' ")
     previous = None
-    while previous != query:  # "…, please" then "…, for me" — peel both
+    while previous != query:  # "…, please" then "…, for me" — peel both ends
         previous = query
         query = _TRAILING.sub("", query).strip().strip(".,!?;:\"' ")
+        query = _LEADING.sub("", query).strip()
     return query
 
 
@@ -333,6 +371,19 @@ class SiteSearchSkill(Skill):
         alt = alias_alternation(self._sites)
         verbs = r"search|look\s+up|look\s+for|find|browse|check"
         self.patterns = [
+            # "open youtube and search for relaxing jazz" — the site is named
+            # first and the query second. Listed before everything else because
+            # it is the most specific shape, and because OpenWebsiteSkill would
+            # otherwise open the site and silently drop the search.
+            re.compile(rf"\b(?:open|go\s+to|visit|pull\s+up|bring\s+up)\s+"
+                       rf"(?:me\s+|for\s+me\s+)?(?:the\s+)?(?P<site4>{alt})\b"
+                       rf"[\s,]*(?:and|then|to)?[\s,]*"
+                       rf"(?:{verbs})\s+(?P<q4>.+)", re.IGNORECASE),
+            # MK: "отвори јутјуб и барај релаксирачки џез"
+            re.compile(rf"\b(?:{mk.OPEN}|{mk.GO_TO}){mk.CLITICS}\s+(?P<sitem3>{alt})\b"
+                       rf"[\s,]*(?:и|па|потоа)?[\s,]*"
+                       rf"(?:{mk.SEARCH_OR_FIND}){mk.CLITICS}\s+(?:за\s+)?(?P<qm3>.+)",
+                       re.IGNORECASE),
             # "search drone motors on youtube", "find sniper elite on steam"
             re.compile(rf"\b(?:{verbs})\s+(?:for\s+)?(?P<q>.+?)\s+"
                        rf"(?:on|in|at|through)\s+(?:the\s+|my\s+)?(?P<site>{alt})\b",
@@ -354,10 +405,12 @@ class SiteSearchSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         spoken = (request.args.get("site") or gd.get("site") or gd.get("site2")
-                  or gd.get("site3") or gd.get("sitem") or gd.get("sitem2") or "")
+                  or gd.get("site3") or gd.get("site4") or gd.get("sitem")
+                  or gd.get("sitem2") or gd.get("sitem3") or "")
         query = clean_query(
             request.args.get("query") or gd.get("q") or gd.get("q2")
-            or gd.get("q3") or gd.get("qm") or gd.get("qm2") or ""
+            or gd.get("q3") or gd.get("q4") or gd.get("qm") or gd.get("qm2")
+            or gd.get("qm3") or ""
         )
         # Answer in the language we were asked in — the same bilingual rule the
         # briefing and bench skills follow.
@@ -406,6 +459,125 @@ class SiteSearchSkill(Skill):
                         },
                     },
                     "required": ["site"],
+                },
+            },
+        }
+
+
+class PlaySkill(Skill):
+    """"Play some relaxing jazz on YouTube" — search, then open the top hit.
+
+    Searching and *playing* are different asks. ``site_search`` leaves you on a
+    results page, which is the wrong answer to "play me something": you still
+    have to click. With the controlled browser this searches, clicks the first
+    real result, and the video starts. Without it, it opens the results page
+    and says so plainly rather than claiming to have played anything.
+    """
+
+    name = "play_media"
+    controls_pc = True
+    description = (
+        "Play a video or track by searching a site and opening the top result "
+        "(e.g. 'play relaxing jazz on YouTube'). Use when the user wants "
+        "something PLAYED, not just searched."
+    )
+
+    def __init__(self, opener=None, session=None,
+                 extra_sites: dict[str, Any] | None = None) -> None:
+        if opener is None:
+            import webbrowser
+
+            opener = webbrowser.open
+        self._opener = opener
+        self._session = session          # BrowserSession, or None when disabled
+        self._sites = load_sites(extra_sites)
+        alt = alias_alternation(self._sites)
+        self.patterns = [
+            # "play relaxing jazz on youtube", "play me some lofi on spotify"
+            re.compile(rf"\bplay\s+(?P<q>.+?)\s+(?:on|in|from)\s+(?:the\s+)?"
+                       rf"(?P<site>{alt})\b", re.IGNORECASE),
+            # "play me a video of drone builds" — no site named, video implies
+            # YouTube. MediaSkill keeps "play the music" (local playback).
+            re.compile(r"\bplay\s+(?:me\s+)?(?:a\s+|some\s+|the\s+)?videos?\s+"
+                       r"(?:of|about|with|for|on)\s+(?P<qv>.+)", re.IGNORECASE),
+            # MK: "пушти релаксирачки џез на јутјуб"
+            re.compile(rf"\b(?:пушти|свири|пуштиј)(?:\s+(?:ми|ме))?\s+(?P<qm>.+?)\s+"
+                       rf"(?:на|во|од)\s+(?P<sitem>{alt})\b", re.IGNORECASE),
+            # MK: "пушти ми видео за роботи"
+            re.compile(r"\b(?:пушти|свири)(?:\s+(?:ми|ме))?\s+(?:едно\s+)?видео\s+"
+                       r"(?:за|од|со)\s+(?P<qmv>.+)", re.IGNORECASE),
+        ]
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        gd = request.match.groupdict() if request.match else {}
+        speak_mk = mk.is_cyrillic(request.text)
+        spoken = (request.args.get("site") or gd.get("site")
+                  or gd.get("sitem") or "")
+        query = clean_query(request.args.get("query") or gd.get("q")
+                            or gd.get("qv") or gd.get("qm") or gd.get("qmv") or "")
+        # "play me a video of X" names no site — video means YouTube.
+        site = resolve_site(spoken, self._sites) if spoken else \
+            resolve_site("youtube", self._sites)
+        if site is None:
+            return SkillResult(f"Не знам за сајтот {spoken}." if speak_mk
+                               else f"I don't know a site called {spoken}.",
+                               success=False)
+        if not query:
+            return SkillResult("Што да пуштам?" if speak_mk
+                               else "What should I play?", success=False)
+
+        url = build_url(site, query)
+        # No controlled browser => be honest: this opens results, not playback.
+        if self._session is None or site.first_result is None:
+            ok = await open_with(self._opener, url)
+            if ok is False:
+                return SkillResult("Не најдов прелистувач да отворам." if speak_mk
+                                   else "I couldn't find a browser to open.",
+                                   success=False)
+            return SkillResult(
+                f"Отворив резултати за {query} на {site.label} — избери еден."
+                if speak_mk else
+                f"I've opened {site.label} results for {query} — pick the one "
+                f"you want.", data={"url": url, "played": False})
+
+        try:
+            await self._session.goto(url)
+            label = await self._session.click_selector(site.first_result)
+            # Prefer the page title we landed on. The clicked anchor's text is
+            # whatever the thumbnail overlays — on YouTube that's the duration
+            # ("3:35:23"), which is a useless thing to say out loud.
+            landed, _url = await self._session.where()
+            label = _clean_title(landed, site.label) or label
+        except Exception as exc:
+            logger.warning("play: click failed (%s) — leaving the results up", exc)
+            return SkillResult(
+                f"Отворив резултати за {query} на {site.label}, но не успеав да "
+                f"кликнам." if speak_mk else
+                f"I opened {site.label} results for {query} but couldn't click "
+                f"the first one.", data={"url": url, "played": False},
+                success=False)
+        what = label or query
+        return SkillResult(
+            f"Пуштам {what} на {site.label}." if speak_mk
+            else f"Playing {what} on {site.label}.",
+            data={"url": url, "site": site.key, "query": query, "played": True})
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string",
+                                  "description": "What to play, e.g. 'relaxing jazz'."},
+                        "site": {"type": "string",
+                                 "enum": [s.key for s in self._sites],
+                                 "description": "Where to play it. Defaults to YouTube."},
+                    },
+                    "required": ["query"],
                 },
             },
         }

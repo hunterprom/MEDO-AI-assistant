@@ -85,7 +85,9 @@ class OpenWebsiteSkill(Skill):
                               *(re.escape(s) for s in SITE_SHORTCUTS)))
         domain = r"(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?"
         spoken = r"[\w-]+(?:\s+(?:dot|точка)\s+[\w-]+)+"
-        en_open = r"open|go\s+to|visit|pull\s+up|bring\s+up"
+        # "open ME youtube" — the spoken dative. Without it the site name never
+        # lines up and the whole request falls through to a web search.
+        en_open = r"(?:open|go\s+to|visit|pull\s+up|bring\s+up)(?:\s+(?:me|for\s+me|us))?"
         mk_open = rf"{mk.OPEN}|{mk.GO_TO}"
         self.patterns = [
             # "open tinkercad.com", "go to docs.python.org/3" — needs a dot.

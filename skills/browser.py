@@ -272,6 +272,22 @@ class BrowserSession:
             await page.press(selector, "Enter")
             await page.wait_for_timeout(800)
 
+    async def click_selector(self, selector: str, timeout_s: float = 10.0) -> str:
+        """Click the first element matching a CSS selector; returns its text.
+
+        Used for "play the top result", where the target is known structurally
+        (YouTube's first /watch link) rather than by the words on it. Waits for
+        the selector because search results arrive after the page load event.
+        """
+        page = await self._live_page()
+        element = page.locator(selector).first
+        await element.wait_for(state="visible", timeout=timeout_s * 1000)
+        label = ((await element.get_attribute("title"))
+                 or (await element.inner_text()) or "").strip()
+        await element.click()
+        await page.wait_for_timeout(1200)   # let playback actually start
+        return label.split("\n")[0][:90]
+
     async def press(self, keys: str) -> None:
         page = await self._live_page()
         await page.keyboard.press(keys)

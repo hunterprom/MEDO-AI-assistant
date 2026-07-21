@@ -175,7 +175,7 @@ def build_registry(
     # "open tinkercad.com" (dotted) opens the browser — before FilesSkill so
     # a domain never reads as a filename.
     from skills.web_open import OpenWebsiteSkill
-    from skills.sites import SiteSearchSkill
+    from skills.sites import PlaySkill, SiteSearchSkill
 
     # The controlled browser (Playwright). One session shared by the two
     # browser skills AND used as the opener for the two open/search skills, so
@@ -194,6 +194,10 @@ def build_registry(
     # strictly more specific than "open youtube", and its patterns all demand
     # both a search verb and a known site, so a bare "open youtube" still falls
     # through to OpenWebsiteSkill below.
+    # "play X on youtube" before the search skills: playing is a search plus a
+    # click, and landing on a results page is the wrong answer to "play me".
+    registry.register(PlaySkill(opener=site_opener, session=browser_session,
+                                extra_sites=settings.skills.get("sites")))
     registry.register(SiteSearchSkill(opener=site_opener,
                                       extra_sites=settings.skills.get("sites")))
     registry.register(OpenWebsiteSkill(opener=site_opener))
