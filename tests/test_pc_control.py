@@ -204,3 +204,83 @@ async def test_bare_site_shortcuts_open_deterministically():
     # Curated list only: apps and folders are never stolen.
     for phrase in ("open chrome", "open notepad", "open downloads"):
         assert s.match(phrase) is None, phrase
+
+
+# --- MEDO Lion Mode ----------------------------------------------------------
+#
+# Lion mode removes the two gates that stand between a spoken word and an
+# action, so the tests here are about exactly what it does and does NOT lift.
+
+
+class _DestructiveSkill(Skill):
+    name = "power"
+    description = "test destructive"
+    controls_pc = True
+    patterns = [re.compile(r"\bwipe it\b", re.IGNORECASE)]
+
+    def __init__(self):
+        self.ran = False
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        if not request.context.get("confirmed"):
+            return SkillResult("Are you sure?", needs_confirmation=True)
+        self.ran = True
+        return SkillResult("Done.")
+
+
+def _lion_router(pc_on: bool, lion: bool):
+    settings = load_settings()
+    settings.safety.pc_control_enabled = pc_on
+    settings.safety.lion_mode = lion
+    act, boom = _ActSkill(), _DestructiveSkill()
+    registry = SkillRegistry()
+    registry.register(act)
+    registry.register(boom)
+    router = Router(settings, registry, OllamaClient(settings.llm), EventBus())
+    router.model = None
+    return router, act, boom
+
+
+@pytest.mark.asyncio
+async def test_lion_mode_overrides_the_pc_control_switch():
+    router, act, _ = _lion_router(pc_on=False, lion=True)
+    r = await router.route("open chrome")
+    assert act.ran is True and r.speech != PC_CONTROL_OFF_REPLY
+
+
+@pytest.mark.asyncio
+async def test_lion_mode_skips_the_confirmation_gate():
+    router, _, boom = _lion_router(pc_on=True, lion=True)
+    r = await router.route("wipe it")
+    # startswith, not ==: the persona layer may add a quip to a success.
+    assert boom.ran is True and r.speech.startswith("Done.")
+    assert router.awaiting_confirmation is False
+
+
+@pytest.mark.asyncio
+async def test_without_lion_mode_the_gate_still_holds():
+    router, _, boom = _lion_router(pc_on=True, lion=False)
+    r = await router.route("wipe it")
+    assert boom.ran is False and r.speech == "Are you sure?"
+    assert router.awaiting_confirmation is True
+
+
+@pytest.mark.asyncio
+async def test_lion_mode_does_not_widen_the_file_whitelist(tmp_path):
+    """The bound on WHERE MEDO may act is not a confirmation prompt."""
+    from core.safety import PathWhitelist
+    from skills.file_edit import FileEditSkill
+
+    outside = tmp_path.parent / "lion-outside.txt"
+    outside.write_text("classified\n", encoding="utf-8")
+    try:
+        settings = load_settings()
+        settings.safety.lion_mode = True
+        skill = FileEditSkill(PathWhitelist([str(tmp_path)]))
+        phrase = "add oops to lion-outside.txt"
+        r = await skill.execute(SkillRequest(text=phrase, match=skill.match(phrase),
+                                             context={"confirmed": True}))
+        assert r.success is False
+        assert outside.read_text(encoding="utf-8") == "classified\n"
+    finally:
+        outside.unlink(missing_ok=True)

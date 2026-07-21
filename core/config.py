@@ -144,6 +144,15 @@ class PointerConfig(BaseModel):
     zoom_gain: float = 25.0             # hand vertical motion → ctrl+wheel zoom (rock)
     volume_interval_ms: int = 180       # min gap between volume steps while held
     exit_hold_frames: int = 18          # frames a fist must HOLD to exit (~1.2 s @15fps)
+    # Gesture geometry (vision/gestures.py). Finger state is a joint angle, so
+    # there is a deliberate dead band between "curled" and "extended": with
+    # strict_gestures on, a hand in transit (mid-fist) classifies as unknown
+    # instead of flashing through a real pose and firing an action.
+    strict_gestures: bool = True        # reject any hand with an in-between finger
+    extended_min_deg: float = 160.0     # PIP angle at/above this = finger extended
+    curled_max_deg: float = 100.0       # PIP angle at/below this = finger curled
+    zoom_min_spread_deg: float = 50.0   # min index<->pinky splay for the rock/zoom pose
+    l_shape_tolerance_deg: float = 25.0  # how far off 90 deg an L (thumb+index) may be
 
 
 class BenchConfig(BaseModel):
@@ -280,6 +289,14 @@ class SafetyConfig(BaseModel):
     # (PC CONTROL) and persisted per-machine in secrets.local.yaml. Sensing
     # (vision, weather, questions) is never affected.
     pc_control_enabled: bool = True
+    # MEDO LION MODE. Off by default, and it should stay off unless you mean
+    # it: while on, MEDO stops asking before destructive actions and ignores
+    # the PC-control switch entirely. It does NOT widen the file whitelist or
+    # the browser blocklist — those bound WHERE MEDO can act, and a "don't ask
+    # me" switch is not a reason to let a mis-heard word reach your system
+    # drive. Always resets to false on restart: it is a mode you turn on for a
+    # task, not a setting you leave behind.
+    lion_mode: bool = False
 
     def resolved_whitelist(self) -> list[Path]:
         """Whitelist directories as absolute, expanded paths."""
@@ -317,6 +334,22 @@ class BrowserConfig(BaseModel):
     #: browser instead of the system default — one window, and MEDO can then
     #: act on what it just opened.
     route_opens: bool = True
+
+
+class CouncilConfig(BaseModel):
+    """The specialist council — see core/council.py."""
+
+    enabled: bool = True
+    #: Who answers when a question matches no field.
+    default_agent: str = "software"
+    #: Most specialists consulted for one "convene the council" question. Each
+    #: is a full model round-trip, so this is a latency dial as much as a
+    #: quality one.
+    max_members: int = 3
+    #: Specialist keys to switch off (HUD/config toggle).
+    disabled: list[str] = Field(default_factory=list)
+    #: Extra specialists, keyed by name: {title, prompt, triggers, wants_tools}.
+    extra: dict = Field(default_factory=dict)
 
 
 class WeatherConfig(BaseModel):
@@ -413,6 +446,7 @@ class Settings(BaseSettings):
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
+    council: CouncilConfig = Field(default_factory=CouncilConfig)
     hud: HudConfig = Field(default_factory=HudConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)

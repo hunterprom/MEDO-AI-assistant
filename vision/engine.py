@@ -201,7 +201,17 @@ class GestureEngine:
         was_pointer = False
 
         try:
-            recognizer = GestureRecognizer(c.min_detection_confidence, c.min_tracking_confidence)
+            recognizer = GestureRecognizer(
+            c.min_detection_confidence,
+            c.min_tracking_confidence,
+            # Without these the strictness knobs in config.yaml are dead
+            # letters: the recognizer would silently use its defaults.
+            strict=c.pointer.strict_gestures,
+            extended_min_deg=c.pointer.extended_min_deg,
+            curled_max_deg=c.pointer.curled_max_deg,
+            zoom_min_spread_deg=c.pointer.zoom_min_spread_deg,
+            l_shape_tolerance_deg=c.pointer.l_shape_tolerance_deg,
+        )
         except Exception as exc:
             self.error = f"MediaPipe unavailable: {exc}"
             logger.error(self.error)

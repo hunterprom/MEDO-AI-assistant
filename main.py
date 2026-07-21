@@ -122,6 +122,8 @@ def build_registry(
     briefing_rewrite=None,
     modes=None,
     browser_think=None,
+    expert=None,
+    synthesize_council=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -160,6 +162,21 @@ def build_registry(
         from skills.dictate import DictateSkill
 
         registry.register(DictateSkill(settings, modes))
+    # MEDO Lion Mode: registered first so "lion mode on" can never be taken
+    # for anything else — the one command that must always be reachable.
+    from skills.lion import LionModeSkill
+
+    registry.register(LionModeSkill(settings))
+    # The specialist council + the wiring helper that borrows its electrical
+    # engineer. Before the broad web/search skills, whose "how do I ..." and
+    # "ask ..." patterns would otherwise swallow them.
+    if settings.council.enabled:
+        from skills.circuit import CircuitSkill
+        from skills.council import AskSpecialistSkill, ConveneCouncilSkill
+
+        registry.register(ConveneCouncilSkill(settings, expert, synthesize_council))
+        registry.register(AskSpecialistSkill(settings, expert))
+        registry.register(CircuitSkill(settings, expert, expert))
     # Morning briefing (M8): chains weather/news/reminders/facts; registered
     # early so "brief me" can't be stolen by broader patterns.
     from skills.briefing import BriefingSkill
@@ -450,6 +467,37 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return "I found results, but my summarizer is offline."
         return (message.get("content") or "").strip() or "I couldn't summarize that."
 
+    async def expert(system: str, user: str) -> str:
+        """One specialist round-trip: a role prompt plus the question.
+
+        Shared by the council and the wiring helper. Returns "" when the model
+        is unavailable, so a caller degrades instead of raising at the user.
+        """
+        if not router.model:
+            return ""
+        try:
+            message = await llm.chat(router.model, [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ])
+        except LLMUnavailableError:
+            return ""
+        return (message.get("content") or "").strip()
+
+    async def synthesize_council(question: str, notes: str,
+                                 macedonian: bool = False) -> str:
+        """MEDO's architect pass: several specialist notes -> one spoken answer."""
+        language = "Macedonian" if macedonian else "English"
+        system = (
+            f"You are {settings.personality.name}, the architect coordinating a "
+            f"panel of specialists. Combine their notes into ONE spoken answer "
+            f"in {language}, two to four sentences, plain text with no markdown. "
+            f"Keep every concrete number. Where they disagree, say so plainly "
+            f"and say which you would follow and why. Invent nothing."
+        )
+        user = f"Question: {question}\n\nSpecialist notes:\n{notes}"
+        return await expert(system, user)
+
     async def browser_think(prompt: str) -> str:
         """One LLM pass: page elements + task -> the next browser action (JSON).
 
@@ -521,7 +569,8 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
     registry = build_registry(settings, announcer, summarize, reminders, doc_index,
                               briefing_rewrite=briefing_rewrite, modes=modes,
-                              browser_think=browser_think)
+                              browser_think=browser_think, expert=expert,
+                              synthesize_council=synthesize_council)
 
     # MCP: connect configured servers and register their tools as skills, so
     # any application that speaks the Model Context Protocol becomes callable

@@ -103,6 +103,24 @@ vision:                             # camera hand-gesture control (sidecar proce
     volume_interval_ms: 180         # min gap between volume steps while thumbs-up/pinky held
     exit_hold_frames: 18            # frames a fist must HOLD to exit (~1.2 s; brief
                                     # fist misreads while pointing don't kick you out)
+    # --- gesture geometry (vision/gestures.py) ---------------------------------
+    # A finger's state is the angle at its middle knuckle, so there is a dead band
+    # between "curled" and "extended". strict_gestures rejects the whole hand while
+    # ANY finger sits in that band -> a hand halfway into a fist no longer flashes
+    # through rock/victory and fires a zoom or a scroll.
+    strict_gestures: true           # false = old loose behavior (twitchy, fires mid-motion)
+    extended_min_deg: 160.0         # >= this angle counts as extended (180 = dead straight).
+                                    # gestures too hard to trigger? LOWER it (e.g. 150)
+    curled_max_deg: 100.0           # <= this angle counts as curled.
+                                    # gestures too twitchy? LOWER it (e.g. 80) to widen
+                                    # the dead band; raise both bounds toward each other
+                                    # to make recognition looser and faster
+    zoom_min_spread_deg: 50.0       # rock/zoom pose: min angle between index and pinky.
+                                    # zoom fires by accident? RAISE it (e.g. 65). can't
+                                    # get zoom to start? LOWER it (e.g. 35)
+    l_shape_tolerance_deg: 25.0     # L pose (thumb + index): how far off a 90 deg corner
+                                    # is still an L. raise = easier to hit but bleeds into
+                                    # plain pointing; lower = stricter right angle
   bench:                            # M10: 2nd workbench camera (skills/bench.py)
     enabled: false                  # "what's on my bench" / "identify this part" /
                                     # "log this part" / "do i have any 10k resistors"
@@ -233,6 +251,13 @@ safety:                             # M2
   # ("PC control") — the live choice persists per machine in
   # secrets.local.yaml. Sensing (vision, weather, questions) always works.
   pc_control_enabled: true
+  # MEDO LION MODE. Off, and it resets to off on every restart. While on, MEDO
+  # stops asking before destructive actions and ignores pc_control_enabled.
+  # It does NOT widen whitelist_dirs or browser.blocked_domains: those bound
+  # WHERE MEDO may act, and "stop asking me" is not a reason to let a
+  # mis-heard word reach your system drive. Turn on by voice: "lion mode on"
+  # (it asks once — the last time it will).
+  lion_mode: false
   whitelist_dirs:                   # files.py may only touch these trees
     - "~/Documents"
     - "~/Downloads"
@@ -309,6 +334,26 @@ browser:                            # skills/browser.py — a browser MEDO can C
   blocked_domains: []               # hostname substrings MEDO must never drive
   #  - "bank"
   #  - "paypal"
+
+council:                            # core/council.py — one expert per major
+  # A bench of specialists MEDO can put a question to. They don't listen and
+  # don't converse: MEDO picks who is relevant, asks them, and synthesizes.
+  # A discipline is a SYSTEM PROMPT, not a process — so on Ollama this costs
+  # no extra processes at all, just one model round-trip per specialist.
+  #   "ask the electrical engineer about grounding"   -> one specialist
+  #   "convene the council on battery sizing"         -> 2-3, then synthesis
+  enabled: true
+  default_agent: "software"         # who answers when no field matches
+  max_members: 3                    # specialists per "convene" (latency dial)
+  disabled: []                      # keys to switch off, e.g. ["law", "finance"]
+  # Built in: electrical, robotics, mechanical, physics, quantum, mathematics,
+  # software, law, finance, economics. Add your own without touching code:
+  extra: {}
+  #  metallurgy:
+  #    title: "the metallurgist"
+  #    prompt: "You are a metallurgist. You reason about alloys, heat ..."
+  #    triggers: ["alloy", "steel", "anneal", "weld"]
+
 
 weather:                            # M3
   default_city: "Skopje"
