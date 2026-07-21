@@ -12,10 +12,13 @@ import shlex
 import subprocess
 from typing import Any
 
+from core import mk
 from core.platform import current_os, pick_for_os, run_detached
 from skills.base import Skill, SkillRequest, SkillResult
 
-# Spoken aliases -> config key. Keeps "google chrome" / "vs code" working.
+# Spoken aliases -> config key. Keeps "google chrome" / "vs code" working, and
+# gives the Macedonian names for the same apps — Whisper writes "Chrome" as
+# "хром" when you're speaking Macedonian, so those are aliases like any other.
 _ALIASES = {
     "google chrome": "chrome",
     "vs code": "editor",
@@ -23,6 +26,25 @@ _ALIASES = {
     "code": "editor",
     "visual studio code": "editor",
     "web browser": "browser",
+    # Macedonian
+    "хром": "chrome",
+    "гугл хром": "chrome",
+    "прелистувач": "browser",
+    "прелистувачот": "browser",
+    "пребарувач": "browser",
+    "браузер": "browser",
+    "терминал": "terminal",
+    "терминалот": "terminal",
+    "командна линија": "terminal",
+    "уредувач": "editor",
+    "едитор": "editor",
+    "спотифај": "spotify",
+    "спотифи": "spotify",
+    "стим": "steam",
+    "дискорд": "discord",
+    "калкулатор": "calculator",
+    "експлорер": "explorer",
+    "фајл менаџер": "explorer",
 }
 
 
@@ -41,34 +63,67 @@ class AppsSkill(Skill):
                 rf"\b(?P<action>open|launch|start|run|close|quit|kill|exit)\s+"
                 rf"(?:the\s+|my\s+)?(?P<app>{alternation})\b",
                 re.IGNORECASE,
-            )
+            ),
+            # MK "отвори ми го хром" / "стартувај спотифај". The clitics
+            # ("ми го") pile up between the verb and the app; the verb itself
+            # tells us whether this is an open or a close.
+            re.compile(
+                rf"\b(?P<mk_open>{mk.OPEN}){mk.CLITICS}\s+"
+                rf"(?P<app>{alternation})\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                rf"\b(?P<mk_close>{mk.CLOSE}){mk.CLITICS}\s+"
+                rf"(?P<app>{alternation})\b",
+                re.IGNORECASE,
+            ),
         ]
 
     def _resolve_key(self, app: str) -> str | None:
         app = app.lower().strip()
         if app in self._apps:
             return app
-        return _ALIASES.get(app)
+        # An alias only counts when its target is actually in the table: the
+        # match patterns are built from *every* alias, so on a machine whose
+        # config has no "steam" entry, "отвори стим" would otherwise resolve to
+        # a key that isn't there and blow up on the lookup in execute().
+        key = _ALIASES.get(app)
+        return key if key in self._apps else None
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         m = request.match
         if m is None:
             return SkillResult("I didn't catch which app.", success=False)
-        action = m.group("action").lower()
+        gd = m.groupdict()
+        speak_mk = mk.is_cyrillic(request.text)
+        if gd.get("mk_close"):
+            action = "close"
+        elif gd.get("mk_open"):
+            action = "open"
+        else:
+            action = m.group("action").lower()
         key = self._resolve_key(m.group("app"))
         if key is None:
-            return SkillResult(f"I don't have {m.group('app')} configured.", success=False)
+            return SkillResult(
+                f"Немам конфигурирано {m.group('app')}." if speak_mk
+                else f"I don't have {m.group('app')} configured.", success=False)
 
         if action in ("open", "launch", "start", "run"):
             command = pick_for_os(self._apps[key])
             if not command:
-                return SkillResult(f"{key} isn't set up for this OS.", success=False)
+                return SkillResult(
+                    f"{key} не е поставен за овој систем." if speak_mk
+                    else f"{key} isn't set up for this OS.", success=False)
             run_detached(command)
-            return SkillResult(f"Opening {key}.", data={"app": key, "action": "open"})
+            return SkillResult(
+                f"Отворам {key}." if speak_mk else f"Opening {key}.",
+                data={"app": key, "action": "open"})
 
         # close / quit / kill — best-effort, cross-platform.
         self._close(key)
-        return SkillResult(f"Closing {key}.", data={"app": key, "action": "close"})
+        return SkillResult(
+            f"Затворам {key}." if speak_mk else f"Closing {key}.",
+            data={"app": key, "action": "close"})
 
     def _win_image_name(self, key: str) -> str:
         """Windows process image for ``taskkill``, derived from the launch command.

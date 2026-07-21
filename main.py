@@ -172,7 +172,13 @@ def build_registry(
     # "open tinkercad.com" (dotted) opens the browser — before FilesSkill so
     # a domain never reads as a filename.
     from skills.web_open import OpenWebsiteSkill
+    from skills.sites import SiteSearchSkill
 
+    # Site-scoped search BEFORE the plain opener: "search cats on youtube" is
+    # strictly more specific than "open youtube", and its patterns all demand
+    # both a search verb and a known site, so a bare "open youtube" still falls
+    # through to OpenWebsiteSkill below.
+    registry.register(SiteSearchSkill(extra_sites=settings.skills.get("sites")))
     registry.register(OpenWebsiteSkill())
     registry.register(SeeCameraSkill(settings))
     registry.register(SeeScreenSkill(settings))

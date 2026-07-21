@@ -240,6 +240,35 @@ skills:
       darwin:  "open -a Spotify"
       windows: "start spotify"
       linux:   "spotify"
+    explorer:                       # "open explorer" / "отвори експлорер"
+      darwin:  "open -a Finder"
+      windows: "start explorer"
+      linux:   "xdg-open ."
+    calculator:
+      darwin:  "open -a Calculator"
+      windows: "start calc"
+      linux:   "gnome-calculator"
+    steam:
+      darwin:  "open -a Steam"
+      windows: "start steam://open/main"
+      linux:   "steam"
+    discord:
+      darwin:  "open -a Discord"
+      windows: "start discord"
+      linux:   "discord"
+
+  # sites.py — extra search targets on top of the built-in table (YouTube,
+  # Gmail, Reddit, Steam, GitHub, Amazon, Wikipedia, Maps, Thingiverse …).
+  # "{q}" is replaced with the spoken query, URL-escaped. `aliases` are the
+  # spoken forms to listen for — include the Macedonian ones, since Whisper
+  # writes site names in Cyrillic when you speak Macedonian. Reusing a
+  # built-in key overrides it.
+  sites: {}
+  #  pazar3:
+  #    label:   "Pazar3"
+  #    search:  "https://www.pazar3.mk/oglasi?q={q}"
+  #    home:    "https://www.pazar3.mk"
+  #    aliases: ["пазар3", "пазар три"]
 
 weather:                            # M3
   default_city: "Skopje"

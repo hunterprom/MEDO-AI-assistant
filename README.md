@@ -77,6 +77,16 @@ orders of magnitude below it.
 - **Fast path**: ~30 regex commands run deterministically in <1 ms — time,
   timers, notes, volume, media, apps, files, screenshots, windows, typing,
   clipboard, brightness, power.
+- **Search where you actually search**: "search drone motors on YouTube",
+  "check my email for the invoice", "find Half-Life on Steam" open that site's
+  own results — ~35 sites built in (YouTube, Gmail, Reddit, Steam, GitHub,
+  Amazon, Wikipedia, Maps, Thingiverse…), extend the list in `config.yaml →
+  skills.sites` without touching code.
+- **Bilingual commands, not just bilingual chat**: the fast path answers
+  Macedonian too — "отвори хром", "затвори спотифај", "отвори јутјуб",
+  "барај мачки на јутјуб", "најди ја датотеката извештај" — and replies in the
+  language it was asked in. Cyrillic site names ("јутјуб", "стим", "пошта")
+  resolve like any other alias.
 - **Memory + RAG**: "remember that…" facts recalled **semantically** (local
   embeddings), and "what do my documents say about the lease?" searches
   whitelisted .txt/.md/.pdf by meaning, quoting the source file.

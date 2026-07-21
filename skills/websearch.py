@@ -17,10 +17,12 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from core import mk
 from skills.base import Skill, SkillRequest, SkillResult
 
 Summarize = Callable[[str, str], Awaitable[str]]
 _OFFLINE = "I can't search the web right now. I appear to be offline."
+_OFFLINE_MK = "Не можам да пребарувам сега — изгледа дека сум офлајн."
 _MAX_RESULTS = 5
 
 
@@ -47,6 +49,12 @@ class WebSearchSkill(Skill):
     patterns = [
         re.compile(r"\b(?:search|google|look\s+up)\s+(?:the\s+web\s+for\s+|for\s+)?(?P<q>.+)", re.IGNORECASE),
         re.compile(r"\bwhat\s+is\s+the\s+latest\s+(?:on|about)\s+(?P<q2>.+)", re.IGNORECASE),
+        # MK: "барај рецепт за пица", "гугни цена на филамент". Registered last
+        # in the registry, so the site/file/app skills have already had their
+        # turn at these verbs — whatever reaches here really is a web search.
+        re.compile(rf"\b(?:{mk.SEARCH}){mk.CLITICS}\s+(?:на\s+интернет\s+(?:за\s+)?)?(?P<q3>.+)",
+                   re.IGNORECASE),
+        re.compile(r"\bшто\s+(?:е\s+)?ново\s+(?:за|околу|со)\s+(?P<q4>.+)", re.IGNORECASE),
     ]
 
     def __init__(self, summarize: Summarize | None = None) -> None:
@@ -57,15 +65,21 @@ class WebSearchSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        query = (request.args.get("query") or gd.get("q") or gd.get("q2") or "").strip(" ?.!")
+        speak_mk = mk.is_cyrillic(request.text)
+        query = (request.args.get("query") or gd.get("q") or gd.get("q2")
+                 or gd.get("q3") or gd.get("q4") or "").strip(" ?.!")
         if not query:
-            return SkillResult("What should I search for?", success=False)
+            return SkillResult(
+                "Што да пребарам?" if speak_mk else "What should I search for?",
+                success=False)
 
         results = await asyncio.to_thread(self._search, query)
         if results is None:
-            return SkillResult(_OFFLINE, success=False)
+            return SkillResult(_OFFLINE_MK if speak_mk else _OFFLINE, success=False)
         if not results:
-            return SkillResult(f"I couldn't find anything about {query}.", success=False)
+            return SkillResult(
+                f"Не најдов ништо за {query}." if speak_mk
+                else f"I couldn't find anything about {query}.", success=False)
 
         block = "\n".join(
             f"- {r.get('title', '')}: {r.get('body', '')}" for r in results

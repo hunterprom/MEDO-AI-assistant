@@ -41,7 +41,9 @@ def system_prompt(
         "— call the matching tool and describe what it returns.\n"
         "- NEVER claim you performed an action (opening a site or app, typing, "
         "changing volume) unless a tool call actually did it this turn. To open "
-        "any website use the open_website tool. If no tool fits, say you can't "
+        "any website use the open_website tool. When the user names a site to "
+        "search on (YouTube, Gmail, Reddit, Steam, Amazon, GitHub…), use the "
+        "site_search tool, not open_website. If no tool fits, say you can't "
         "do it — a false 'done' is worse than a no.\n"
         "- If you genuinely don't know and no tool helps, say so plainly."
     )
