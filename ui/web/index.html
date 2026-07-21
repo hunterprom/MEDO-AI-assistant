@@ -175,7 +175,7 @@
   #optical { flex: 1; display: flex; flex-direction: column; min-height: 120px; }
   #optical.hidden { display: none; }
   #cam-img { width: 100%; flex: 1; object-fit: cover; min-height: 0; border: 1px solid rgba(56,168,255,.2); background: rgba(4,10,20,.6); }
-  #cam-off { flex: 1; display: flex; align-items: center; justify-content: center; font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #4a6d94; letter-spacing: .2em; border: 1px dashed rgba(56,168,255,.15); }
+  #cam-off { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; padding: 10px; font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #4a6d94; letter-spacing: .1em; line-height: 1.5; border: 1px dashed rgba(56,168,255,.15); overflow-wrap: anywhere; }
   #cam-legend { margin-top: 8px; font-family: 'Share Tech Mono', monospace; font-size: 9px; color: #4a6d94; letter-spacing: .08em; line-height: 1.5; }
 
   /* ---- COMMS ---- */
@@ -975,9 +975,21 @@
     localStorage.setItem('medo_camfeed', camWanted ? 'on' : 'off');
   }
   camImg.onload = () => { const d = $('dev-vision'); d.classList.add('on'); d.querySelector('.state').textContent = 'ONLINE'; };
+  // When the feed is dark, ask the sidecar WHY and show it — a denied camera
+  // permission looks identical to a stopped sidecar otherwise.
+  async function explainCamOffline() {
+    let msg = 'FEED OFFLINE — vision sidecar not running';
+    try {
+      const s = await (await fetch(`${STREAM}/status`)).json();
+      if (s.error) msg = 'CAMERA ERROR — ' + s.error;
+      else if (!s.camera) msg = 'FEED OFFLINE — starting camera…';
+    } catch { /* sidecar unreachable: keep the default message */ }
+    camOff.textContent = msg;
+  }
   camImg.onerror = () => {
     const d = $('dev-vision'); d.classList.remove('on'); d.querySelector('.state').textContent = 'OFFLINE';
     camImg.style.display = 'none'; camOff.style.display = '';
+    explainCamOffline();
     if (camWanted) setTimeout(() => { if (camWanted) camImg.src = `${STREAM}/video?r=${Date.now()}`; }, 10000);
   };
   $('dev-vision').onclick = $('cfg-cam').onclick = () => { camWanted = !camWanted; applyCam(); };

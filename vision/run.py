@@ -11,6 +11,7 @@ through the very same Intent Router as voice and text. Its little HTTP server
     GET  /frame.jpg  latest single frame (the vision skill sends it to moondream)
     GET  /pointer    {"ok": true, "on": bool} — pointer-mode state
     POST /pointer    {"on": bool} — toggle gesture mouse control
+    GET  /status     {"ok", "camera", "pointer", "error"} — why the feed is dark
 
 Deliberately dependency-light: stdlib + cv2/mediapipe/numpy (+ PyYAML for config).
 It never imports the main app's pydantic/voice stack, keeping the two venvs apart.
@@ -200,6 +201,20 @@ def _make_video_handler(holder: dict, cfg: VisionRunConfig):
                 return
             if self.path == "/pointer":
                 self._send_json(200, {"ok": True, "on": holder["engine"].pointer_on()})
+                return
+            if self.path == "/status":
+                # Lets the HUD's OPTICAL FEED card explain WHY the camera is
+                # dark (permission denied / device busy / MediaPipe missing)
+                # instead of a bare "FEED OFFLINE". The supervision loop keeps
+                # restarting the engine, but a PERMANENT failure (e.g. macOS
+                # Camera permission) needs the reason shown, not just retried.
+                eng = holder["engine"]
+                self._send_json(200, {
+                    "ok": eng.error is None,
+                    "camera": eng.latest_jpeg() is not None,
+                    "pointer": eng.pointer_on(),
+                    "error": eng.error,
+                })
                 return
             if self.path not in ("/video", "/"):
                 self.send_error(404)
