@@ -67,6 +67,11 @@ class DictateSkill(Skill):
     )
 
     patterns = [
+        # Stop FIRST. The voice loop consumes "stop dictation" itself (it never
+        # reaches the router while dictating), but a session started from the
+        # HUD or the watch has no voice turn to consume it — without this the
+        # mode could be entered by text and never left.
+        STOP_DICTATION,
         re.compile(r"\b(?:take|start|begin)\s+(?:a\s+|the\s+)?dictation\b"
                    r"(?:\s+(?:in|into|to)\s+(?:the\s+)?(?:file\s+)?(?P<file>.+))?$",
                    re.IGNORECASE),
@@ -91,6 +96,19 @@ class DictateSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
+
+        if request.args.get("action") == "stop" or STOP_DICTATION.search(request.text):
+            was = self._modes.dictation_path
+            self._modes.dictating = False
+            self._modes.dictation_path = ""
+            where = Path(was).name if was else ""
+            if not where:
+                return SkillResult("Не диктирав ништо." if speak_mk
+                                   else "I wasn't taking dictation.", success=False)
+            return SkillResult(f"Запишано во {where}." if speak_mk
+                               else f"Saved to {where}.",
+                               data={"path": was, "dictating": False})
+
         name = (request.args.get("file") or gd.get("file") or gd.get("file2")
                 or gd.get("file3") or gd.get("filem") or "")
         path = target_path(self._settings, name)

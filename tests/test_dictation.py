@@ -87,3 +87,24 @@ async def test_macedonian_start_answers_in_macedonian(settings, modes):
 
 def test_is_gated_by_the_pc_control_switch(settings, modes):
     assert DictateSkill(settings, modes).controls_pc is True
+
+
+@pytest.mark.asyncio
+async def test_stop_by_text_leaves_the_mode(settings, modes, tmp_path):
+    """A session started from the HUD has no voice turn to consume "stop"."""
+    skill = DictateSkill(settings, modes)
+    await skill.execute(SkillRequest(text="take dictation",
+                                     match=skill.match("take dictation")))
+    assert modes.dictating is True
+    r = await skill.execute(SkillRequest(text="stop dictation",
+                                         match=skill.match("stop dictation")))
+    assert r.success and modes.dictating is False and modes.dictation_path == ""
+    assert "dictation.md" in r.speech
+
+
+@pytest.mark.asyncio
+async def test_stop_when_not_dictating_says_so(settings, modes):
+    skill = DictateSkill(settings, modes)
+    r = await skill.execute(SkillRequest(text="stop dictation",
+                                         match=skill.match("stop dictation")))
+    assert r.success is False
