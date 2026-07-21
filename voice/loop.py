@@ -35,6 +35,7 @@ import logging
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -69,10 +70,13 @@ class VoiceLoop:
     # in is low-risk — worst case the reply stops), plus an energy gate: mic
     # level holding well above the playback's own leakage baseline means
     # someone is talking over MEDO.
+    # Barge-in tuning lives in audio config now: the right values depend on the
+    # room, the speakers and the mic, so they must be tunable without a code
+    # edit. These stay as documented fallbacks.
     BARGE_WAKE_THRESHOLD = 0.25   # vs 0.4 when idle
-    BARGE_RMS_RATIO = 3.0         # mic level vs playback-leakage baseline
+    BARGE_RMS_RATIO = 2.0         # mic level vs playback-leakage baseline
     BARGE_MIN_RMS = 0.02          # absolute floor so silence can't ratio-trip
-    BARGE_HOLD_FRAMES = 4         # ~0.3 s sustained before it counts
+    BARGE_HOLD_FRAMES = 3         # ~0.24 s sustained before it counts
 
     def __init__(
         self,
@@ -208,6 +212,7 @@ class VoiceLoop:
 
         wake = self._wakeword
         assert wake is not None
+        audio_cfg = self._settings.audio
         sd.play(wav, samplerate=sr, device=self._settings.audio.output_device)
         stream = sd.get_stream()
         interrupted = False
@@ -226,7 +231,7 @@ class VoiceLoop:
                         self._wake_event.clear()
                         interrupted, why = True, "interrupt signal"
                         break
-                    if wake.predict(frame) >= self.BARGE_WAKE_THRESHOLD:
+                    if wake.predict(frame) >= audio_cfg.barge_wake_threshold:
                         interrupted, why = True, "wake word over playback"
                         break
                     rms = frame_rms(frame)
@@ -236,10 +241,11 @@ class VoiceLoop:
                         # Track the reply's own loudness only while nothing
                         # shouts over it, so a talking user can't raise the bar.
                         baseline += 0.2 * (rms - baseline)
-                    loud = rms >= max(baseline * self.BARGE_RMS_RATIO, self.BARGE_MIN_RMS)
+                    loud = rms >= max(baseline * audio_cfg.barge_rms_ratio,
+                                      audio_cfg.barge_min_rms)
                     # Ignore the first frames: the baseline is still settling.
                     loud_run = loud_run + 1 if (loud and frames > 6) else 0
-                    if loud_run >= self.BARGE_HOLD_FRAMES:
+                    if loud_run >= audio_cfg.barge_hold_frames:
                         interrupted, why = True, "voice over playback"
                         break
         except Exception:  # mic busy/unavailable — degrade to plain playback
@@ -295,8 +301,17 @@ class VoiceLoop:
         waits ``followup_window_s`` for speech to begin, then returns empty —
         so a silent follow-up window naturally falls back to standby.
         """
-        start_timeout = (self._settings.conversation.followup_window_s
-                         if not require_wake else 6.0)
+        conv = self._settings.conversation
+        start_timeout = conv.followup_window_s if not require_wake else 6.0
+        # Dictation is composed, not commanded: people pause mid-sentence, so
+        # it gets a longer silence gate and a much higher ceiling than a
+        # one-line request.
+        if self._modes.dictating:
+            silence_s = conv.dictation_silence_s
+            max_s = conv.dictation_max_utterance_s
+        else:
+            silence_s = self._settings.audio.silence_duration_s
+            max_s = self._settings.audio.max_utterance_s
         while True:
             device = self._settings.audio.input_device
             mic = Microphone(self._settings.audio.sample_rate, device=device)
@@ -321,12 +336,51 @@ class VoiceLoop:
                     record_until_silence,
                     mic,
                     silence_threshold=self._settings.audio.silence_threshold,
-                    silence_duration_s=self._settings.audio.silence_duration_s,
+                    silence_duration_s=silence_s,
+                    max_seconds=max_s,
                     start_timeout_s=start_timeout,
                 )
                 return audio, wake_to_listen_ms
             finally:
                 mic.close()
+
+    # --- dictation mode: transcribe -> append to file ------------------------
+
+    async def _dictate_turn(self, audio) -> bool:
+        """Transcribe one utterance and append it to the dictation file.
+
+        Returns True to keep dictating. Nothing is routed and nothing is
+        spoken back except the exit confirmation — reading every sentence back
+        would make composing anything longer than a note unbearable.
+        """
+        from skills.dictate import STOP_DICTATION
+
+        text = (await asyncio.to_thread(
+            self._stt.transcribe, normalize_peak(audio)) or "").strip()
+        if not text:
+            return True
+        if STOP_DICTATION.search(text):
+            path = Path(self._modes.dictation_path)
+            self._modes.dictating = False
+            self._modes.dictation_path = ""
+            await self._sm.transition(AssistantState.SPEAKING)
+            speak_mk = contains_cyrillic(text)
+            await self._speak(f"Запишано во {path.name}." if speak_mk
+                              else f"Saved to {path.name}.")
+            return False
+        from core.events import Event, EventType
+
+        try:
+            path = Path(self._modes.dictation_path)
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(text.rstrip() + "\n")
+        except OSError:
+            logger.exception("dictation write failed")
+            await self._speak("I couldn't write that down.")
+            return False
+        await self._sm.bus.emit(Event(EventType.TRANSCRIPT, text))
+        console.print(f"[dim]dictated:[/dim] {text}")
+        return True
 
     # --- interpreter mode: transcribe -> translate -> speak ------------------
 
@@ -490,13 +544,15 @@ class VoiceLoop:
             # Interpreter mode listens continuously (no wake word between lines)
             # so it works like a live interpreter until you say "stop".
             interpreting = self._modes.interpreter
-            cap_require_wake = require_wake and not interpreting
+            dictating = self._modes.dictating
+            # Both modes stream: no wake word between lines until you stop.
+            cap_require_wake = require_wake and not (interpreting or dictating)
             if cap_require_wake:
                 await self._sm.transition(AssistantState.IDLE)
             audio, wake_to_listen_ms = await self._capture(cap_require_wake)
             if audio.size == 0:
-                if interpreting:
-                    continue  # silent gap — keep the interpreter open
+                if interpreting or dictating:
+                    continue  # silent gap — keep the mode open
                 if require_wake:
                     console.print("[dim](heard nothing — back to sleep)[/dim]")
                 require_wake = True
@@ -507,7 +563,10 @@ class VoiceLoop:
             # forever (state frozen in THINKING, nothing consuming wake/interrupt)
             # while typing kept working — the classic "voice is broken" state.
             try:
-                if interpreting:
+                if dictating:
+                    still = await self._dictate_turn(audio)
+                    require_wake = not still  # exited -> back to standby
+                elif interpreting:
                     still = await self._interpret_turn(audio)
                     require_wake = not still  # exited -> back to standby
                 else:

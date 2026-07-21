@@ -24,3 +24,8 @@ class SessionModes:
     interpreter: bool = False
     # Interpreter language pair (source auto-detected; MEDO speaks the OTHER).
     interpreter_langs: tuple[str, str] = ("en", "mk")
+    # ``dictating`` — everything heard is written to ``dictation_path`` instead
+    # of being answered, until "stop dictation". Like interpreter mode, the
+    # wake word is not needed between lines.
+    dictating: bool = False
+    dictation_path: str = ""

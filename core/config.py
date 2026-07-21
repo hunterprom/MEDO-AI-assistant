@@ -88,6 +88,14 @@ class ConversationConfig(BaseModel):
     # How long the mic stays open for a follow-up before falling back to
     # standby on silence.
     followup_window_s: float = 8.0
+    # --- dictation (skills/dictate.py + voice/loop.py) ----------------------
+    #: Where dictated text lands when no file is named.
+    dictation_dir: str = "~/Documents"
+    dictation_file: str = "dictation.md"
+    #: Dictation gets a longer leash than a command: people pause mid-sentence
+    #: while composing, and a 1.4 s gate would chop every thought in half.
+    dictation_silence_s: float = 2.5
+    dictation_max_utterance_s: float = 90.0
 
 
 class PersonalityConfig(BaseModel):
@@ -243,7 +251,25 @@ class AudioConfig(BaseModel):
     output_device: int | None = None
     sample_rate: int = 16000
     silence_threshold: float = 0.015
-    silence_duration_s: float = 1.0
+    #: Quiet needed to end an utterance. Short values cut people off mid-thought,
+    #: which reads as "it stopped listening" rather than "I paused".
+    silence_duration_s: float = 1.4
+    #: Hard cap on one utterance. Was 12 s hard-coded, which truncated any
+    #: question longer than a sentence or two.
+    max_utterance_s: float = 30.0
+
+    # --- barge-in (voice/loop.py) --------------------------------------------
+    #: Wake-word score that interrupts a reply. Lower than the idle threshold —
+    #: you're speaking over MEDO's own voice, so the model scores lower.
+    barge_wake_threshold: float = 0.25
+    #: How far above MEDO's own speaker-leakage your voice must sit. Measured on
+    #: this machine: leakage ~0.011 rms median, 0.035 peak, so 3.0 put the bar
+    #: above MEDO's own loud moments and barge-in effectively never fired.
+    barge_rms_ratio: float = 2.0
+    #: Absolute floor so a silent room can't ratio-trip.
+    barge_min_rms: float = 0.02
+    #: Frames (~80 ms each) of sustained speech before it counts.
+    barge_hold_frames: int = 3
 
 
 class SafetyConfig(BaseModel):

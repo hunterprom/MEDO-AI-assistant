@@ -45,6 +45,13 @@ conversation:                       # continuous mode (voice/loop.py, core/modes
   continuous: false
   followup_window_s: 8.0            # mic stays open this long for a follow-up,
                                     # then falls back to standby on silence
+  # Dictation ("take dictation" … "stop dictation"): everything heard is
+  # written down instead of answered, with no wake word between lines. Composing
+  # involves pauses, so it gets a longer silence gate and ceiling than a command.
+  dictation_dir: "~/Documents"
+  dictation_file: "dictation.md"
+  dictation_silence_s: 2.5
+  dictation_max_utterance_s: 90.0
 
 personality:
   name: "MEDO"
@@ -194,6 +201,21 @@ audio:                              # M1
   input_device: ["A25", "FHD Webcam"]
   output_device: null
   sample_rate: 16000
+  # How much quiet ends an utterance, and the hard ceiling on one. 1.0/12 s cut
+  # people off mid-question; raise silence_duration_s if MEDO stops while you
+  # are still thinking, and max_utterance_s for genuinely long questions.
+  silence_threshold: 0.015
+  silence_duration_s: 1.4
+  max_utterance_s: 30.0
+  # Barge-in (talking over a reply). The bar is your voice vs MEDO's own sound
+  # leaking back into the mic, so it depends on your speakers and room. On this
+  # machine leakage measures ~0.011 rms; barge_rms_ratio 2.0 puts the bar at
+  # ~0.022. Lower it if interrupting doesn't work; raise it if MEDO cuts itself
+  # off. Run: .venv\Scripts\python -m voice.bargecheck  to measure live.
+  barge_wake_threshold: 0.25
+  barge_rms_ratio: 2.0
+  barge_min_rms: 0.02
+  barge_hold_frames: 3
   # RMS below this counts as silence (speech onset gate). Quiet webcam/onboard
   # mics peak at only a few percent — 0.015 was above their speech level, so
   # recording never "started" and MEDO seemed deaf after waking. The adaptive

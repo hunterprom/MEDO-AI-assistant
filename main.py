@@ -154,6 +154,12 @@ def build_registry(
         from skills.modes_skill import ModesSkill
 
         registry.register(ModesSkill(modes))
+        # Dictation mode: everything heard is written down until "stop
+        # dictation". Registered with the other mode toggles so its phrases
+        # ("write this down") can't be stolen by the note or file skills.
+        from skills.dictate import DictateSkill
+
+        registry.register(DictateSkill(settings, modes))
     # Morning briefing (M8): chains weather/news/reminders/facts; registered
     # early so "brief me" can't be stolen by broader patterns.
     from skills.briefing import BriefingSkill
