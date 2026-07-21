@@ -32,3 +32,5 @@ watch/android/.gradle/
 # Controlled-browser profile (skills/browser.py): live session cookies for
 # every site you log MEDO into — as sensitive as secrets.local.yaml.
 browser-profile/
+medo.log
+medo.err.log

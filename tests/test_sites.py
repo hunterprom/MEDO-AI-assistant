@@ -290,3 +290,112 @@ async def test_open_site_and_search_is_one_action(skill, phrase, query):
     # Query-string template => quote_plus, so Cyrillic is percent-encoded and
     # spaces become "+".
     assert quote_plus(query) in skill.opened[0], skill.opened[0]
+
+
+# --- "play the first video" — the page already open ---------------------------
+
+
+class _OpenPageSession(_PlaySession):
+    """A session already sitting on a YouTube results page."""
+
+    def __init__(self, url="https://www.youtube.com/results?search_query=jazz", **kw):
+        super().__init__(**kw)
+        self._url = url
+
+    async def where(self):
+        return self.title, self._url
+
+
+class _NoPageSession(_PlaySession):
+    async def where(self):
+        raise RuntimeError("nothing open")
+
+
+@pytest.mark.parametrize("phrase", [
+    "play the first video",
+    "play the top result",
+    "play the first one",
+    "play that",
+    "Play the first video on YouTube, the new tab that you just opened.",
+    "пушти го првото видео",
+    "пушти го тоа",
+])
+def test_deictic_play_patterns(phrase):
+    from skills.sites import PlaySkill
+
+    assert PlaySkill(opener=lambda u: True).match(phrase) is not None, phrase
+
+
+@pytest.mark.asyncio
+async def test_play_the_first_video_acts_on_the_open_page():
+    """It must NOT search for the literal words "first video"."""
+    from skills.sites import PlaySkill
+
+    session = _OpenPageSession()
+    skill = PlaySkill(opener=lambda u: True, session=session)
+    phrase = "Play the first video on YouTube, the new tab that you just opened."
+    r = await skill.execute(SkillRequest(text=phrase, match=skill.match(phrase)))
+    assert r.success and r.data["played"] is True
+    assert session.went == []                       # no new search was run
+    assert session.clicked                          # it clicked the open page
+    assert "Cozy Jazz Mix" in r.speech
+
+
+@pytest.mark.asyncio
+async def test_deictic_play_falls_back_to_search_with_no_page_open():
+    from skills.sites import PlaySkill
+
+    session = _NoPageSession()
+    skill = PlaySkill(opener=lambda u: True, session=session)
+    r = await skill.execute(SkillRequest(text="play the first video",
+                                         match=skill.match("play the first video")))
+    # Nothing to act on and no query to search: it asks rather than guessing.
+    assert r.success is False and "play" in r.speech.lower()
+
+
+@pytest.mark.asyncio
+async def test_play_falls_back_to_the_system_browser_when_its_own_fails(monkeypatch):
+    from skills.browser import BrowserUnavailable
+    from skills.sites import PlaySkill
+
+    opened = []
+    session = _PlaySession(fail=True)
+
+    async def _boom(url):
+        raise BrowserUnavailable("launch failed")
+
+    session.goto = _boom
+    skill = PlaySkill(opener=lambda u: opened.append(u) or True, session=session)
+    phrase = "play relaxing jazz on youtube"
+    r = await skill.execute(SkillRequest(text=phrase, match=skill.match(phrase)))
+    # The user still gets the results — losing browser control must not cost
+    # them the page — and the reply says the truth about what happened.
+    assert opened and "search_query=relaxing+jazz" in opened[0]
+    assert r.data["played"] is False and "couldn't drive" in r.speech
+
+
+@pytest.mark.asyncio
+async def test_filler_only_query_asks_instead_of_opening_the_home_page(skill):
+    # "search up on youtube" -> the query is pure filler. Silently opening
+    # youtube.com (what it used to do) looks like it worked.
+    r = await _run(skill, "search up on youtube")
+    assert r.success is False and "search for" in r.speech.lower()
+    assert skill.opened == []
+
+
+def test_clean_title_strips_emoji_and_branding():
+    from skills.sites import _clean_title
+
+    assert _clean_title("1 A.M Study Session \U0001F4DA [lofi] - YouTube",
+                        "YouTube") == "1 A.M Study Session [lofi]"
+    assert _clean_title("(3) Some Video - YouTube", "YouTube") == "Some Video"
+
+
+def test_resolve_site_by_url():
+    from skills.sites import resolve_site_by_url
+
+    assert resolve_site_by_url("https://www.youtube.com/results?q=x").key == "youtube"
+    # Longest host wins: open.spotify.com must not resolve to something shorter.
+    assert resolve_site_by_url("https://open.spotify.com/search/x").key == "spotify"
+    assert resolve_site_by_url("https://example.com/") is None
+    assert resolve_site_by_url("") is None

@@ -35,7 +35,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, urlparse
 
 from core import mk
 from skills.base import Skill, SkillRequest, SkillResult
@@ -268,6 +268,28 @@ def resolve_site(spoken: str, sites: tuple[Site, ...] = SITES) -> Site | None:
     return None
 
 
+def resolve_site_by_url(url: str, sites: tuple[Site, ...] = SITES) -> Site | None:
+    """Which site is this URL on? Used to act on the page already open.
+
+    "play the first video" names no site — the one that matters is whatever is
+    on screen, so the selector has to come from the current URL.
+    """
+    host = (urlparse(url or "").hostname or "").lower()
+    if not host:
+        return None
+    best = None
+    for site in sites:
+        site_host = (urlparse(site.home).hostname or "").lower()
+        if not site_host:
+            continue
+        bare = site_host[4:] if site_host.startswith("www.") else site_host
+        if host == site_host or host.endswith("." + bare) or host == bare:
+            # Prefer the longest host match: open.spotify.com beats spotify.com.
+            if best is None or len(site_host) > len(urlparse(best.home).hostname or ""):
+                best = site
+    return best
+
+
 def alias_alternation(sites: tuple[Site, ...] = SITES) -> str:
     """Regex alternation over every spoken name, longest first.
 
@@ -335,7 +357,19 @@ def _clean_title(title: str, site_label: str) -> str:
             break
     # A leading unread-count badge ("(3) Some Video") is browser chrome.
     title = re.sub(r"^\(\d+\)\s*", "", title)
-    return title[:110]
+    # Video titles are full of emoji and box-drawing decoration. This one is
+    # about to be read aloud, so drop anything that isn't speakable and
+    # collapse the gap it leaves behind.
+    title = _UNSPEAKABLE.sub(" ", title)
+    return re.sub(r"\s{2,}", " ", title).strip(" -|·—")[:110]
+
+
+#: Characters no TTS should be handed: emoji, symbols, box drawing, arrows.
+_UNSPEAKABLE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002190-\U000021FF\U00002300-\U000027BF"
+    "\U00002B00-\U00002BFF\U0001F1E6-\U0001F1FF\U0000FE00-\U0000FE0F"
+    "\U00002500-\U000025FF]+"
+)
 
 
 def clean_query(query: str) -> str:
@@ -407,11 +441,17 @@ class SiteSearchSkill(Skill):
         spoken = (request.args.get("site") or gd.get("site") or gd.get("site2")
                   or gd.get("site3") or gd.get("site4") or gd.get("sitem")
                   or gd.get("sitem2") or gd.get("sitem3") or "")
-        query = clean_query(
-            request.args.get("query") or gd.get("q") or gd.get("q2")
-            or gd.get("q3") or gd.get("q4") or gd.get("qm") or gd.get("qm2")
-            or gd.get("qm3") or ""
-        )
+        raw_query = (request.args.get("query") or gd.get("q") or gd.get("q2")
+                     or gd.get("q3") or gd.get("q4") or gd.get("qm")
+                     or gd.get("qm2") or gd.get("qm3") or "")
+        query = clean_query(raw_query)
+        # The utterance carried a query but it was pure filler ("search up on
+        # youtube" -> "up" -> ""). That means the match was junk, not that the
+        # user wanted the home page — so ask instead of silently opening it.
+        if raw_query.strip() and not query:
+            return SkillResult(
+                "Што да пребарам таму?" if mk.is_cyrillic(request.text)
+                else "What should I search for there?", success=False)
         # Answer in the language we were asked in — the same bilingual rule the
         # briefing and bench skills follow.
         speak_mk = mk.is_cyrillic(request.text)
@@ -493,6 +533,19 @@ class PlaySkill(Skill):
         self._sites = load_sites(extra_sites)
         alt = alias_alternation(self._sites)
         self.patterns = [
+            # "play the first video" / "play the top result" / "play that" —
+            # deictic: it means the page already on screen, NOT a search for
+            # the words "first video". Listed first so the search patterns
+            # below can't swallow it.
+            re.compile(r"\bplay\s+(?:the\s+|that\s+|this\s+)?"
+                       r"(?:first|top|1st)\s+(?:one|video|result|hit|song|track)\b"
+                       r"|\bplay\s+(?:that|this|it)\s*[.!?]*$",
+                       re.IGNORECASE),
+            # MK: "пушти го првото видео", "пушти го тоа"
+            re.compile(r"\b(?:пушти|свири)\s+(?:го\s+|ја\s+)?"
+                       r"(?:прв(?:ото|иот|ата|о)?|горнот[оа])\s+(?:видео|резултат|песна)\b"
+                       r"|\b(?:пушти|свири)\s+(?:го\s+|ја\s+)?(?:тоа|ова)\s*[.!?]*$",
+                       re.IGNORECASE),
             # "play relaxing jazz on youtube", "play me some lofi on spotify"
             re.compile(rf"\bplay\s+(?P<q>.+?)\s+(?:on|in|from)\s+(?:the\s+)?"
                        rf"(?P<site>{alt})\b", re.IGNORECASE),
@@ -515,6 +568,14 @@ class PlaySkill(Skill):
                   or gd.get("sitem") or "")
         query = clean_query(request.args.get("query") or gd.get("q")
                             or gd.get("qv") or gd.get("qm") or gd.get("qmv") or "")
+        # "play the first video" / "play that": no site, no query — the user
+        # means the page already on screen. Searching for the literal words
+        # "first video" (which is what this used to do) is never what was meant.
+        if not spoken and not query:
+            deictic = await self._play_open_page(speak_mk)
+            if deictic is not None:
+                return deictic
+
         # "play me a video of X" names no site — video means YouTube.
         site = resolve_site(spoken, self._sites) if spoken else \
             resolve_site("youtube", self._sites)
@@ -542,21 +603,56 @@ class PlaySkill(Skill):
 
         try:
             await self._session.goto(url)
+        except Exception as exc:
+            # The controlled browser is unusable (not installed, profile locked,
+            # launch failed). Don't strand the user mid-request: show them the
+            # results in the system browser and say what actually happened.
+            logger.warning("play: controlled browser failed (%s) — system browser",
+                           exc)
+            await open_with(self._opener, url)
+            return SkillResult(
+                f"Не можев да го управувам мојот прелистувач, па ги отворив "
+                f"резултатите за {query} — избери еден." if speak_mk else
+                f"I couldn't drive my own browser, so I've opened {site.label} "
+                f"results for {query} — pick the one you want.",
+                data={"url": url, "played": False})
+        return await self._click_top(site, query, url, speak_mk)
+
+    async def _play_open_page(self, speak_mk: bool) -> SkillResult | None:
+        """Click the top result on whatever page is already open.
+
+        Returns None when there's nothing to act on, so the caller can fall
+        back to treating the utterance as a search.
+        """
+        if self._session is None:
+            return None
+        try:
+            _title, url = await self._session.where()
+        except Exception:
+            return None                       # nothing open yet
+        site = resolve_site_by_url(url, self._sites)
+        if site is None or site.first_result is None:
+            return None
+        return await self._click_top(site, "", url, speak_mk)
+
+    async def _click_top(self, site: Site, query: str, url: str,
+                         speak_mk: bool) -> SkillResult:
+        """Click the site's top result on the page that is already loaded."""
+        try:
             label = await self._session.click_selector(site.first_result)
             # Prefer the page title we landed on. The clicked anchor's text is
             # whatever the thumbnail overlays — on YouTube that's the duration
             # ("3:35:23"), which is a useless thing to say out loud.
-            landed, _url = await self._session.where()
+            landed, _landed = await self._session.where()
             label = _clean_title(landed, site.label) or label
         except Exception as exc:
             logger.warning("play: click failed (%s) — leaving the results up", exc)
             return SkillResult(
-                f"Отворив резултати за {query} на {site.label}, но не успеав да "
-                f"кликнам." if speak_mk else
-                f"I opened {site.label} results for {query} but couldn't click "
-                f"the first one.", data={"url": url, "played": False},
-                success=False)
-        what = label or query
+                f"Ги отворив резултатите на {site.label}, но не успеав да кликнам."
+                if speak_mk else
+                f"I opened {site.label} but couldn't click the first result.",
+                data={"url": url, "played": False}, success=False)
+        what = label or query or site.label
         return SkillResult(
             f"Пуштам {what} на {site.label}." if speak_mk
             else f"Playing {what} on {site.label}.",
