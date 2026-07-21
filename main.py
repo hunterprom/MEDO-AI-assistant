@@ -238,8 +238,17 @@ def build_registry(
     # Editing before finding: "edit notes.md" is a specific action, while
     # FilesSkill's verbs (find/search/open) don't overlap with it. Both are
     # confined to the same whitelist.
-    from skills.file_edit import FileEditSkill, OpenInEditorSkill
+    from skills.file_edit import (
+        FileEditSkill,
+        OpenInEditorSkill,
+        WriteInAppSkill,
+    )
 
+    # "write this in notepad" first: its target is a closed set of configured
+    # apps, so it only claims utterances naming one. Otherwise FileEditSkill
+    # reads "напиши го ова во нотепад" as a write to a FILE called "нотепад",
+    # and TypeTextSkill's bare "type …" swallows the app name into the text.
+    registry.register(WriteInAppSkill(apps_table))
     registry.register(FileEditSkill(whitelist))
     registry.register(OpenInEditorSkill(whitelist, apps_table))
     registry.register(FilesSkill(whitelist))

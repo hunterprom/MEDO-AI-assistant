@@ -10,6 +10,7 @@ modules without a display.
 from __future__ import annotations
 
 import asyncio
+import time
 import re
 from typing import Any
 
@@ -74,6 +75,31 @@ def _pyautogui():
 
     pyautogui.FAILSAFE = False
     return pyautogui
+
+
+def type_into_focused(body: str) -> None:
+    """Type ``body`` into whatever window has focus.
+
+    Extracted from TypeTextSkill so the write-into-an-app skill types exactly
+    the same way — including the clipboard path, because pyautogui silently
+    drops non-ASCII and would type nothing at all for Cyrillic.
+    """
+    gui = _pyautogui()
+    if body.isascii():
+        gui.write(body, interval=0.02)
+        return
+    import pyperclip
+
+    try:
+        previous = pyperclip.paste()
+    except Exception:
+        previous = ""
+    pyperclip.copy(body)
+    from core.platform import IS_MACOS
+
+    gui.hotkey("command" if IS_MACOS else "ctrl", "v")
+    time.sleep(0.15)
+    pyperclip.copy(previous)
 
 
 class TypeTextSkill(Skill):

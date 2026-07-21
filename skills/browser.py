@@ -420,6 +420,19 @@ class BrowserControlSkill(Skill):
     def session(self) -> BrowserSession:
         return self._session
 
+    def match(self, text: str):
+        """Only claim an utterance when there's actually a page to act on.
+
+        These verbs are not the browser's alone: "write the prompt in notepad"
+        matched the type-into-a-field pattern and was answered by the browser
+        skill, on a page that did not exist. A page action with no page open is
+        never the right reading, so the utterance is left for whoever else
+        wants it (the app, file, or typing skills).
+        """
+        if not self._config.enabled or not self._session.is_open:
+            return None
+        return super().match(text)
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         speak_mk = mk.is_cyrillic(request.text)
         if not self._config.enabled:

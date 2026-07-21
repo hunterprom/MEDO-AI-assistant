@@ -313,6 +313,120 @@ class FileEditSkill(Skill):
         }
 
 
+class WriteInAppSkill(Skill):
+    """"write this in notepad" — open an app and type into it.
+
+    The gap this closes: ``edit_file`` needs a file that already exists, and
+    ``type_text`` types into whatever happens to be focused. Neither answers
+    "put this in Notepad", which means *launch it, then type*. The app must be
+    one from the config table, so this can't be talked into launching anything
+    arbitrary.
+    """
+
+    name = "write_in_app"
+    controls_pc = True
+    description = (
+        "Open an application (Notepad, the editor) and type text into it. Use "
+        "when the user wants text written INTO a program rather than a file."
+    )
+
+    #: Seconds to wait for the window before typing. Too short and the first
+    #: characters land on the desktop instead of in the app.
+    LAUNCH_WAIT_S = 1.8
+
+    def __init__(self, apps_table: dict[str, dict[str, str]] | None = None) -> None:
+        self._apps = apps_table or {}
+        names = sorted({*self._apps.keys(), *_APP_ALIASES.keys()},
+                       key=len, reverse=True)
+        alt = "|".join(re.escape(n) for n in names) if names else r"(?!x)x"
+        self._alt = alt
+        self.patterns = [
+            # "write this in notepad" / "type the shopping list into notepad"
+            re.compile(rf"\b(?:write|type|put|jot)\s+(?P<text>.+?)\s+"
+                       rf"(?:in|into|on)\s+(?:the\s+|a\s+)?(?P<app>{alt})\b",
+                       re.IGNORECASE),
+            # MK: "напиши го ова во нотепад"
+            re.compile(rf"\b(?:напиши|искуцај|запиши)\s+(?:го\s+|ја\s+)?"
+                       rf"(?P<text>.+?)\s+во\s+(?P<app>{alt})\b", re.IGNORECASE),
+        ]
+
+    def _resolve(self, app: str) -> str | None:
+        app = app.lower().strip()
+        key = app if app in self._apps else _APP_ALIASES.get(app)
+        return key if key in self._apps else None
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        import asyncio
+
+        gd = request.match.groupdict() if request.match else {}
+        speak_mk = mk.is_cyrillic(request.text)
+        app = (request.args.get("app") or gd.get("app") or "").strip()
+        text = (request.args.get("text") or gd.get("text") or "").strip()
+        key = self._resolve(app)
+        if key is None:
+            return SkillResult(
+                f"Немам конфигурирано {app}." if speak_mk
+                else f"I don't have {app} configured.", success=False)
+        # "write THE PROMPT in notepad" — a reference, not the words to type.
+        if not text or text.lower() in _VAGUE:
+            return SkillResult(
+                f"Што точно да напишам во {key}?" if speak_mk
+                else f"What exactly should I write in {key}?", success=False)
+
+        command = pick_for_os(self._apps[key])
+        if not command:
+            return SkillResult(
+                f"{key} не е поставен за овој систем." if speak_mk
+                else f"{key} isn't set up for this OS.", success=False)
+        run_detached(command)
+        await asyncio.sleep(self.LAUNCH_WAIT_S)   # let the window take focus
+        try:
+            from skills.desktop import type_into_focused
+
+            await asyncio.to_thread(type_into_focused, text)
+        except Exception:
+            logger.exception("typing into %s failed", key)
+            return SkillResult(
+                f"Го отворив {key}, но не успеав да напишам." if speak_mk
+                else f"I opened {key} but couldn't type into it.", success=False)
+        return SkillResult(
+            f"Напишав во {key}." if speak_mk else f"Written in {key}.",
+            data={"app": key, "chars": len(text)})
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "app": {"type": "string", "enum": sorted(self._apps.keys())},
+                        "text": {"type": "string",
+                                 "description": "The exact text to type."},
+                    },
+                    "required": ["app", "text"],
+                },
+            },
+        }
+
+
+#: Spoken app names -> config keys, for the write-into-an-app skill.
+_APP_ALIASES = {
+    "notepad": "notepad", "note pad": "notepad", "нотепад": "notepad",
+    "text editor": "editor", "the editor": "editor", "уредувач": "editor",
+    "vs code": "editor", "vscode": "editor", "code": "editor",
+}
+
+#: Placeholders that mean "the thing we were talking about", not literal text.
+#: Typing the words "the prompt" into Notepad is never what was wanted.
+_VAGUE = {
+    "this", "that", "it", "the prompt", "prompt", "the text", "the same",
+    "ова", "тоа", "истото",
+}
+
+
 class OpenInEditorSkill(Skill):
     """"edit notes.md" — open the file in the configured editor.
 

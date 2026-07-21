@@ -256,3 +256,64 @@ async def test_editor_without_config_says_so(workspace):
     skill = OpenInEditorSkill(PathWhitelist([str(workspace)]), {})
     r = await _say(skill, "edit notes.md")
     assert r.success is False and "editor" in r.speech.lower()
+
+
+# --- writing into an app ------------------------------------------------------
+
+
+APPS = {"notepad": {"windows": "start notepad", "darwin": "open -a TextEdit",
+                    "linux": "gedit"},
+        "editor": {"windows": "code", "darwin": "code", "linux": "code"}}
+
+
+@pytest.fixture
+def writer():
+    from skills.file_edit import WriteInAppSkill
+
+    skill = WriteInAppSkill(APPS)
+    skill.LAUNCH_WAIT_S = 0        # no real window to wait for in tests
+    return skill
+
+
+@pytest.mark.parametrize("phrase", [
+    "write buy milk in notepad",
+    "type the shopping list into notepad",
+    "put the address in notepad",
+    "напиши го ова во нотепад",
+])
+def test_write_in_app_patterns(writer, phrase):
+    assert writer.match(phrase) is not None, phrase
+
+
+@pytest.mark.asyncio
+async def test_launches_the_app_then_types(writer, monkeypatch):
+    launched, typed = [], []
+    monkeypatch.setattr("skills.file_edit.run_detached", lambda c: launched.append(c))
+    monkeypatch.setattr("skills.desktop.type_into_focused", lambda t: typed.append(t))
+    phrase = "write buy milk and eggs in notepad"
+    r = await writer.execute(SkillRequest(text=phrase, match=writer.match(phrase)))
+    assert r.success and launched == ["start notepad"]
+    assert typed == ["buy milk and eggs"]
+
+
+@pytest.mark.asyncio
+async def test_vague_reference_asks_instead_of_typing_the_words(writer, monkeypatch):
+    """"write THE PROMPT in notepad" points at something; it isn't the text."""
+    typed = []
+    monkeypatch.setattr("skills.file_edit.run_detached", lambda c: None)
+    monkeypatch.setattr("skills.desktop.type_into_focused", lambda t: typed.append(t))
+    phrase = "write the prompt in notepad"
+    r = await writer.execute(SkillRequest(text=phrase, match=writer.match(phrase)))
+    assert r.success is False and typed == []
+    assert "what exactly" in r.speech.lower()
+
+
+@pytest.mark.asyncio
+async def test_unknown_app_is_refused(writer):
+    r = await writer.execute(SkillRequest(text="", args={"app": "photoshop",
+                                                         "text": "hi"}))
+    assert r.success is False
+
+
+def test_is_gated_by_the_pc_control_switch(writer):
+    assert writer.controls_pc is True
