@@ -7,7 +7,9 @@ venv/
 .pytest_cache/
 jarvis.db
 # Online API key(s), written by the HUD "connect online model" flow — never commit
-secrets.local.yaml
+# Trailing * so backups (secrets.local.yaml.bak) can't slip past the pattern —
+# they hold the same API keys and auth token as the original.
+secrets.local.yaml*
 # Downloaded STT/TTS/wake-word models (fetched by setup, never committed).
 # models/* (not bare models/) so a re-include below can escape the ignore.
 models/*

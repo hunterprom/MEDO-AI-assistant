@@ -19,8 +19,14 @@ import io
 import re
 from typing import Any
 
+from core import mk
 from core.config import Settings
 from skills.base import Skill, SkillRequest, SkillResult
+
+#: Appended when the question was Macedonian. The instruction itself stays in
+#: English: a 3B vision model comprehends the task far better that way, and it
+#: still honours the output language.
+ANSWER_MK = " Answer in Macedonian."
 
 DESCRIBE_CAMERA_PROMPT = (
     "Describe what you see in one or two short spoken sentences. Plain text."
@@ -79,10 +85,13 @@ def _shrink(image_bytes: bytes, max_side: int = 1280) -> bytes:
         return image_bytes
 
 
-async def _describe(settings: Settings, image_b64: str, prompt: str) -> SkillResult:
+async def _describe(settings: Settings, image_b64: str, prompt: str,
+                    speak_mk: bool = False) -> SkillResult:
     """Send one base64 image to the local Ollama vision model."""
     import httpx
 
+    if speak_mk:
+        prompt += ANSWER_MK
     host = settings.llm.host.rstrip("/")
     model = settings.vision_llm.model
     try:
@@ -99,6 +108,8 @@ async def _describe(settings: Settings, image_b64: str, prompt: str) -> SkillRes
             )
             if resp.status_code == 404:
                 return SkillResult(
+                    f"Моделот за гледање не е инсталиран — пушти: ollama pull {model}."
+                    if speak_mk else
                     f"The vision model isn't installed — run: ollama pull {model}.",
                     success=False,
                 )
@@ -106,10 +117,15 @@ async def _describe(settings: Settings, image_b64: str, prompt: str) -> SkillRes
             answer = (resp.json().get("response") or "").strip()
     except httpx.HTTPError:
         return SkillResult(
+            "Не можам да го стигнам моделот за гледање — дали работи Ollama?"
+            if speak_mk else
             "I can't reach my vision model right now — is Ollama running?",
             success=False,
         )
-    return SkillResult(answer or "I couldn't make anything out.", data={"model": model})
+    return SkillResult(
+        answer or ("Не можев да разберам што има таму." if speak_mk
+                   else "I couldn't make anything out."),
+        data={"model": model})
 
 
 class SeeCameraSkill(Skill):
@@ -121,6 +137,13 @@ class SeeCameraSkill(Skill):
         re.compile(r"\bdescribe\s+(?:what\s+you\s+see|the\s+(?:camera|room|view))\b", re.IGNORECASE),
         re.compile(r"\blook\s+(?:at\s+(?:me|this)|around)\b", re.IGNORECASE),
         re.compile(r"\bcan\s+you\s+see\s+me\b", re.IGNORECASE),
+        # MK. The lookahead matters: this skill is registered BEFORE the screen
+        # one, so a bare "што гледаш" must not swallow "што гледаш на екранот".
+        re.compile(r"\bшто\s+гледаш\b(?!.*екран)", re.IGNORECASE),
+        re.compile(r"\bопиши\s+(?:што\s+гледаш|ја\s+собата|ја\s+камерата)\b(?!.*екран)",
+                   re.IGNORECASE),
+        re.compile(r"\bдали\s+ме\s+гледаш\b|\bме\s+гледаш\s+ли\b", re.IGNORECASE),
+        re.compile(r"\bпогледни\s+(?:ме|наоколу)\b", re.IGNORECASE),
     ]
 
     def __init__(self, settings: Settings) -> None:
@@ -129,6 +152,7 @@ class SeeCameraSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         import httpx
 
+        speak_mk = mk.is_cyrillic(request.text)
         port = self._settings.vision.stream_port
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
@@ -137,11 +161,14 @@ class SeeCameraSkill(Skill):
                 frame = resp.content
         except httpx.HTTPError:
             return SkillResult(
+                "Камерата не работи — пушти го vision сидекарот и пробај пак."
+                if speak_mk else
                 "The camera isn't running — start the vision sidecar and try again.",
                 success=False,
             )
         return await _describe(
-            self._settings, base64.b64encode(frame).decode(), DESCRIBE_CAMERA_PROMPT
+            self._settings, base64.b64encode(frame).decode(),
+            DESCRIBE_CAMERA_PROMPT, speak_mk
         )
 
     def tool_schema(self) -> dict[str, Any]:
@@ -168,14 +195,24 @@ class SeeScreenSkill(Skill):
         re.compile(r"\bcan\s+you\s+see\s+(?:my|the)\s+screen\b", re.IGNORECASE),
         re.compile(r"\blook\s+at\s+(?:my|the)\s+screen\b", re.IGNORECASE),
         re.compile(r"\bwhat\s+am\s+i\s+looking\s+at\b", re.IGNORECASE),
+        # MK: "што гледаш на екранот", "што има на мојот екран". One optional
+        # word before "екран" absorbs the possessive, which Whisper spells
+        # several ways (мојот / твојот / твоот).
+        re.compile(r"\bшто\s+(?:гледаш|има|е|гледате)\s+на\s+(?:\S+\s+)?екран",
+                   re.IGNORECASE),
+        re.compile(r"\b(?:прочитај|опиши|погледни|види)\s+(?:го\s+)?(?:\S+\s+)?екран",
+                   re.IGNORECASE),
+        re.compile(r"\bдали\s+(?:го\s+)?гледаш\s+(?:\S+\s+)?екран", re.IGNORECASE),
     ]
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
     async def execute(self, request: SkillRequest) -> SkillResult:
+        text = request.text.lower()
         wants_read = (
-            request.args.get("mode") == "read" or "read" in request.text.lower()
+            request.args.get("mode") == "read" or "read" in text
+            or "прочитај" in text          # "прочитај го екранот" = read it out
         )
         try:
             import pyautogui
@@ -185,10 +222,13 @@ class SeeScreenSkill(Skill):
             shot.save(buf, format="PNG")
             small = await asyncio.to_thread(_shrink, buf.getvalue())
         except Exception as exc:
-            return SkillResult(f"I couldn't capture the screen: {exc}", success=False)
+            return SkillResult(
+                f"Не успеав да го фатам екранот: {exc}" if mk.is_cyrillic(request.text)
+                else f"I couldn't capture the screen: {exc}", success=False)
         prompt = READ_SCREEN_PROMPT if wants_read else DESCRIBE_SCREEN_PROMPT
         return await _describe(
-            self._settings, base64.b64encode(small).decode(), prompt
+            self._settings, base64.b64encode(small).decode(), prompt,
+            mk.is_cyrillic(request.text)
         )
 
     def tool_schema(self) -> dict[str, Any]:

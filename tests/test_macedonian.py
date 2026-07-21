@@ -20,6 +20,7 @@ from skills.base import SkillRequest
 from skills.datetime_skill import DateTimeSkill
 from skills.files import FilesSkill
 from skills.news import NewsSkill
+from skills.vision_skill import SeeCameraSkill, SeeScreenSkill
 from skills.weather import WeatherSkill
 from skills.web_open import OpenWebsiteSkill
 from skills.websearch import WebSearchSkill
@@ -300,6 +301,44 @@ async def test_macedonian_time_and_date_answer_in_macedonian():
     assert en.speech.startswith("It's")
 
 
+# --- seeing --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("phrase", [
+    "што гледаш на екранот",
+    "што има на мојот екран",
+    "прочитај го екранот",
+    "опиши го екранот",
+    "дали го гледаш екранот",
+    # Exactly what Whisper handed the router when this broke — misspelling and
+    # all ("твоот" for "твојот"), which is why one loose word is allowed before
+    # "екран" instead of an exact possessive.
+    "Какото се свиѓа што гледаш на екранот, што гледаш на твоот екран.",
+])
+def test_macedonian_screen_requests(phrase):
+    assert SeeScreenSkill(load_settings()).match(phrase) is not None, phrase
+
+
+@pytest.mark.parametrize("phrase", [
+    "што гледаш", "што гледаш сега", "дали ме гледаш", "погледни ме",
+])
+def test_macedonian_camera_requests(phrase):
+    assert SeeCameraSkill(load_settings()).match(phrase) is not None, phrase
+
+
+def test_camera_does_not_swallow_screen_requests():
+    """SeeCamera is registered first, so its bare "што гледаш" must yield."""
+    camera = SeeCameraSkill(load_settings())
+    assert camera.match("што гледаш на екранот") is None
+    assert camera.match("прочитај го екранот") is None
+
+
+def test_vision_prompt_asks_for_macedonian_only_when_asked_in_it():
+    from skills.vision_skill import ANSWER_MK
+
+    assert ANSWER_MK.strip().startswith("Answer in")  # instruction stays English
+
+
 # --- routing (the part that actually breaks) ---------------------------------
 
 
@@ -318,6 +357,8 @@ async def test_macedonian_time_and_date_answer_in_macedonian():
     ("најсвежи вести за Скопје", "news"),
     ("какво е времето во Скопје", "weather"),
     ("колку е часот", "datetime"),
+    ("што гледаш на екранот", "see_screen"),
+    ("дали ме гледаш", "see_camera"),
     # …and the English side is untouched.
     ("open chrome", "apps"),
     ("open youtube", "open_website"),
