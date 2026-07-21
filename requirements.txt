@@ -32,6 +32,13 @@ edge-tts>=6.1        # Macedonian neural voice (free MS voices; Cyrillic replies
 pypdf>=4.0           # text extraction for the documents RAG index
 feedparser>=6.0      # news via RSS
 
+# --- browser control (skills/browser.py) ---
+# Drives real Chrome over the DOM so MEDO can click buttons and fill fields.
+# Optional: without it every browser skill degrades to a spoken message and the
+# rest of MEDO is unaffected. Uses the Chrome you already have (channel:
+# "chrome"); only if you have none do you need `playwright install chromium`.
+playwright>=1.44
+
 # --- tooling ---
 pytest>=8.0
 pytest-asyncio>=0.23

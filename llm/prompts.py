@@ -43,8 +43,10 @@ def system_prompt(
         "changing volume) unless a tool call actually did it this turn. To open "
         "any website use the open_website tool. When the user names a site to "
         "search on (YouTube, Gmail, Reddit, Steam, Amazon, GitHub…), use the "
-        "site_search tool, not open_website. If no tool fits, say you can't "
-        "do it — a false 'done' is worse than a no.\n"
+        "site_search tool, not open_website. To act on a page you already "
+        "opened — click a button, fill a field, read it — use browser_control; "
+        "for a multi-step job on a site use browser_task. If no tool fits, say "
+        "you can't do it — a false 'done' is worse than a no.\n"
         "- If you genuinely don't know and no tool helps, say so plainly."
     )
     if facts:

@@ -82,6 +82,13 @@ orders of magnitude below it.
   own results — ~35 sites built in (YouTube, Gmail, Reddit, Steam, GitHub,
   Amazon, Wikipedia, Maps, Thingiverse…), extend the list in `config.yaml →
   skills.sites` without touching code.
+- **Drives the browser, not just opens it**: "click sign in", "type quadruped
+  robot into the search box", "read the page", "what can I click" — MEDO runs
+  real Chrome through Playwright and works on the **DOM**, matching the button
+  you named instead of guessing pixels, so window size, zoom and theme don't
+  matter. A persistent profile means you log into a site once. "On the site,
+  …" hands a bounded multi-step task to the brain (spoken yes first, capped at
+  `browser.max_steps`, `blocked_domains` re-checked after every redirect).
 - **Bilingual commands, not just bilingual chat**: the fast path answers
   Macedonian too — "отвори хром", "затвори спотифај", "отвори јутјуб",
   "барај мачки на јутјуб", "најди ја датотеката извештај" — and replies in the

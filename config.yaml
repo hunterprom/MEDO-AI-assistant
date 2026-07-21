@@ -270,6 +270,20 @@ skills:
   #    home:    "https://www.pazar3.mk"
   #    aliases: ["пазар3", "пазар три"]
 
+browser:                            # skills/browser.py — a browser MEDO can CLICK
+  # Needs `pip install playwright` in the MEDO venv. Off => the browser skills
+  # say so politely and "open youtube" keeps using your system browser.
+  enabled: true
+  channel: "chrome"                 # drive installed Chrome; "" = Playwright's Chromium
+  headless: false                   # watch what it clicks
+  profile_dir: "browser-profile"    # persistent: log in once, stay logged in (git-ignored)
+  max_steps: 8                      # cap on one autonomous "do X on the site" task
+  timeout_s: 20.0
+  route_opens: true                 # "open youtube" lands in the controlled window
+  blocked_domains: []               # hostname substrings MEDO must never drive
+  #  - "bank"
+  #  - "paypal"
+
 weather:                            # M3
   default_city: "Skopje"
   latitude: 41.9973

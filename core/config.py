@@ -260,6 +260,39 @@ class SafetyConfig(BaseModel):
         return [expand_path(d) for d in self.whitelist_dirs]
 
 
+class BrowserConfig(BaseModel):
+    """Controlled browser — skills/browser.py (Playwright driving real Chrome).
+
+    Separate from ``webbrowser.open``: this is a browser MEDO can *read and
+    click*, not just launch. Off until ``pip install playwright`` has been run;
+    every browser skill degrades to a spoken "not installed" message, so a
+    missing dependency can never break startup.
+    """
+
+    enabled: bool = False
+    #: Playwright browser channel. "chrome"/"msedge" drive the copy already
+    #: installed on the machine (no 150 MB Chromium download, and it looks like
+    #: the browser the user knows); "" falls back to Playwright's own Chromium.
+    channel: str = "chrome"
+    #: Headless hides the window. Default off on purpose — when MEDO clicks
+    #: things on your behalf you should be able to watch it happen.
+    headless: bool = False
+    #: Persistent profile dir (relative to the project root). Persistent so you
+    #: log into a site once and MEDO is still logged in tomorrow. It holds live
+    #: session cookies, so it is git-ignored like any other secret.
+    profile_dir: str = "browser-profile"
+    #: Cap on autonomous actions in one "do X on the site" task.
+    max_steps: int = 8
+    timeout_s: float = 20.0
+    #: Hosts MEDO must never drive. Substring match on the hostname, so
+    #: "bank" covers "mybank.com". Checked on navigation AND before each action.
+    blocked_domains: list[str] = Field(default_factory=list)
+    #: When on, "open youtube" / "search X on youtube" land in this controlled
+    #: browser instead of the system default — one window, and MEDO can then
+    #: act on what it just opened.
+    route_opens: bool = True
+
+
 class WeatherConfig(BaseModel):
     default_city: str = "Skopje"
     latitude: float = 41.9973
@@ -350,6 +383,7 @@ class Settings(BaseSettings):
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
+    browser: BrowserConfig = Field(default_factory=BrowserConfig)
     hud: HudConfig = Field(default_factory=HudConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)

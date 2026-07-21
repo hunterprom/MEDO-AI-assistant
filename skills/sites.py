@@ -30,6 +30,7 @@ gates it, like every other skill that reaches out and touches the machine.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -279,6 +280,21 @@ def build_url(site: Site, query: str) -> str:
     return template.replace("{q}", escaped)
 
 
+async def open_with(opener, url: str):
+    """Call an opener that may be sync or async, and return what it returned.
+
+    Two kinds live behind this: ``webbrowser.open`` (blocking, so it goes to a
+    thread) and the controlled browser's navigate coroutine (already async).
+    Awaiting a coroutine function inside ``to_thread`` would silently do
+    nothing and hand back a truthy coroutine object — i.e. MEDO would claim it
+    opened a page it never touched.
+    """
+    if inspect.iscoroutinefunction(opener):
+        return await opener(url)
+    result = await asyncio.to_thread(opener, url)
+    return await result if inspect.isawaitable(result) else result
+
+
 #: Trailing politeness that would otherwise become part of the search query.
 _TRAILING = re.compile(
     r"\s*(?:please|for me|te molam|те молам|ве молам|молам|ајде)\s*$", re.IGNORECASE
@@ -362,7 +378,7 @@ class SiteSearchSkill(Skill):
             speech = (f"Отворам {site.label}." if speak_mk
                       else f"Opening {site.label}.")
 
-        ok = await asyncio.to_thread(self._opener, url)
+        ok = await open_with(self._opener, url)
         if ok is False:  # webbrowser.open returns False when no browser exists
             return SkillResult(
                 "Не најдов прелистувач да отворам." if speak_mk

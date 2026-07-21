@@ -121,6 +121,7 @@ def build_registry(
     doc_index=None,
     briefing_rewrite=None,
     modes=None,
+    browser_think=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -130,6 +131,8 @@ def build_registry(
     fast-path web-search summary; None => it returns raw results.
     ``briefing_rewrite`` is the LLM pass that turns briefing sections into one
     flowing spoken paragraph; None => the briefing speaks its raw sections.
+    ``browser_think`` is the LLM pass that picks the next action in a
+    multi-step web task; None => that skill declines instead of guessing.
     """
     registry = SkillRegistry()
     apps_table = settings.skills.get("apps", {})
@@ -174,12 +177,36 @@ def build_registry(
     from skills.web_open import OpenWebsiteSkill
     from skills.sites import SiteSearchSkill
 
+    # The controlled browser (Playwright). One session shared by the two
+    # browser skills AND used as the opener for the two open/search skills, so
+    # "search X on youtube" then "click the first video" act on one window.
+    # Off => opener stays webbrowser.open and today's behaviour is unchanged.
+    browser_session = None
+    site_opener = None
+    if settings.browser.enabled:
+        from skills.browser import BrowserSession, browser_opener
+
+        browser_session = BrowserSession(settings.browser)
+        if settings.browser.route_opens:
+            site_opener = browser_opener(browser_session)
+
     # Site-scoped search BEFORE the plain opener: "search cats on youtube" is
     # strictly more specific than "open youtube", and its patterns all demand
     # both a search verb and a known site, so a bare "open youtube" still falls
     # through to OpenWebsiteSkill below.
-    registry.register(SiteSearchSkill(extra_sites=settings.skills.get("sites")))
-    registry.register(OpenWebsiteSkill())
+    registry.register(SiteSearchSkill(opener=site_opener,
+                                      extra_sites=settings.skills.get("sites")))
+    registry.register(OpenWebsiteSkill(opener=site_opener))
+    # Page interaction. Before TypeTextSkill/PressKeysSkill so "type medo into
+    # the search box" reaches the page rather than the focused window, while a
+    # bare "type hello" (no field) still falls through to TypeTextSkill.
+    # Control before agent: "what's on the page" is a read, not a task.
+    if browser_session is not None:
+        from skills.browser import BrowserAgentSkill, BrowserControlSkill
+
+        registry.register(BrowserControlSkill(settings.browser, browser_session))
+        registry.register(BrowserAgentSkill(settings.browser, browser_session,
+                                            think=browser_think))
     registry.register(SeeCameraSkill(settings))
     registry.register(SeeScreenSkill(settings))
     # M11 deictic pointing: "what is this?" crops around the mouse cursor.
@@ -397,6 +424,21 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return "I found results, but my summarizer is offline."
         return (message.get("content") or "").strip() or "I couldn't summarize that."
 
+    async def browser_think(prompt: str) -> str:
+        """One LLM pass: page elements + task -> the next browser action (JSON).
+
+        Text-only, so the main brain drives it — the vision model never sees a
+        web page. Temperature stays at the provider default; the prompt already
+        pins the output shape and a wrong guess costs a click.
+        """
+        if not router.model:
+            return ""
+        try:
+            message = await llm.chat(router.model, [{"role": "user", "content": prompt}])
+        except LLMUnavailableError:
+            return ""
+        return (message.get("content") or "").strip()
+
     async def briefing_rewrite(macedonian: bool, raw_sections: str) -> str:
         """One LLM pass: briefing sections -> a flowing spoken paragraph (M8).
 
@@ -452,7 +494,8 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     modes = SessionModes(continuous=settings.conversation.continuous)
 
     registry = build_registry(settings, announcer, summarize, reminders, doc_index,
-                              briefing_rewrite=briefing_rewrite, modes=modes)
+                              briefing_rewrite=briefing_rewrite, modes=modes,
+                              browser_think=browser_think)
 
     # MCP: connect configured servers and register their tools as skills, so
     # any application that speaks the Model Context Protocol becomes callable
@@ -592,6 +635,11 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
         if hud_server is not None:
             await hud_server.stop()
         await mcp_manager.stop()
+        # Close the controlled browser if one was ever launched, so Chrome
+        # doesn't outlive MEDO holding a lock on the profile directory.
+        browser_skill = registry.get("browser_control")
+        if browser_skill is not None:
+            await browser_skill.session.close()
 
 
 def main() -> None:

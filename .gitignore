@@ -27,3 +27,6 @@ docs/.obsidian/cache
 watch/build/
 watch/.dart_tool/
 watch/android/.gradle/
+# Controlled-browser profile (skills/browser.py): live session cookies for
+# every site you log MEDO into — as sensitive as secrets.local.yaml.
+browser-profile/

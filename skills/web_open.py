@@ -16,14 +16,13 @@ switch gates it.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import Any
 from urllib.parse import quote_plus
 
 from core import mk
 from skills.base import Skill, SkillRequest, SkillResult
-from skills.sites import SITES, alias_alternation, resolve_site
+from skills.sites import SITES, alias_alternation, open_with, resolve_site
 
 #: something.tld[/path...] — enough to tell a site from a search phrase.
 _DOMAIN_RE = re.compile(r"^(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?$", re.IGNORECASE)
@@ -152,7 +151,7 @@ class OpenWebsiteSkill(Skill):
             url = shortcut_url(target) or to_url(target)
             shown = re.sub(r"^https?://", "", url).split("/?q=")[0]
 
-        ok = await asyncio.to_thread(self._opener, url)
+        ok = await open_with(self._opener, url)
         if ok is False:  # webbrowser.open returns False when no browser exists
             return SkillResult(
                 "Не најдов прелистувач да отворам." if speak_mk
