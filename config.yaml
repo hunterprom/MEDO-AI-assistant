@@ -30,6 +30,11 @@ llm:
   # stripped in llm/client.py. Falls back to the first installed model if absent.
   default_model: "qwen3:30b"
   fallback_model: "llama3.2:3b"
+  # Auto tool-brain: the CLI brains (claude-code/codex) can't use MEDO's tools,
+  # so a query needing live/online info is answered by this local Ollama model
+  # for that ONE turn (it has web_search etc.), then MEDO reverts to your
+  # selected brain. "" disables. Must be pulled in Ollama.
+  tool_brain_model: "qwen3:30b"
   temperature: 0.6
   num_ctx: 4096                    # 8192 OOMs a 12 GB GPU with the 30B — keep 4096
   keep_alive: "30m"                # keep the model loaded between turns (no reload stalls)

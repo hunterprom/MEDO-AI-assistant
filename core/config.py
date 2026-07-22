@@ -67,6 +67,11 @@ class LLMConfig(BaseModel):
     cli_timeout_s: float = 180.0
     default_model: str | None = None
     fallback_model: str = "llama3.2:3b"
+    # Auto tool-brain: the CLI agents (claude-code/codex) can't use MEDO's tools,
+    # so a query that needs live/online info (search, "latest…", "who won…") is
+    # run on this local Ollama model for that ONE turn — it has web_search and
+    # the other tools — then MEDO reverts to your selected brain. "" disables.
+    tool_brain_model: str = "qwen3:30b"
     temperature: float = 0.6
     num_ctx: int = 4096
     request_timeout_s: float = 120.0

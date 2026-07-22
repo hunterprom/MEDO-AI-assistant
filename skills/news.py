@@ -25,12 +25,19 @@ class NewsSkill(Skill):
         re.compile(r"\b(?:the\s+)?news\b", re.IGNORECASE),
         re.compile(r"\bheadlines?\b", re.IGNORECASE),
         re.compile(r"\bwhat(?:'?s| is)\s+happening\b", re.IGNORECASE),
+        # Natural ways people ask for general/world headlines (no topic named —
+        # a named topic is a web search, which WebSearchSkill owns).
+        re.compile(r"\b(?:world|worldwide|global|international)\s+news\b", re.IGNORECASE),
+        re.compile(r"\btell\s+me\s+about\s+(?:the\s+)?(?:world|worldwide|current\s+events?)\b", re.IGNORECASE),
+        re.compile(r"\bwhat(?:'?s| is)\s+going\s+on\s+in\s+the\s+world\b", re.IGNORECASE),
+        re.compile(r"\bcurrent\s+events\b", re.IGNORECASE),
         # MK: "вести", "најсвежи вести за Скопје", "наслови", "што има ново".
         # Deliberately NOT "што е ново за X" — naming a topic is a web search,
         # and WebSearchSkill owns that one.
         re.compile(r"\bвест(?:и|ите|ите)\b|\bновост(?:и|ите)\b", re.IGNORECASE),
         re.compile(r"\bнаслови(?:те)?\b", re.IGNORECASE),
         re.compile(r"\bшто\s+има\s+ново\b|\bшто\s+се\s+случува\b", re.IGNORECASE),
+        re.compile(r"\bшто\s+се\s+случува\s+во\s+светот\b|\bсветски\s+вести\b", re.IGNORECASE),
     ]
 
     def __init__(self, config: NewsConfig, max_items: int = 5) -> None:

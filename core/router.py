@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,9 +23,21 @@ from core.facts import FactsStore
 from core.memory import ConversationMemory
 from core.metrics import MetricsStore
 from core.safety import is_affirmative, is_negative
-from llm.client import LLMUnavailableError, OllamaClient
+from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
 from llm.tools import build_tools, dispatch_tool
+
+#: A query "needs live info" (search the web, current events) when it trips one
+#: of these. Used only to decide whether to borrow the tool-brain — a false
+#: positive just means a slightly slower answer, never a wrong one.
+_LIVE_INFO_RE = re.compile(
+    r"\b(latest|news|headlines?|today|tonight|right\s+now|currently|current|"
+    r"recent(?:ly)?|happening|search|look\s+up|google|online|internet|"
+    r"who\s+(?:is|are|won|winning)|when\s+(?:is|does|did)|score|prices?|stocks?|"
+    r"weather|forecast|release[ds]?|this\s+(?:week|month|year)|"
+    r"вест\w*|новост\w*|најнов\w*|што\s+се\s+случува|пребар\w*|на\s+интернет)\b",
+    re.IGNORECASE,
+)
 from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: How many tool rounds before we force a final text answer (loop guard).
@@ -90,6 +103,9 @@ class Router:
         self._registry = registry
         self._llm = llm
         self._bus = bus
+        #: Lazily-built local Ollama client used to answer live-info queries when
+        #: the selected brain is a CLI agent that can't use MEDO's tools.
+        self._tool_brain: OllamaClient | None = None
         #: Active model for the LLM path; set by the app / model picker.
         self.model: str | None = settings.llm.default_model
         #: Routing tallies (this session) + persisted per-request metrics that
@@ -242,6 +258,40 @@ class Router:
         logger.info("ambiguous confirmation %r; cancelling pending action", text)
         return await self._route_inner(text, context)
 
+    def _tool_brain_client(self) -> OllamaClient | None:
+        """A local Ollama client for the configured tool-brain model, or None.
+
+        Built lazily and reused. Same client class as the primary brain, but
+        pinned to provider=ollama so it gets MEDO's tool schemas (incl.
+        web_search) that the CLI agents never receive.
+        """
+        name = self._settings.llm.tool_brain_model
+        if not name:
+            return None
+        if self._tool_brain is None:
+            cfg = self._settings.llm.model_copy()
+            cfg.provider = "ollama"
+            cfg.default_model = name
+            self._tool_brain = type(self._llm)(cfg)
+        return self._tool_brain
+
+    def _pick_brain(self, text: str) -> tuple[OllamaClient, str | None, bool]:
+        """Choose (client, model, borrowed) for this turn.
+
+        Borrow the local tool-brain only when the selected brain is a CLI agent
+        (which can't use MEDO's tools) AND the query looks like it needs live
+        info. Otherwise use the selected brain unchanged — so normal chat still
+        goes to the model you picked, and MEDO 'returns' to it automatically.
+        """
+        if (self._settings.llm.provider in CLI_PROVIDERS
+                and _LIVE_INFO_RE.search(text)):
+            tb = self._tool_brain_client()
+            if tb is not None and tb.is_available():
+                logger.info("auto tool-brain: %r needs live info -> %s",
+                            text, self._settings.llm.tool_brain_model)
+                return tb, self._settings.llm.tool_brain_model, True
+        return self._llm, self.model, False
+
     @property
     def _offline_reply(self) -> str:
         """The provider-appropriate 'can't reach the model' message."""
@@ -257,7 +307,11 @@ class Router:
     async def _llm_reply(
         self, text: str, context: dict[str, Any], on_delta: Any = None
     ) -> RouteResult:
-        if not self.model:
+        # Selected brain for normal chat; auto-borrow the local tool-brain when
+        # a CLI agent hits a live-info query (then we're back on the selected
+        # brain next turn — nothing is mutated).
+        llm, model, borrowed = self._pick_brain(text)
+        if not model:
             return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
         tools = build_tools(self._registry)
@@ -302,14 +356,14 @@ class Router:
         stream_kw = {"on_delta": on_delta} if on_delta is not None else {}
         try:
             for _ in range(MAX_TOOL_ROUNDS):
-                message = await self._llm.chat(self.model, messages, tools=tools, **stream_kw)
+                message = await llm.chat(model, messages, tools=tools, **stream_kw)
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
                     reply = (message.get("content") or "").strip()
                     if reply and _looks_like_tool_json(reply):
                         # Small model leaked a botched tool call as text; a plain
                         # retry (no tools) gets a clean spoken answer.
-                        retry = await self._llm.chat(self.model, messages)
+                        retry = await llm.chat(model, messages)
                         reply = (retry.get("content") or "").strip()
                     return RouteResult(path=RoutePath.LLM, speech=reply or EMPTY_REPLY)
 
@@ -319,7 +373,7 @@ class Router:
                     return pending  # a destructive tool needs confirmation first
 
             # Ran out of rounds: ask once more for a plain answer.
-            message = await self._llm.chat(self.model, messages)
+            message = await llm.chat(model, messages)
             return RouteResult(
                 path=RoutePath.LLM,
                 speech=(message.get("content") or "").strip() or EMPTY_REPLY,
