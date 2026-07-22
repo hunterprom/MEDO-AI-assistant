@@ -1,7 +1,0 @@
-02:00:05 INFO vision | pointer-only build | camera stream → http://127.0.0.1:8731/video | pointer toggle → POST http://127.0.0.1:8731/pointer | companion API http://127.0.0.1:8710
-02:00:05 INFO vision | controls: index tip = cursor, thumb+index pinch = left click, three fingers = right click, fist = exit pointer (boots OFF)
-INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-W0000 00:00:1784678406.988390   29048 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1784678407.029855    3040 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-02:00:11 INFO vision | gesture engine running on camera 0 (pointer available)

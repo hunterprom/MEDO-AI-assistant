@@ -34,3 +34,5 @@ watch/android/.gradle/
 browser-profile/
 medo.log
 medo.err.log
+vision.log
+vision.err.log
