@@ -18,6 +18,9 @@ models/*
 models/wakeword/*
 !models/wakeword/README.md
 *.onnx
+# ...but DO keep the trained "hey MEDO" wake model in the repo (it's small,
+# ~1-2 MB, and you want it versioned so it ships with the app).
+!models/wakeword/hey_medo.onnx
 *.onnx.json
 .DS_Store
 screenshots/
