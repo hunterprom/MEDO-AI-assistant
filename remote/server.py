@@ -209,6 +209,9 @@ class RemoteServer:
         app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_post("/control/pc", self._handle_pc_control)
         app.router.add_post("/control/modes", self._handle_modes)
+        app.router.add_post("/control/lion", self._handle_lion)
+        app.router.add_get("/council", self._handle_council)
+        app.router.add_post("/council", self._handle_council_toggle)
         # MEDO Link (M9): manifest-driven device layer. Token-authed like
         # everything else — LAN devices must present the bearer token.
         app.router.add_post("/link/register", self._handle_link_register)
@@ -402,6 +405,8 @@ class RemoteServer:
                 # Session modes (continuous conversation, interpreter).
                 "continuous": self._modes.continuous,
                 "interpreter": self._modes.interpreter,
+                # MEDO Lion Mode: no confirmations, PC switch ignored.
+                "lion_mode": self._settings.safety.lion_mode,
                 # Which local CLI agents exist on this machine (for the HUD).
                 "cli_available": await asyncio.to_thread(self._cli_availability),
             }
@@ -715,6 +720,67 @@ class RemoteServer:
         logger.info("PC control switched %s via companion API",
                     "ON" if enabled else "OFF")
         return web.json_response({"ok": True, "on": enabled})
+
+    async def _handle_lion(self, request: web.Request) -> web.Response:
+        """MEDO LION MODE from the HUD.
+
+        Runtime-only on purpose — it is never written to the secrets file, so
+        it cannot survive a restart. A switch that removes every confirmation
+        is one you should have to turn on deliberately, each session.
+        """
+        try:
+            enabled = bool((await request.json()).get("on"))
+        except (ValueError, TypeError):
+            return _error(400, "body must be JSON like {\"on\": true}")
+        self._settings.safety.lion_mode = enabled
+        logger.warning("LION MODE %s via companion API — confirmations %s",
+                       "ON" if enabled else "OFF",
+                       "DISABLED" if enabled else "restored")
+        return web.json_response({"ok": True, "on": enabled})
+
+    async def _handle_council(self, request: web.Request) -> web.Response:
+        """The specialist roster and which of them are switched on."""
+        from core.council import load_council
+
+        disabled = {d.lower() for d in self._settings.council.disabled}
+        members = [
+            {"key": s.key, "title": s.title, "on": s.key not in disabled,
+             "wants_tools": s.wants_tools}
+            for s in load_council(self._settings.council.extra)
+        ]
+        return web.json_response({
+            "ok": True, "enabled": self._settings.council.enabled,
+            "max_members": self._settings.council.max_members,
+            "members": members,
+        })
+
+    async def _handle_council_toggle(self, request: web.Request) -> web.Response:
+        """Switch one specialist on/off, or the whole council.
+
+        Body: ``{"agent": "law", "on": false}`` or ``{"enabled": false}``.
+        Runtime-only, like the session modes — the skills read
+        ``settings.council`` live, so the next question sees the change.
+        """
+        try:
+            payload = await request.json()
+        except (ValueError, TypeError):
+            return _error(400, "body must be JSON")
+        if "enabled" in payload:
+            self._settings.council.enabled = bool(payload["enabled"])
+        agent = str(payload.get("agent") or "").strip().lower()
+        if agent:
+            from core.council import find_specialist, load_council
+
+            council = load_council(self._settings.council.extra)
+            if find_specialist(agent, council) is None:
+                return _error(404, f"no specialist named {agent!r}")
+            disabled = [d.lower() for d in self._settings.council.disabled]
+            if bool(payload.get("on", True)):
+                disabled = [d for d in disabled if d != agent]
+            elif agent not in disabled:
+                disabled.append(agent)
+            self._settings.council.disabled = disabled
+        return await self._handle_council(request)
 
     async def _handle_modes(self, request: web.Request) -> web.Response:
         """Flip a session mode from the HUD: continuous conversation / interpreter.

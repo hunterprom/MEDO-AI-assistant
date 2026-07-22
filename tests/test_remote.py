@@ -39,6 +39,16 @@ async def client() -> AsyncIterator[TestClient]:
 
 
 @pytest_asyncio.fixture
+async def server_client() -> AsyncIterator[tuple[TestClient, RemoteServer]]:
+    """Client plus the server object, so tests can assert on settings too."""
+    server = _make_server()
+    test_client = TestClient(TestServer(server.build_app()))
+    await test_client.start_server()
+    yield test_client, server
+    await test_client.close()
+
+
+@pytest_asyncio.fixture
 async def lan_client() -> AsyncIterator[TestClient]:
     """A client the server treats as a LAN peer (localhost exemption off)."""
     server = _make_server()
@@ -249,3 +259,64 @@ def test_ensure_remote_token_mints_once_and_persists(tmp_path):
     # And the normal startup overlay picks it up too.
     overlaid = apply_local_secrets(load_settings(), secrets_file)
     assert overlaid.remote.token == token
+
+
+# --- HUD controls for the council and Lion Mode -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_council_endpoint_lists_the_roster(server_client):
+    client, server = server_client
+    data = await (await client.get("/council")).json()
+    assert data["ok"] and data["enabled"] is True
+    keys = {m["key"] for m in data["members"]}
+    assert {"electrical", "robotics", "law", "finance"} <= keys
+    assert all(m["on"] for m in data["members"]), "all on by default"
+
+
+@pytest.mark.asyncio
+async def test_switching_one_specialist_off_and_back_on(server_client):
+    client, server = server_client
+    data = await (await client.post("/council",
+                                    json={"agent": "law", "on": False})).json()
+    law = next(m for m in data["members"] if m["key"] == "law")
+    assert law["on"] is False
+    assert "law" in [d.lower() for d in server._settings.council.disabled]
+
+    data = await (await client.post("/council",
+                                    json={"agent": "law", "on": True})).json()
+    assert next(m for m in data["members"] if m["key"] == "law")["on"] is True
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_specialist_is_rejected(server_client):
+    client, _ = server_client
+    resp = await client.post("/council", json={"agent": "astrologer", "on": False})
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_the_whole_council_can_be_switched_off(server_client):
+    client, server = server_client
+    data = await (await client.post("/council", json={"enabled": False})).json()
+    assert data["enabled"] is False
+    assert server._settings.council.enabled is False
+
+
+@pytest.mark.asyncio
+async def test_lion_mode_toggles_and_is_reported_in_status(server_client):
+    client, server = server_client
+    assert (await (await client.get("/status")).json())["lion_mode"] is False
+
+    data = await (await client.post("/control/lion", json={"on": True})).json()
+    assert data["on"] is True and server._settings.safety.lion_mode is True
+    assert (await (await client.get("/status")).json())["lion_mode"] is True
+
+    await client.post("/control/lion", json={"on": False})
+    assert server._settings.safety.lion_mode is False
+
+
+@pytest.mark.asyncio
+async def test_lion_mode_rejects_a_malformed_body(server_client):
+    client, _ = server_client
+    assert (await client.post("/control/lion", data="not json")).status == 400

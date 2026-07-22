@@ -47,9 +47,15 @@ class _CouncilBase(Skill):
 
     def __init__(self, settings: Settings, ask=None) -> None:
         self._settings = settings
-        cfg = settings.council
-        self._council = enabled_council(load_council(cfg.extra), cfg.disabled)
         self._ask = ask          # async (system: str, user: str) -> str
+        # The full roster is fixed at startup (it comes from config.extra), but
+        # WHICH members are on is read per call — the HUD toggles
+        # council.disabled at runtime and the next question must see it.
+        self._roster = load_council(settings.council.extra)
+
+    @property
+    def _council(self) -> tuple[Specialist, ...]:
+        return enabled_council(self._roster, self._settings.council.disabled)
 
     async def _consult(self, member: Specialist, question: str,
                        speak_mk: bool) -> tuple[Specialist, str]:

@@ -219,6 +219,21 @@
   .toggle.on { background: rgba(56,168,255,.2); border-color: rgba(56,168,255,.55); }
   .toggle.on .knob { left: 33px; background: #7fd0ff; }
   .toggle:disabled { opacity: .55; cursor: default; }
+  /* Specialist council: one chip per major, tap to switch that one off. */
+  .council-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .agent { font-family: 'Share Tech Mono', monospace; font-size: 10px; letter-spacing: .08em;
+           text-transform: uppercase; padding: 4px 9px; cursor: pointer;
+           border: 1px solid rgba(56,168,255,.18); background: rgba(8,18,34,.5);
+           color: #3d5a7d; transition: all .15s ease; }
+  .agent.on { border-color: rgba(56,168,255,.55); background: rgba(56,168,255,.14); color: #9fd8ff; }
+  .agent:hover { border-color: rgba(56,168,255,.75); }
+  /* Lion mode is the one switch that removes every other guard, so when it is
+     live the row says so loudly rather than sitting quietly like the rest. */
+  #lion-row.armed { border-color: rgba(255,138,76,.65); background: rgba(48,20,8,.55); }
+  #lion-row.armed .name { color: #ffb27f; }
+  #lion-row.armed .desc { color: #d98a5c; }
+  #cfg-lion.on { background: rgba(255,138,76,.22); border-color: rgba(255,138,76,.7); }
+  #cfg-lion.on .knob { background: #ff9d5c; box-shadow: 0 0 10px rgba(255,138,76,.85); }
   select.cfg {
     background: rgba(4,10,20,.6); border: 1px solid rgba(56,168,255,.25); color: #c9e6ff;
     font-family: 'Share Tech Mono', monospace; font-size: 12px; padding: 9px 12px; outline: none;
@@ -544,6 +559,18 @@
       <div class="setting">
         <div class="info"><span class="name">Interpreter mode</span><span class="desc">LIVE EN↔MK TRANSLATION — MEDO SPEAKS EACH LINE BACK IN THE OTHER LANGUAGE</span></div>
         <button class="toggle" id="cfg-interpreter"><span class="knob"></span></button>
+      </div>
+      <div class="setting" id="lion-row">
+        <div class="info"><span class="name">MEDO Lion mode</span><span class="desc" id="lion-desc">NO CONFIRMATIONS · IGNORES THE PC SWITCH · WHITELIST &amp; BLOCKED SITES STILL APPLY · RESETS ON RESTART</span></div>
+        <button class="toggle" id="cfg-lion"><span class="knob"></span></button>
+      </div>
+      <div class="setting" style="align-items:flex-start">
+        <div class="info" style="flex:1">
+          <span class="name">Specialist council</span>
+          <span class="desc">MEDO ASKS THE RELEVANT MAJORS AND SYNTHESIZES — TAP A NAME TO SWITCH IT OFF</span>
+          <div id="council-list" class="council-list"></div>
+        </div>
+        <button class="toggle on" id="cfg-council"><span class="knob"></span></button>
       </div>
       <div class="setting">
         <div class="info"><span class="name">Camera feed</span><span class="desc">SHOW THE OPTICAL FEED PANEL ON CORE</span></div>
@@ -1042,6 +1069,75 @@
   }
   $('cfg-continuous').onclick = () => toggleMode('continuous', 'cfg-continuous');
   $('cfg-interpreter').onclick = () => toggleMode('interpreter', 'cfg-interpreter');
+
+  /* ---- MEDO LION MODE: no confirmations, PC switch ignored ---- */
+  let lionOn = false;
+  function setLionUI(on) {
+    lionOn = !!on;
+    $('cfg-lion').classList.toggle('on', lionOn);
+    $('lion-row').classList.toggle('armed', lionOn);
+  }
+  $('cfg-lion').onclick = async () => {
+    // Confirm on the way IN only. Turning it off is always allowed instantly —
+    // you should never have to argue with a UI to restore a safety gate.
+    if (!lionOn && !confirm(
+      'LION MODE\n\nMEDO will stop asking before destructive actions and will '
+      + 'ignore the PC CONTROL switch.\n\nThe file whitelist and blocked sites '
+      + 'still apply. It resets when MEDO restarts.\n\nArm it?')) return;
+    try {
+      const r = await (await fetch(`${API}/control/lion`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on: !lionOn }),
+      })).json();
+      setLionUI(r.on);
+      log(`LION MODE ${r.on ? 'ARMED — CONFIRMATIONS OFF' : 'OFF'}`);
+    } catch { log('LION MODE — API offline'); }
+  };
+
+  /* ---- specialist council: one chip per major ---- */
+  function renderCouncil(d) {
+    $('cfg-council').classList.toggle('on', !!d.enabled);
+    const box = $('council-list');
+    box.innerHTML = '';
+    (d.members || []).forEach(m => {
+      const chip = document.createElement('button');
+      chip.className = 'agent' + (m.on ? ' on' : '');
+      chip.textContent = m.title.replace(/^the /, '');
+      chip.title = m.wants_tools
+        ? `${m.key} — works better with a tool-capable brain`
+        : m.key;
+      chip.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          const r = await (await fetch(`${API}/council`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agent: m.key, on: !m.on }),
+          })).json();
+          renderCouncil(r);
+          log(`${m.key.toUpperCase()} ${m.on ? 'OFF' : 'ON'}`);
+        } catch { log('COUNCIL — API offline'); }
+      };
+      box.appendChild(chip);
+    });
+  }
+  $('cfg-council').onclick = async () => {
+    const on = !$('cfg-council').classList.contains('on');
+    try {
+      const r = await (await fetch(`${API}/council`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: on }),
+      })).json();
+      renderCouncil(r);
+      log(`COUNCIL ${r.enabled ? 'ON' : 'OFF'}`);
+    } catch { log('COUNCIL — API offline'); }
+  };
+  (async () => {
+    try { renderCouncil(await (await fetch(`${API}/council`)).json()); } catch { }
+    try {
+      const d = await (await fetch(`${API}/status`)).json();
+      if ('lion_mode' in d) setLionUI(d.lion_mode);
+    } catch { }
+  })();
   (async () => {
     try {
       const d = await (await fetch(`${API}/status`)).json();
