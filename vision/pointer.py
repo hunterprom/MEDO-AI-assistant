@@ -18,6 +18,12 @@ ZOOM = "zoom"
 RIGHT_CLICK = "right_click"
 VOLUME_UP = "volume_up"
 VOLUME_DOWN = "volume_down"
+# Window/tab navigation. These reach the parts of the desktop the cursor is
+# worst at: a taskbar icon is a 40 px target, and tab strips are worse. As
+# key chords they need no aiming at all.
+NEXT_TAB = "next_tab"
+SWITCH_WINDOW = "switch_window"
+TASKBAR = "taskbar"
 IDLE = "idle"
 
 #: pose name -> action when the thumb/index are NOT pinched.
@@ -28,11 +34,41 @@ _POSE_ACTION = {
     "three": RIGHT_CLICK,
     "thumbs_up": VOLUME_UP,
     "pinky_up": VOLUME_DOWN,
+    # New strict poses (vision/gestures.py). Both are hard to make by accident
+    # — an L needs a real right angle, FOUR needs a tucked thumb with all four
+    # fingers straight — which is what makes them safe for actions that move
+    # you between windows rather than within one.
+    "l_shape": NEXT_TAB,
+    "four": TASKBAR,
+    # open_palm is deliberately NOT mapped: it is what a hand passes through
+    # while opening, so binding it to a window switch would fire it by
+    # accident. Assign it in config if you want it.
     "fist": IDLE,
 }
 
 
-def pointer_action(gesture: str, is_pinch: bool) -> str:
+#: Actions a pose may be bound to in config (``vision.pointer.pose_actions``).
+ACTIONS = frozenset({MOVE, DRAG, SCROLL, ZOOM, RIGHT_CLICK, VOLUME_UP,
+                     VOLUME_DOWN, NEXT_TAB, SWITCH_WINDOW, TASKBAR, IDLE})
+
+
+def build_pose_actions(overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """The pose->action map with the user's bindings applied.
+
+    An unknown action name is dropped rather than accepted: a typo in YAML
+    should cost you that one binding, not put the engine into a state where a
+    gesture dispatches to nothing.
+    """
+    table = dict(_POSE_ACTION)
+    for pose, action in (overrides or {}).items():
+        name = str(action).strip().lower()
+        if name in ACTIONS:
+            table[str(pose).strip().lower()] = name
+    return table
+
+
+def pointer_action(gesture: str, is_pinch: bool,
+                   table: dict[str, str] | None = None) -> str:
     """Map a recognized pose to a pointer-mode action.
 
     A pinch (thumb tip on index tip) always means :data:`DRAG` — pressing/holding
@@ -44,7 +80,7 @@ def pointer_action(gesture: str, is_pinch: bool) -> str:
     """
     if is_pinch:
         return DRAG
-    return _POSE_ACTION.get(gesture, MOVE)
+    return (table or _POSE_ACTION).get(gesture, MOVE)
 
 
 class ScrollAccumulator:

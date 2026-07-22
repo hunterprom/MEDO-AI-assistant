@@ -56,6 +56,9 @@ from vision.pointer import (
     MOVE,
     RIGHT_CLICK,
     SCROLL,
+    NEXT_TAB,
+    SWITCH_WINDOW,
+    TASKBAR,
     VOLUME_DOWN,
     VOLUME_UP,
     ZOOM,
@@ -179,6 +182,10 @@ class GestureEngine:
         ema = Ema(getattr(pcfg, "ema_alpha", 0.4)) if pointer_ready else None
         click_gate = ClickDebouncer(getattr(pcfg, "click_debounce_ms", 600))
         three_hold = PoseHold(getattr(pcfg, "hold_frames", 3))
+        # Navigation poses get their own hold + debounce: they move you between
+        # windows, so they must be held deliberately and can't machine-gun.
+        nav_hold = PoseHold(getattr(pcfg, "nav_hold_frames", 5))
+        nav_gate = ClickDebouncer(getattr(pcfg, "nav_debounce_ms", 900))
         # Exiting pointer mode takes a deliberate, HELD fist (~1.2 s at 15 fps):
         # pointing at the camera often momentarily classifies as a fist, and a
         # short confirm was kicking users out of pointer mode mid-move.
@@ -193,6 +200,7 @@ class GestureEngine:
         # Continuous-motion actions (scroll/zoom) and repeatable ones (volume).
         scroll_acc = ScrollAccumulator(float(getattr(pcfg, "scroll_gain", 45.0)))
         zoom_acc = ScrollAccumulator(float(getattr(pcfg, "zoom_gain", 25.0)))
+        pose_actions = build_pose_actions(getattr(pcfg, "pose_actions", None))
         vol_interval = int(getattr(pcfg, "volume_interval_ms", 180))
         vol_up_gate = ClickDebouncer(vol_interval)
         vol_dn_gate = ClickDebouncer(vol_interval)
@@ -275,7 +283,8 @@ class GestureEngine:
                         sx, sy = ema.update(px, py)
                         # A pinch always means drag/click; otherwise the pose picks
                         # the action (move / scroll / zoom / right-click / volume).
-                        action = pointer_action(gesture, index_thumb_pinch(landmarks))
+                        action = pointer_action(gesture, index_thumb_pinch(landmarks),
+                                                pose_actions)
                         second = hands[1] if len(hands) == 2 else None
                         if second is not None and action != DRAG:
                             # Pair mode: the primary hand only moves the cursor;
@@ -320,7 +329,23 @@ class GestureEngine:
                                 elif action == VOLUME_DOWN:
                                     if vol_dn_gate.ready(now):
                                         mouse.volume_down()
-                                        last_fired, last_utterance = "open_palm", "volume down"
+                                        last_fired, last_utterance = "pinky_up", "volume down"
+                                # Window/tab navigation. Held like the
+                                # right-click pose and debounced on the same
+                                # gate: these jump you between windows, so a
+                                # single misread frame must not fire one.
+                                elif action == NEXT_TAB:  # noqa: SIM114 - distinct actions
+                                    if nav_hold.update(True) and nav_gate.ready(now):
+                                        mouse.next_tab()
+                                        last_fired, last_utterance = "l_shape", "next tab"
+                                elif action == SWITCH_WINDOW:
+                                    if nav_hold.update(True) and nav_gate.ready(now):
+                                        mouse.switch_window()
+                                        last_fired, last_utterance = "switch", "switch window"
+                                elif action == TASKBAR:
+                                    if nav_hold.update(True) and nav_gate.ready(now):
+                                        mouse.taskbar()
+                                        last_fired, last_utterance = "four", "taskbar"
                                 # action == IDLE: hold the cursor still.
                             # Two-hand gestures: spread = zoom, second thumbs-up
                             # = play/pause (held briefly, debounced).

@@ -118,7 +118,21 @@ vision:                             # camera hand-gesture control (sidecar proce
     zoom_min_spread_deg: 50.0       # rock/zoom pose: min angle between index and pinky.
                                     # zoom fires by accident? RAISE it (e.g. 65). can't
                                     # get zoom to start? LOWER it (e.g. 35)
-    l_shape_tolerance_deg: 25.0     # L pose (thumb + index): how far off a 90 deg corner
+    l_shape_tolerance_deg: 25.0
+    # --- window / tab navigation ------------------------------------------------
+    # The cursor is worst at small targets: a taskbar icon is ~40 px and a browser
+    # tab strip is worse. These poses send key chords instead, so no aiming:
+    #   L shape (thumb + index at 90 deg) -> next tab      (Ctrl+Tab)
+    #   four fingers, thumb tucked        -> focus taskbar (Win+T, then arrows/Enter)
+    # Held longer and debounced harder than a click, because they jump you between
+    # windows and a single misread frame must never fire one.
+    nav_hold_frames: 5
+    nav_debounce_ms: 900
+    # Rebind any pose. Actions: move, drag, scroll, zoom, right_click, volume_up,
+    # volume_down, next_tab, switch_window, taskbar, idle. open_palm is unbound on
+    # purpose (a hand passes through it while opening) — bind it if you want it.
+    pose_actions: {}
+    #  open_palm: "switch_window"     # L pose (thumb + index): how far off a 90 deg corner
                                     # is still an L. raise = easier to hit but bleeds into
                                     # plain pointing; lower = stricter right angle
   bench:                            # M10: 2nd workbench camera (skills/bench.py)

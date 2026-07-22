@@ -78,3 +78,25 @@ def _media_key(key: str) -> None:
         pyautogui.press(key, _pause=False)
     except Exception:  # key name unsupported on this platform — non-fatal
         logger.debug("media key %r unavailable", key, exc_info=True)
+
+def next_tab() -> None:
+    pyautogui.hotkey("ctrl", "tab")
+
+
+def prev_tab() -> None:
+    pyautogui.hotkey("ctrl", "shift", "tab")
+
+
+def switch_window() -> None:
+    pyautogui.hotkey("alt", "tab")
+
+
+def taskbar() -> None:
+    """No portable "focus the taskbar" chord on Linux desktops; the super key
+    opens the activities/app overview on GNOME and KDE, which is the closest
+    equivalent and at least reachable."""
+    pyautogui.press("super")
+
+
+def show_desktop() -> None:
+    pyautogui.hotkey("super", "d")

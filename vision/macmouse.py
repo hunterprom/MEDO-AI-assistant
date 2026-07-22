@@ -194,3 +194,35 @@ def play_pause() -> None:
         '  tell application "Music" to playpause\n'
         "end if"
     )
+
+def _key_script(keystroke: str) -> None:
+    """Send a keystroke through osascript (same route as the media keys)."""
+    import subprocess
+
+    subprocess.run(["osascript", "-e",
+                    f'tell application "System Events" to {keystroke}'],
+                   check=False)
+
+
+def next_tab() -> None:
+    """Ctrl+Tab — next tab. Same chord as Windows in every mac browser."""
+    _key_script('key code 48 using control down')
+
+
+def prev_tab() -> None:
+    _key_script('key code 48 using {control down, shift down}')
+
+
+def switch_window() -> None:
+    """Cmd+Tab — the mac app switcher (Alt+Tab's counterpart)."""
+    _key_script('key code 48 using command down')
+
+
+def taskbar() -> None:
+    """Ctrl+F3 — move focus to the Dock, the mac's taskbar equivalent."""
+    _key_script('key code 99 using control down')
+
+
+def show_desktop() -> None:
+    """F11 — show the desktop."""
+    _key_script('key code 103')

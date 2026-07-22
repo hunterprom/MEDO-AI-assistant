@@ -18,6 +18,12 @@ _KEYUP = 0x0002                # KEYEVENTF_KEYUP
 _VK_CONTROL = 0x11
 _VK_VOLUME_DOWN, _VK_VOLUME_UP = 0xAE, 0xAF
 _VK_MEDIA_PLAY_PAUSE = 0xB3
+_VK_TAB = 0x09
+_VK_SHIFT = 0x10
+_VK_MENU = 0x12          # ALT
+_VK_LWIN = 0x5B
+_VK_T = 0x54
+_VK_D = 0x44
 
 
 def _user32():
@@ -79,6 +85,46 @@ def _tap(vk: int) -> None:
     u = _user32()
     u.keybd_event(vk, 0, 0, 0)
     u.keybd_event(vk, 0, _KEYUP, 0)
+
+
+def _chord(*vks: int) -> None:
+    """Press a key chord in order, release in reverse (so modifiers wrap)."""
+    u = _user32()
+    for vk in vks:
+        u.keybd_event(vk, 0, 0, 0)
+    for vk in reversed(vks):
+        u.keybd_event(vk, 0, _KEYUP, 0)
+
+
+def next_tab() -> None:
+    """Ctrl+Tab — next tab in a browser, editor, or terminal."""
+    _chord(_VK_CONTROL, _VK_TAB)
+
+
+def prev_tab() -> None:
+    """Ctrl+Shift+Tab — previous tab."""
+    _chord(_VK_CONTROL, _VK_SHIFT, _VK_TAB)
+
+
+def switch_window() -> None:
+    """Alt+Tab — next window. A tap switches to the last one you used."""
+    _chord(_VK_MENU, _VK_TAB)
+
+
+def taskbar() -> None:
+    """Win+T — move focus onto the taskbar.
+
+    The point of this one for pointer mode: once focus is on the taskbar you
+    can walk it with the arrow keys and open with Enter, so the taskbar
+    becomes reachable by gesture without having to land the cursor on a 40 px
+    icon.
+    """
+    _chord(_VK_LWIN, _VK_T)
+
+
+def show_desktop() -> None:
+    """Win+D — minimise everything (and restore on a second tap)."""
+    _chord(_VK_LWIN, _VK_D)
 
 
 def volume_up() -> None:

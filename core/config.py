@@ -152,7 +152,16 @@ class PointerConfig(BaseModel):
     extended_min_deg: float = 160.0     # PIP angle at/above this = finger extended
     curled_max_deg: float = 100.0       # PIP angle at/below this = finger curled
     zoom_min_spread_deg: float = 50.0   # min index<->pinky splay for the rock/zoom pose
-    l_shape_tolerance_deg: float = 25.0  # how far off 90 deg an L (thumb+index) may be
+    l_shape_tolerance_deg: float = 25.0
+    # Window/tab navigation poses (L = next tab, four = taskbar). Held longer
+    # and debounced harder than a click: these jump you between windows, so a
+    # single misread frame must never fire one.
+    nav_hold_frames: int = 5
+    nav_debounce_ms: int = 900
+    #: pose -> action overrides, e.g. {"open_palm": "switch_window"}. Actions:
+    #: move, drag, scroll, zoom, right_click, volume_up, volume_down,
+    #: next_tab, switch_window, taskbar, idle.
+    pose_actions: dict[str, str] = Field(default_factory=dict)  # how far off 90 deg an L (thumb+index) may be
 
 
 class BenchConfig(BaseModel):

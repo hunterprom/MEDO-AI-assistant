@@ -71,6 +71,9 @@ class PointerRunConfig:
     curled_max_deg: float = 100.0
     zoom_min_spread_deg: float = 50.0
     l_shape_tolerance_deg: float = 25.0
+    nav_hold_frames: int = 5
+    nav_debounce_ms: int = 900
+    pose_actions: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -128,6 +131,9 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
             curled_max_deg=float(p.get("curled_max_deg", 100.0)),
             zoom_min_spread_deg=float(p.get("zoom_min_spread_deg", 50.0)),
             l_shape_tolerance_deg=float(p.get("l_shape_tolerance_deg", 25.0)),
+            nav_hold_frames=int(p.get("nav_hold_frames", 5)),
+            nav_debounce_ms=int(p.get("nav_debounce_ms", 900)),
+            pose_actions=dict(p.get("pose_actions", {}) or {}),
         ),
     )
     host = r.get("host", "127.0.0.1")

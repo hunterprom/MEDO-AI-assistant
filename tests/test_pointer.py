@@ -141,3 +141,62 @@ def test_macmouse_drags_with_dragged_events(monkeypatch):
         macmouse._MOVED, macmouse._LDOWN, macmouse._LDRAG,
         macmouse._LUP, macmouse._MOVED,
     ]
+
+
+# --- window / tab navigation poses -------------------------------------------
+#
+# The cursor is worst at exactly the targets these replace: taskbar icons and
+# tab strips. Bound to the two strict poses that are hard to make by accident.
+
+
+def test_new_poses_drive_window_navigation():
+    from vision.pointer import NEXT_TAB, TASKBAR, pointer_action
+
+    assert pointer_action("l_shape", False) == NEXT_TAB
+    assert pointer_action("four", False) == TASKBAR
+
+
+def test_open_palm_stays_unbound_by_default():
+    """It is what a hand passes through while opening — binding it would fire
+    a window switch every time you relax your hand."""
+    from vision.pointer import MOVE, pointer_action
+
+    assert pointer_action("open_palm", False) == MOVE
+
+
+def test_a_pinch_still_wins_over_a_navigation_pose():
+    from vision.pointer import DRAG, pointer_action
+
+    assert pointer_action("l_shape", True) == DRAG
+
+
+def test_build_pose_actions_applies_overrides():
+    from vision.pointer import SWITCH_WINDOW, build_pose_actions, pointer_action
+
+    table = build_pose_actions({"open_palm": "switch_window"})
+    assert pointer_action("open_palm", False, table) == SWITCH_WINDOW
+    # The defaults survive alongside the override.
+    assert pointer_action("victory", False, table) == "scroll"
+
+
+def test_build_pose_actions_drops_a_typo_instead_of_binding_it():
+    from vision.pointer import MOVE, build_pose_actions, pointer_action
+
+    table = build_pose_actions({"four": "taskbarr", "victory": ""})
+    assert "taskbarr" not in table.values()
+    # The bad binding is dropped, so the pose keeps its default meaning.
+    assert pointer_action("four", False, table) == "taskbar"
+    assert pointer_action("nothing_like_this", False, table) == MOVE
+
+
+def test_every_backend_exposes_the_navigation_surface():
+    """vision/mouse.py is a star-import facade: a backend missing one of these
+    only fails at the moment a user makes the gesture."""
+    import re
+    from pathlib import Path
+
+    required = {"next_tab", "prev_tab", "switch_window", "taskbar", "show_desktop"}
+    for name in ("winmouse", "macmouse", "anymouse"):
+        source = Path(f"vision/{name}.py").read_text(encoding="utf-8")
+        defined = set(re.findall(r"^def (\w+)", source, re.MULTILINE))
+        assert required <= defined, f"{name} is missing {sorted(required - defined)}"
