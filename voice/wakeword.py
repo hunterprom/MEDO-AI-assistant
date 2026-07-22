@@ -36,13 +36,32 @@ def display_phrase(phrase: str) -> str:
     return stem.replace("_", " ").strip()
 
 
+#: The bundled model MEDO ships listening for until a custom "hey MEDO" model
+#: is trained (voice/train_wakeword.py). Also the graceful fallback when a
+#: configured custom model file is missing, so voice never dies over a bad path.
+FALLBACK_PHRASE = "hey_jarvis"
+
+
+def _bundled_match(name: str) -> str | None:
+    """First bundled openWakeWord ``.onnx`` whose filename starts with ``name``."""
+    import openwakeword
+
+    models_dir = os.path.join(
+        os.path.dirname(openwakeword.__file__), "resources", "models"
+    )
+    matches = sorted(glob.glob(os.path.join(models_dir, f"{name}*.onnx")))
+    return matches[0] if matches else None
+
+
 def _resolve_model_path(phrase: str) -> str:
     """Map ``wakeword.phrase`` to a model file.
 
-    A ``.onnx``/``.tflite`` value is treated as a custom model path — absolute,
-    ``~``-expanded, or relative to the project root (e.g.
-    ``models/wakeword/hey_medo.onnx``). Anything else is looked up among the
-    bundled openWakeWord models, falling back to the raw value.
+    A ``.onnx``/``.tflite`` value is a custom model path — absolute, ``~``, or
+    relative to the project root (e.g. ``models/wakeword/hey_medo.onnx``). When
+    that file is missing (e.g. "hey MEDO" isn't trained yet) MEDO does NOT die:
+    it falls back to the bundled ``hey_jarvis`` so voice keeps working, and the
+    day the trained file appears it is used automatically. A plain name is
+    looked up among the bundled models.
     """
     if phrase.endswith((".onnx", ".tflite")):
         candidate = Path(os.path.expanduser(phrase))
@@ -50,15 +69,12 @@ def _resolve_model_path(phrase: str) -> str:
             candidate = PROJECT_ROOT / candidate
         if candidate.exists():
             return str(candidate)
-        logger.warning("custom wake model %s not found — trying bundled models", phrase)
+        logger.warning(
+            "custom wake model %s not found — falling back to %r "
+            "(train it with voice/train_wakeword.py)", phrase, FALLBACK_PHRASE)
+        return _bundled_match(FALLBACK_PHRASE) or FALLBACK_PHRASE
 
-    import openwakeword
-
-    models_dir = os.path.join(
-        os.path.dirname(openwakeword.__file__), "resources", "models"
-    )
-    matches = sorted(glob.glob(os.path.join(models_dir, f"{phrase}*.onnx")))
-    return matches[0] if matches else phrase
+    return _bundled_match(phrase) or phrase
 
 
 class WakeWord:

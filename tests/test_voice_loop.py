@@ -64,3 +64,17 @@ def test_custom_wake_model_path_resolves(tmp_path):
     tflite = tmp_path / "hey_medo.tflite"
     tflite.write_bytes(b"fake")
     assert _resolve_model_path(str(tflite)) == str(tflite)
+
+
+def test_missing_custom_model_falls_back_to_bundled(tmp_path, monkeypatch):
+    """A configured hey_medo.onnx that isn't trained yet must NOT crash voice
+    ('Could not find pretrained model ...') — it falls back to bundled
+    hey_jarvis so MEDO keeps listening until the model is trained."""
+    import voice.wakeword as ww
+
+    monkeypatch.setattr(
+        ww, "_bundled_match",
+        lambda name: f"/bundled/{name}_v0.1.onnx" if name == "hey_jarvis" else None,
+    )
+    resolved = ww._resolve_model_path(str(tmp_path / "hey_medo.onnx"))  # missing
+    assert resolved == "/bundled/hey_jarvis_v0.1.onnx"
