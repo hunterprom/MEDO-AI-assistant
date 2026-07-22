@@ -6,9 +6,16 @@ from core.config import PersonalityConfig
 from llm.prompts import system_prompt
 
 
-def test_bilingual_rule_present():
+def test_language_rule_is_multilingual_and_names_none():
+    """MEDO speaks sixteen languages now, so the prompt must not name two.
+
+    Naming them is what produced "I understand Japanese, but I usually speak
+    English or Macedonian" as a reply to こんにちは — the model volunteering a
+    preference it should not have.
+    """
     p = system_prompt(PersonalityConfig())
-    assert "Macedonian" in p and "English" in p
+    assert "multilingual" in p and "bilingual" not in p
+    assert "answer in the language the user" in p.lower()
     assert "spoken aloud" in p
 
 

@@ -280,8 +280,12 @@ class VoiceLoop:
         wav = None
         sr = 0
         spoken_lang = language or self._turn_language
-        if spoken_lang is None and contains_cyrillic(text):
-            spoken_lang = "mk"          # no detection to go on; trust the script
+        if spoken_lang is None:
+            # Nothing detected this turn (typed input, an announcement, a
+            # skill's own words). Fall back to the script of what we are about
+            # to say: speaking Japanese text with the English voice makes it
+            # read the characters out one by one.
+            spoken_lang = languages.detect_script(text)
         use_edge = self._edge is not None and languages.get(spoken_lang) is not None             and spoken_lang != "en"     # English stays on the local Piper voice
         if use_edge:
             try:
@@ -481,7 +485,13 @@ class VoiceLoop:
         t0 = time.perf_counter()
         # Quiet mics (webcam/onboard) record speech peaking at a few percent;
         # normalizing before STT noticeably improves Whisper on those clips.
-        text = await asyncio.to_thread(self._stt.transcribe, normalize_peak(audio))
+        # transcribe_with_language, not transcribe: the detected language is
+        # what picks the reply voice and tells the brain which language to
+        # answer in. Taking the text alone here is what made MEDO read a
+        # Japanese reply aloud in the English voice, one character at a time.
+        text, lang = await asyncio.to_thread(
+            self._stt.transcribe_with_language, normalize_peak(audio))
+        self._turn_language = lang
         stt_ms = (time.perf_counter() - t0) * 1000
         if not text.strip():
             console.print("[dim](couldn't make that out)[/dim]")

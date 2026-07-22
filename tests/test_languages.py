@@ -170,3 +170,52 @@ def test_every_tagged_label_has_a_key_in_the_table():
     tagged |= set(re.findall(r'data-i18n-ph="(\w+)"', html))
     known = set(_i18n_table()["en"])
     assert tagged <= known, f"tagged but untranslated: {sorted(tagged - known)}"
+
+
+# --- script fallback -----------------------------------------------------------
+#
+# The bug this closes: a Japanese reply reached the English Piper voice, which
+# read it out as "japanese letter, japanese letter, chinese letter…". The turn
+# language was only ever set in interpreter mode, so every normal turn had
+# nothing to route on.
+
+
+@pytest.mark.parametrize("text,code", [
+    ("こんにちは", "ja"),
+    ("日本語も分かります", "ja"),          # kanji WITH kana is Japanese, not Chinese
+    ("안녕하세요", "ko"),
+    ("你好世界", "zh"),
+    ("नमस्ते", "hi"),
+    ("Γειά σου", "el"),
+    ("Здраво", "mk"),
+])
+def test_detect_script_reads_the_writing_system(text, code):
+    assert languages.detect_script(text) == code
+
+
+@pytest.mark.parametrize("text", ["Hello there", "Bonjour", "", "12345", "!!!"])
+def test_latin_and_empty_defer_to_the_caller(text):
+    """Latin is shared by a dozen languages here — guessing beats nothing only
+    when the guess can be right, and it can't be."""
+    assert languages.detect_script(text) is None
+
+
+def test_the_normal_turn_detects_language_not_just_the_interpreter():
+    """_run_turn used plain transcribe(), so nothing ever set the turn language."""
+    source = Path("voice/loop.py").read_text(encoding="utf-8")
+    run_turn = source[source.index("async def _run_turn"):]
+    run_turn = run_turn[:run_turn.index("async def ", 10)] if "async def " in run_turn[10:] else run_turn
+    assert "transcribe_with_language" in run_turn
+    assert "_turn_language" in run_turn
+
+
+def test_the_system_prompt_no_longer_claims_to_be_bilingual():
+    from core.config import PersonalityConfig
+    from llm.prompts import system_prompt
+
+    prompt = system_prompt(PersonalityConfig())
+    assert "multilingual" in prompt
+    assert "bilingual" not in prompt
+    # It must not volunteer which languages it prefers — that is what produced
+    # "I usually speak English or Macedonian" in reply to Japanese.
+    assert "answer in the language the user" in prompt.lower()
