@@ -5,7 +5,14 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+.coverage
+# The assistant database — runtime state (your facts, notes, reminders, routing
+# metrics). *.db catches it whatever it's called: the jarvis->medo rename left
+# only the OLD name ignored, so medo.db silently became tracked and every run
+# produced a diff carrying personal data.
+*.db
 jarvis.db
+medo.db
 # Online API key(s), written by the HUD "connect online model" flow — never commit
 # Trailing * so backups (secrets.local.yaml.bak) can't slip past the pattern —
 # they hold the same API keys and auth token as the original.
