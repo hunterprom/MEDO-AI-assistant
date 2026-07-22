@@ -80,9 +80,13 @@ class TimerSkill(Skill):
     patterns = [
         re.compile(r"\bcancel\s+(?:all\s+)?(?:timers?|reminders?|alarms?)\b", re.IGNORECASE),
         re.compile(r"\b(?:list|show)\s+(?:my\s+)?(?:timers?|reminders?|alarms?)\b", re.IGNORECASE),
-        re.compile(r"\b(?:set|start)\s+(?:a\s+)?(?:timer|alarm)\b.*", re.IGNORECASE),
+        re.compile(r"\b(?:set|start)\s+(?:a\s+)?(?:timer|alarm|countdown)\b.*", re.IGNORECASE),
         re.compile(r"\bremind\s+me\b.*", re.IGNORECASE),
         re.compile(r"\btimer\s+for\b.*", re.IGNORECASE),
+        # Everyday alarm/timer phrasings (duration is parsed from the whole text).
+        re.compile(r"\bwake\s+me\s+(?:up\s+)?in\b.*", re.IGNORECASE),
+        re.compile(r"\b(?:ping|buzz|alert|nudge)\s+me\s+in\b.*", re.IGNORECASE),
+        re.compile(r"\b(?:let\s+me\s+know|tell\s+me)\s+in\s+\d.*", re.IGNORECASE),
     ]
 
     def __init__(self, announce: Announce, store: ReminderStore | None = None) -> None:

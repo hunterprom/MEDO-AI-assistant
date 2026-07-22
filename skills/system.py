@@ -145,6 +145,10 @@ class VolumeSkill(Skill):
         re.compile(r"\b(?:turn\s+(?:it\s+)?(?P<updown>up|down)|volume\s+(?P<ud2>up|down))\b", re.IGNORECASE),
         re.compile(r"\b(?P<louder>louder|quieter)\b", re.IGNORECASE),
         re.compile(r"\b(?P<mute>mute|unmute)\b", re.IGNORECASE),
+        # Everyday volume phrasings.
+        re.compile(r"\btoo\s+(?:loud|quiet|low|soft)\b", re.IGNORECASE),
+        re.compile(r"\b(?:can'?t|cannot)\s+hear\b|\bspeak\s+up\b", re.IGNORECASE),
+        re.compile(r"\b(?:max|maximum|full)\s+volume\b|\bvolume\s+all\s+the\s+way\b", re.IGNORECASE),
         re.compile(r"\bwhat(?:'?s| is)?\s+the\s+volume\b", re.IGNORECASE),
     ]
 
@@ -184,8 +188,17 @@ class VolumeSkill(Skill):
         m = request.match
         if m and m.groupdict().get("level"):
             return SkillResult(self._set_absolute(int(m.group("level"))))
+        if any(p in text for p in ("max volume", "maximum volume", "full volume",
+                                   "all the way up")):
+            return SkillResult(self._set_absolute(100))
         if "mute" in text:
             return SkillResult(self._set_muted("unmute" not in text))
+        # "too loud" => quieter; "too quiet/low/soft", "can't hear", "speak up" => louder.
+        if "too loud" in text or "all the way down" in text:
+            return SkillResult(self._step(False))
+        if any(p in text for p in ("too quiet", "too low", "too soft",
+                                   "can't hear", "cant hear", "cannot hear", "speak up")):
+            return SkillResult(self._step(True))
         if any(w in text for w in ("up", "louder")):
             return SkillResult(self._step(True))
         if any(w in text for w in ("down", "quieter")):

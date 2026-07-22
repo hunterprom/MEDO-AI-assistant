@@ -54,6 +54,13 @@ class WeatherSkill(Skill):
         re.compile(rf"\bforecast\b(?:\s+(?:in|for)\s+(?P<city2>{_CITY}))?", re.IGNORECASE),
         re.compile(r"\b(?:how\s+(?:hot|cold)|temperature)\b", re.IGNORECASE),
         re.compile(r"\b(?:will\s+it|is\s+it\s+going\s+to)\s+rain\b", re.IGNORECASE),
+        # Everyday phrasings that mean "give me the weather".
+        re.compile(r"\bdo\s+i\s+need\s+(?:a|an|my)\s+(?:jacket|coat|umbrella|"
+                   r"raincoat|sweater)\b", re.IGNORECASE),
+        re.compile(r"\bwhat(?:'?s| is)\s+it\s+like\s+outside\b", re.IGNORECASE),
+        re.compile(r"\bhow(?:'?s| is)\s+(?:the\s+weather|it\s+outside)\b", re.IGNORECASE),
+        re.compile(r"\bis\s+it\s+(?:hot|cold|sunny|raining|snowing|windy)\s+"
+                   r"(?:out|outside|today)\b", re.IGNORECASE),
         # MK. "време" alone is skipped on purpose — it means both "weather" and
         # "time", so only the unambiguous phrasings are claimed here.
         re.compile(rf"\bкакво\s+е\s+времето\b(?:\s+(?:во|за)\s+(?P<city3>{_CITY}))?",

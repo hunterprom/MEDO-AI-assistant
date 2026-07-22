@@ -52,6 +52,8 @@ class MediaSkill(Skill):
         # and the noun is the common spoken form and used to match nothing.
         re.compile(r"\b(?:play|pause|resume|stop)\s+(?:the|some|my|a)?\s*"
                    r"(?:music|song|track|playback)\b", re.IGNORECASE),
+        # "put on / turn on some music", bare "play/pause the music".
+        re.compile(r"\b(?:put|turn)\s+on\s+(?:some\s+|my\s+|the\s+)?music\b", re.IGNORECASE),
         re.compile(r"\b(?:next|skip(?:\s+(?:this|the))?)\s+(?:track|song)\b", re.IGNORECASE),
         re.compile(r"\b(?:previous|last)\s+(?:track|song)\b", re.IGNORECASE),
         # MK: "пушти музика", "паузирај ја песната", "следна песна"
@@ -74,8 +76,9 @@ class MediaSkill(Skill):
         if re.search(r"\b(?:previous|last|back|претходна)\b", text):
             return "previous"
         if re.search(r"\b(?:play|pause|resume|stop|пушти|пуштиј|паузирај|"
-                     r"запри|стопирај|продолжи)\b", text):
-            return "playpause"   # play / pause / resume / stop all toggle
+                     r"запри|стопирај|продолжи)\b", text) or \
+           re.search(r"\b(?:put|turn)\s+on\b.*\bmusic\b", text):
+            return "playpause"   # play / pause / resume / stop / put on all toggle
         return None
 
     def _run(self, action: str) -> str:
