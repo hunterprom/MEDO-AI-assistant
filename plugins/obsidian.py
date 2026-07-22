@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 from datetime import datetime
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
 
 
 def find_vault() -> Path | None:
@@ -137,19 +140,39 @@ class ObsidianSearchSkill(Skill):
 
 class ObsidianOpenSkill(Skill):
     name = "obsidian_open"
+    controls_pc = True
     description = "Open the Obsidian app (the user's note vault)."
 
     patterns = [re.compile(r"\b(?:open|start|launch)\s+obsidian\b", re.IGNORECASE)]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
+        """Launch the installed app; fall back to the obsidian:// URI.
+
+        This used to go straight to the URI on the grounds that it works
+        wherever the exe lives — but only if something registered the protocol,
+        and a Store-less install may not. When it isn't registered Windows pops
+        "Get an app to open this 'obsidian' link" while ``Popen`` returns
+        happily, so MEDO announced success over a visible error dialog. The
+        real executable is discoverable, so prefer it and keep the URI for the
+        case where the app is installed somewhere discovery can't see.
+        """
+        from core.platform import open_path
+        from skills.appfinder import find_app
+
+        app = await asyncio.to_thread(find_app, "obsidian")
+        if app is not None:
+            try:
+                await asyncio.to_thread(open_path, app.path)
+                return SkillResult("Opening Obsidian.", data={"path": str(app.path)})
+            except Exception:
+                logger.warning("could not launch %s", app.path, exc_info=True)
+
         import subprocess
 
-        try:  # the obsidian:// protocol works no matter where the exe lives
-            # noqa: ASYNC220 - Popen returns immediately; we never wait on it,
-            # so this does not block the loop the way subprocess.run would.
-            subprocess.Popen(  # noqa: ASYNC220
+        try:
+            subprocess.Popen(  # noqa: ASYNC220 - returns at once; never awaited
                 ["cmd", "/c", "start", "", "obsidian://open"], shell=False)
-            return SkillResult("Opening Obsidian.")
+            return SkillResult("Opening Obsidian.", data={"via": "uri"})
         except Exception:
             return SkillResult("I couldn't open Obsidian — is it installed?", success=False)
 

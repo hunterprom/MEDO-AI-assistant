@@ -63,3 +63,62 @@ def test_broken_plugin_is_skipped_not_fatal(tmp_path):
 
 def test_missing_dir_is_fine(tmp_path):
     assert load_plugins(SkillRegistry(), {}, plugins_dir=tmp_path / "nope") == []
+
+
+# --- the Obsidian launcher ----------------------------------------------------
+#
+# It used to go straight to obsidian://, which needs a registered protocol
+# handler. On a machine without one, Windows shows "Get an app to open this
+# 'obsidian' link" while Popen returns successfully — so MEDO announced
+# "Opening Obsidian" over a visible error dialog.
+
+
+def _obsidian_open():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("obsidian_plugin",
+                                                  "plugins/obsidian.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module, module.ObsidianOpenSkill()
+
+
+@pytest.mark.asyncio
+async def test_obsidian_launches_the_installed_app_not_the_uri(monkeypatch):
+    from pathlib import Path
+
+    from skills.appfinder import FoundApp
+    from skills.base import SkillRequest
+
+    module, skill = _obsidian_open()
+    opened, spawned = [], []
+    monkeypatch.setattr("skills.appfinder.find_app",
+                        lambda name, apps=None: FoundApp(
+                            "Obsidian", Path("C:/Programs/Obsidian.exe"), "Start Menu"))
+    monkeypatch.setattr("core.platform.open_path", lambda p: opened.append(p))
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: spawned.append(a))
+
+    result = await skill.execute(SkillRequest(text="open obsidian",
+                                              match=skill.match("open obsidian")))
+    assert result.success and opened == [Path("C:/Programs/Obsidian.exe")]
+    assert spawned == [], "the URI must not be used when the app was found"
+
+
+@pytest.mark.asyncio
+async def test_obsidian_falls_back_to_the_uri_when_undiscoverable(monkeypatch):
+    from skills.base import SkillRequest
+
+    module, skill = _obsidian_open()
+    spawned = []
+    monkeypatch.setattr("skills.appfinder.find_app", lambda name, apps=None: None)
+    monkeypatch.setattr("subprocess.Popen", lambda *a, **k: spawned.append(a))
+
+    result = await skill.execute(SkillRequest(text="open obsidian",
+                                              match=skill.match("open obsidian")))
+    assert result.success and len(spawned) == 1
+    assert result.data.get("via") == "uri"
+
+
+def test_obsidian_launcher_is_gated_by_the_pc_switch():
+    _module, skill = _obsidian_open()
+    assert skill.controls_pc is True
