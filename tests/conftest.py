@@ -13,4 +13,4 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolated_assistant_db(tmp_path, monkeypatch):
-    monkeypatch.setenv("MEDO_MEMORY__DB_PATH", str(tmp_path / "test-jarvis.db"))
+    monkeypatch.setenv("MEDO_MEMORY__DB_PATH", str(tmp_path / "test-medo.db"))

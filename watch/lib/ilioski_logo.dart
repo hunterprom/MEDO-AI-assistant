@@ -1,7 +1,7 @@
 /// The ILIOSKI monogram — drawn, not shipped as an asset, so it stays crisp
 /// at every watch density and can glow with the app's accent color.
 ///
-/// Design: an arc-reactor style badge (a nod to Jarvis) — two cyan rings with
+/// Design: an arc-reactor style badge (a nod to Medo) — two cyan rings with
 /// a gap at the top, holding a geometric letter "I" built from three bars.
 library;
 
@@ -14,7 +14,7 @@ class IlioskiLogo extends StatelessWidget {
 
   final double size;
 
-  /// Adds a soft outer glow (used while Jarvis is speaking).
+  /// Adds a soft outer glow (used while Medo is speaking).
   final bool glow;
 
   @override

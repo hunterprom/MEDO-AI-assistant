@@ -4,7 +4,7 @@ A deliberately tiny, LAN-only API. Clients send plain text; MEDO routes it
 through the same Intent Router the REPL uses and returns the spoken reply.
 Model/provider endpoints let clients switch the LLM at runtime.
 
-    GET  /ping            -> {"ok": true, "name": "MEDO", "service": "jarvis-v2"}
+    GET  /ping            -> {"ok": true, "name": "MEDO", "service": "medo"}
     POST /ask {"text": …} -> {"speech": …, "path": "FAST"|"LLM",
                               "skill": str|null, "latency_ms": float}
     GET  /status          -> {"ok", "name", "provider", "model", "models", "state"}
@@ -379,7 +379,7 @@ class RemoteServer:
             {
                 "ok": True,
                 "name": self._settings.personality.name,
-                "service": "jarvis-v2",
+                "service": "medo",
             }
         )
 

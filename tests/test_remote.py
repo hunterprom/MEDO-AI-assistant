@@ -67,7 +67,7 @@ async def test_ping(client: TestClient):
     assert resp.status == 200
     body = await resp.json()
     assert body["ok"] is True
-    assert body["service"] == "jarvis-v2"
+    assert body["service"] == "medo"
 
 
 @pytest.mark.asyncio

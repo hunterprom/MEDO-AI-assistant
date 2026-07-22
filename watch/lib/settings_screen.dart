@@ -12,7 +12,7 @@ library;
 import 'package:flutter/material.dart';
 
 import 'discovery.dart';
-import 'jarvis_client.dart';
+import 'medo_client.dart';
 import 'settings.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -81,11 +81,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return;
       }
       _controller.text = found.address;
-      await JarvisClient(found.address).pairStart();
+      await MedoClient(found.address).pairStart();
       setState(() => _awaitingCode = true);
       _setStatus('Found ${found.name} ✓ — enter the code shown on the PC',
           Colors.cyanAccent);
-    } on JarvisException catch (e) {
+    } on MedoException catch (e) {
       _setStatus(e.message, Colors.orangeAccent);
     } finally {
       setState(() => _pairing = false);
@@ -101,15 +101,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _pairing = true);
     try {
       final address = _controller.text.trim();
-      final token = await JarvisClient(address).pairConfirm(code);
+      final token = await MedoClient(address).pairConfirm(code);
       _tokenController.text = token;
       await AppSettings.saveAddress(address);
       await AppSettings.saveToken(token);
       _codeController.clear();
       setState(() => _awaitingCode = false);
-      final name = await JarvisClient(address, token).ping();
+      final name = await MedoClient(address, token).ping();
       _setStatus('Paired with $name ✓', Colors.greenAccent);
-    } on JarvisException catch (e) {
+    } on MedoException catch (e) {
       _setStatus(e.message, Colors.orangeAccent); // wrong code → try again
     } finally {
       setState(() => _pairing = false);
@@ -128,12 +128,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _statusColor = Colors.white54;
     });
     try {
-      final name = await JarvisClient(address, token).ping();
+      final name = await MedoClient(address, token).ping();
       setState(() {
         _status = 'Connected to $name ✓';
         _statusColor = Colors.greenAccent;
       });
-    } on JarvisException catch (e) {
+    } on MedoException catch (e) {
       setState(() {
         _status = e.message;
         _statusColor = Colors.orangeAccent;
@@ -168,7 +168,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  'JARVIS SERVER',
+                  'MEDO SERVER',
                   style: TextStyle(
                     color: Colors.cyanAccent,
                     fontSize: 11,

@@ -1,5 +1,5 @@
 /// Tap-to-talk screen: mic button → on-watch speech recognition → send the
-/// transcript to Jarvis → show the reply and speak it aloud.
+/// transcript to Medo → show the reply and speak it aloud.
 ///
 /// Designed for a small round display: everything important sits in the
 /// center circle, one glanceable line of status on top, reply text in the
@@ -16,11 +16,11 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import 'gesture_trigger.dart';
 import 'ilioski_logo.dart';
-import 'jarvis_client.dart';
+import 'medo_client.dart';
 import 'settings.dart';
 import 'settings_screen.dart';
 
-/// Mirrors Jarvis's own IDLE → LISTENING → THINKING → SPEAKING cycle.
+/// Mirrors Medo's own IDLE → LISTENING → THINKING → SPEAKING cycle.
 enum Phase { idle, listening, thinking, speaking, error }
 
 class HomeScreen extends StatefulWidget {
@@ -36,7 +36,7 @@ class _HomeScreenState extends State<HomeScreen>
   final FlutterTts _tts = FlutterTts();
   late final AnimationController _pulse;
 
-  JarvisClient _client = JarvisClient(AppSettings.defaultAddress);
+  MedoClient _client = MedoClient(AppSettings.defaultAddress);
   late final GestureTrigger _gesture;
   bool _gestureEnabled = AppSettings.defaultGestureEnabled;
   bool _speechAvailable = false;
@@ -60,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   Future<void> _init() async {
     final address = await AppSettings.loadAddress();
-    _client = JarvisClient(address, await AppSettings.loadToken());
+    _client = MedoClient(address, await AppSettings.loadToken());
 
     _speechAvailable = await _speech.initialize(
       onError: _onSpeechError,
@@ -202,7 +202,7 @@ class _HomeScreenState extends State<HomeScreen>
       });
       _setPhase(Phase.speaking);
       await _tts.speak(reply.speech);
-    } on JarvisException catch (e) {
+    } on MedoException catch (e) {
       if (!mounted) return;
       setState(() => _display = e.message);
       _setPhase(Phase.error);
@@ -222,7 +222,7 @@ class _HomeScreenState extends State<HomeScreen>
             controller: controller,
             autofocus: true,
             textInputAction: TextInputAction.send,
-            decoration: const InputDecoration(hintText: 'Ask Jarvis…'),
+            decoration: const InputDecoration(hintText: 'Ask MEDO…'),
             onSubmitted: (value) => Navigator.pop(context, value),
           ),
         ),
@@ -237,7 +237,7 @@ class _HomeScreenState extends State<HomeScreen>
       context,
       MaterialPageRoute(builder: (_) => const SettingsScreen()),
     );
-    _client = JarvisClient(
+    _client = MedoClient(
       await AppSettings.loadAddress(),
       await AppSettings.loadToken(),
     );
@@ -255,7 +255,7 @@ class _HomeScreenState extends State<HomeScreen>
   };
 
   static const _phaseLabels = {
-    Phase.idle: 'JARVIS',
+    Phase.idle: 'MEDO',
     Phase.listening: 'Listening…',
     Phase.thinking: 'Thinking…',
     Phase.speaking: 'Speaking',

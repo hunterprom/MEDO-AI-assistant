@@ -401,7 +401,7 @@ vision_llm:                         # "what do you see" / "read my screen" / ben
   timeout_s: 60                     # describe calls are slow on first load
 
 memory:                             # M4
-  db_path: "jarvis.db"
+  db_path: "medo.db"                # renamed from jarvis.db (auto-migrated on start)
   max_turns: 10                     # rolling conversation window sent to the LLM
   max_facts: 20                     # remembered facts injected into the system prompt
   embed_model: "nomic-embed-text"   # semantic fact recall via local Ollama embeddings

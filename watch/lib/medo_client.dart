@@ -1,4 +1,4 @@
-/// HTTP client for the Jarvis v2 companion API (`remote/server.py`).
+/// HTTP client for the Medo v2 companion API (`remote/server.py`).
 ///
 /// The API is tiny: `GET /ping` to check the server is there, `POST /ask`
 /// with `{"text": …}` to route one utterance. Both live on the LAN, so
@@ -10,16 +10,16 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-/// One routed reply from Jarvis.
-class JarvisReply {
-  const JarvisReply({
+/// One routed reply from Medo.
+class MedoReply {
+  const MedoReply({
     required this.speech,
     required this.path,
     this.skill,
     this.latencyMs = 0,
   });
 
-  /// The text Jarvis wants spoken.
+  /// The text Medo wants spoken.
   final String speech;
 
   /// Which brain answered: `FAST` (rule-based skill) or `LLM` (Ollama).
@@ -31,7 +31,7 @@ class JarvisReply {
   /// Server-side routing latency.
   final double latencyMs;
 
-  factory JarvisReply.fromJson(Map<String, dynamic> json) => JarvisReply(
+  factory MedoReply.fromJson(Map<String, dynamic> json) => MedoReply(
         speech: json['speech'] as String? ?? '',
         path: json['path'] as String? ?? '?',
         skill: json['skill'] as String?,
@@ -39,18 +39,18 @@ class JarvisReply {
       );
 }
 
-/// Raised for anything that stops us reaching Jarvis, with a message short
+/// Raised for anything that stops us reaching Medo, with a message short
 /// enough to show on a watch face.
-class JarvisException implements Exception {
-  const JarvisException(this.message);
+class MedoException implements Exception {
+  const MedoException(this.message);
   final String message;
 
   @override
   String toString() => message;
 }
 
-class JarvisClient {
-  JarvisClient(this.address, [this.token = '']);
+class MedoClient {
+  MedoClient(this.address, [this.token = '']);
 
   /// `host:port` of the machine running `python main.py --serve`.
   final String address;
@@ -75,11 +75,11 @@ class JarvisClient {
     final body = await _request(
       () => http.get(_uri('/ping'), headers: _headers()).timeout(_pingTimeout),
     );
-    return body['name'] as String? ?? 'Jarvis';
+    return body['name'] as String? ?? 'MEDO';
   }
 
-  /// Sends one utterance and returns Jarvis's reply.
-  Future<JarvisReply> ask(String text) async {
+  /// Sends one utterance and returns Medo's reply.
+  Future<MedoReply> ask(String text) async {
     final body = await _request(
       () => http
           .post(
@@ -89,7 +89,7 @@ class JarvisClient {
           )
           .timeout(_askTimeout),
     );
-    return JarvisReply.fromJson(body);
+    return MedoReply.fromJson(body);
   }
 
   /// Ask the server to show a pairing code on its own screen.
@@ -120,18 +120,18 @@ class JarvisClient {
     try {
       response = await send();
     } on TimeoutException {
-      throw const JarvisException('Jarvis took too long to answer.');
+      throw const MedoException('MEDO took too long to answer.');
     } catch (_) {
-      throw JarvisException("Can't reach Jarvis at $address.");
+      throw MedoException("Can't reach MEDO at $address.");
     }
     final Map<String, dynamic> body;
     try {
       body = jsonDecode(response.body) as Map<String, dynamic>;
     } catch (_) {
-      throw JarvisException('Unexpected reply from $address.');
+      throw MedoException('Unexpected reply from $address.');
     }
     if (response.statusCode != 200) {
-      throw JarvisException(
+      throw MedoException(
         body['error'] as String? ?? 'Server error ${response.statusCode}.',
       );
     }

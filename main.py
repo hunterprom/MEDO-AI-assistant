@@ -455,12 +455,34 @@ def _trust_os_certificates() -> None:
         logging.getLogger("main").debug("truststore unavailable", exc_info=True)
 
 
+def _migrate_db_name(db_path: str) -> None:
+    """One-time rename jarvis.db -> the configured db (default medo.db).
+
+    Best-effort: only when the new file doesn't exist yet and the old one does,
+    so a user's facts/metrics carry across the jarvis->medo rebrand untouched.
+    """
+    from pathlib import Path
+
+    new = Path(db_path)
+    old = new.with_name("jarvis.db")
+    if old.name == new.name or new.exists() or not old.exists():
+        return
+    try:
+        old.rename(new)
+        logging.getLogger("main").info("migrated %s -> %s", old.name, new.name)
+    except OSError:
+        logging.getLogger("main").debug("db migration skipped", exc_info=True)
+
+
 async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> None:
     _trust_os_certificates()
     settings = load_settings()
     # Overlay any online API key / model saved via the HUD (git-ignored file), so
     # an online provider chosen last session is restored without touching config.yaml.
     apply_local_secrets(settings)
+    # Rebrand carry-over: the assistant DB was 'jarvis.db'. Rename an existing
+    # one to the new default so remembered facts / metrics survive the rename.
+    _migrate_db_name(settings.memory.db_path)
     setup_logging(settings.logging.level)
 
     announcer = Announcer()

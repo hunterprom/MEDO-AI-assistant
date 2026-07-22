@@ -1,6 +1,6 @@
-/// Jarvis v2 watch companion — entry point.
+/// Medo v2 watch companion — entry point.
 ///
-/// Speak to the watch; the transcript is routed to the Jarvis v2 companion
+/// Speak to the watch; the transcript is routed to the Medo v2 companion
 /// API on your computer (see `remote/server.py` in the repo root), and the
 /// reply comes back on screen and through the speaker.
 library;
@@ -9,15 +9,15 @@ import 'package:flutter/material.dart';
 
 import 'home_screen.dart';
 
-void main() => runApp(const JarvisWatchApp());
+void main() => runApp(const MedoWatchApp());
 
-class JarvisWatchApp extends StatelessWidget {
-  const JarvisWatchApp({super.key});
+class MedoWatchApp extends StatelessWidget {
+  const MedoWatchApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Jarvis',
+      title: 'MEDO',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,

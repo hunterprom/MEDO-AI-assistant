@@ -390,7 +390,7 @@ class VisionLLMConfig(BaseModel):
 
 
 class MemoryConfig(BaseModel):
-    db_path: str = "jarvis.db"
+    db_path: str = "medo.db"
     max_turns: int = 10
     max_facts: int = 20                 # facts injected into the system prompt
     # Local Ollama embedding model for semantic fact recall ("dentist" finds
