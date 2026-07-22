@@ -72,11 +72,14 @@ def find_ffmpeg() -> str | None:
 
 
 class EdgeTTS:
-    """Microsoft edge-tts neural voice (used for Macedonian replies).
+    """Microsoft edge-tts neural voices — one per supported language.
 
     Free, no key; needs internet (the voice runs in Microsoft's cloud) and a
     local ffmpeg to decode the mp3 stream. Callers should catch exceptions and
     fall back to Piper — offline operation must never depend on this class.
+
+    The voice is chosen per utterance from the language Whisper detected, not
+    fixed at construction: one instance serves every language MEDO speaks.
     """
 
     SAMPLE_RATE = 24000
@@ -84,20 +87,33 @@ class EdgeTTS:
     def __init__(self, voice: str) -> None:
         import edge_tts  # noqa: F401  (fail fast if the package is missing)
 
-        self._voice = voice
+        self._voice = voice          # fallback when no language is given
         self._ffmpeg = find_ffmpeg()
         if not self._ffmpeg:
             raise RuntimeError("ffmpeg not found — needed to decode edge-tts audio")
         logger.info("edge-tts ready (voice %s)", voice)
 
-    async def synthesize(self, text: str) -> tuple[np.ndarray, int]:
-        """Synthesize ``text`` into (int16 mono waveform, sample_rate)."""
+    def voice_for(self, language: str | None) -> str:
+        """The voice to speak a reply in, given the detected language."""
+        from core import languages
+
+        return languages.voice_for(language, self._voice)
+
+    async def synthesize(self, text: str,
+                         language: str | None = None) -> tuple[np.ndarray, int]:
+        """Synthesize ``text`` into (int16 mono waveform, sample_rate).
+
+        ``language`` is the ISO code Whisper reported for the user's utterance;
+        the reply is spoken by that language's voice so MEDO answers in the
+        language it was addressed in.
+        """
         import asyncio
 
         import edge_tts
 
+        voice = self.voice_for(language)
         mp3 = bytearray()
-        async for chunk in edge_tts.Communicate(text, self._voice).stream():
+        async for chunk in edge_tts.Communicate(text, voice).stream():
             if chunk["type"] == "audio":
                 mp3.extend(chunk["data"])
         if not mp3:

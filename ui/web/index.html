@@ -397,14 +397,14 @@
       <span class="mono" id="link-status">v2.0 · CONNECTING…</span>
     </div>
     <div id="tabs">
-      <button id="tab-core" class="active">CORE</button>
+      <button id="tab-core" class="active" data-i18n="core">CORE</button>
       <button id="tab-comms">COMMS</button>
-      <button id="tab-config">CONFIG</button>
+      <button id="tab-config" data-i18n="config">CONFIG</button>
     </div>
     <div id="searchwrap">
       <div id="searchbox">
         <span class="dot"></span>
-        <input id="search" placeholder="SEARCH SYSTEMS, FILES, WEB…" autocomplete="off" />
+        <input id="search" data-i18n-ph="search" placeholder="SEARCH SYSTEMS, FILES, WEB…" autocomplete="off" />
       </div>
     </div>
     <div id="clockwrap">
@@ -526,8 +526,8 @@
         <div id="thinking">MEDO IS PROCESSING ▊</div>
       </div>
       <div id="chatinputrow">
-        <input id="draft" placeholder="TYPE A COMMAND OR QUESTION…" autocomplete="off" />
-        <button id="sendbtn">SEND</button>
+        <input id="draft" data-i18n-ph="ask" placeholder="TYPE A COMMAND OR QUESTION…" autocomplete="off" />
+        <button id="sendbtn" data-i18n="send">SEND</button>
       </div>
     </div>
   </div>
@@ -537,56 +537,69 @@
     <div id="configcol">
       <div class="head">SYSTEM CONFIGURATION</div>
       <div class="setting">
-        <div class="info"><span class="name">Voice activation</span><span class="desc" id="wake-desc">WAKE WORD: —</span></div>
+        <div class="info"><span class="name" data-i18n="voice_activation">Voice activation</span><span class="desc" id="wake-desc">WAKE WORD: —</span></div>
         <button class="toggle on" disabled><span class="knob"></span></button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Microphone</span><span class="desc">INPUT DEVICE THE WAKE WORD LISTENS ON</span></div>
+        <div class="info"><span class="name" data-i18n="microphone">Microphone</span><span class="desc">INPUT DEVICE THE WAKE WORD LISTENS ON</span></div>
         <select class="cfg" id="cfg-mic"><option>loading…</option></select>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Pointer mode</span><span class="desc">GESTURE MOUSE — MOVE · PINCH-DRAG · SCROLL · ZOOM · RIGHT-CLICK · VOLUME · HELD FIST EXITS</span></div>
+        <div class="info"><span class="name" data-i18n="pointer_mode">Pointer mode</span><span class="desc">GESTURE MOUSE — MOVE · PINCH-DRAG · SCROLL · ZOOM · RIGHT-CLICK · VOLUME · HELD FIST EXITS</span></div>
         <button class="toggle" id="cfg-pointer"><span class="knob"></span></button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">PC control</span><span class="desc">MAY MEDO ACT ON THIS PC — TYPE · OPEN APPS &amp; SITES · FILES · POWER · OFF = ANSWERS ONLY</span></div>
+        <div class="info"><span class="name" data-i18n="pc_control">PC control</span><span class="desc">MAY MEDO ACT ON THIS PC — TYPE · OPEN APPS &amp; SITES · FILES · POWER · OFF = ANSWERS ONLY</span></div>
         <button class="toggle on" id="cfg-pc"><span class="knob"></span></button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Continuous conversation</span><span class="desc">KEEP LISTENING AFTER EACH REPLY — NO WAKE WORD BETWEEN TURNS</span></div>
+        <div class="info"><span class="name" data-i18n="continuous">Continuous conversation</span><span class="desc">KEEP LISTENING AFTER EACH REPLY — NO WAKE WORD BETWEEN TURNS</span></div>
         <button class="toggle" id="cfg-continuous"><span class="knob"></span></button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Interpreter mode</span><span class="desc">LIVE EN↔MK TRANSLATION — MEDO SPEAKS EACH LINE BACK IN THE OTHER LANGUAGE</span></div>
+        <div class="info"><span class="name" data-i18n="interpreter">Interpreter mode</span><span class="desc">LIVE EN↔MK TRANSLATION — MEDO SPEAKS EACH LINE BACK IN THE OTHER LANGUAGE</span></div>
         <button class="toggle" id="cfg-interpreter"><span class="knob"></span></button>
       </div>
       <div class="setting" id="lion-row">
-        <div class="info"><span class="name">MEDO Lion mode</span><span class="desc" id="lion-desc">NO CONFIRMATIONS · IGNORES THE PC SWITCH · WHITELIST &amp; BLOCKED SITES STILL APPLY · RESETS ON RESTART</span></div>
+        <div class="info"><span class="name" data-i18n="lion">MEDO Lion mode</span><span class="desc" id="lion-desc">NO CONFIRMATIONS · IGNORES THE PC SWITCH · WHITELIST &amp; BLOCKED SITES STILL APPLY · RESETS ON RESTART</span></div>
         <button class="toggle" id="cfg-lion"><span class="knob"></span></button>
       </div>
       <div class="setting" style="align-items:flex-start">
         <div class="info" style="flex:1">
-          <span class="name">Specialist council</span>
+          <span class="name" data-i18n="council">Specialist council</span>
           <span class="desc">MEDO ASKS THE RELEVANT MAJORS AND SYNTHESIZES — TAP A NAME TO SWITCH IT OFF</span>
           <div id="council-list" class="council-list"></div>
         </div>
         <button class="toggle on" id="cfg-council"><span class="knob"></span></button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Camera feed</span><span class="desc">SHOW THE OPTICAL FEED PANEL ON CORE</span></div>
+        <div class="info"><span class="name" data-i18n="camera_feed">Camera feed</span><span class="desc">SHOW THE OPTICAL FEED PANEL ON CORE</span></div>
         <button class="toggle on" id="cfg-cam"><span class="knob"></span></button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Scanlines</span><span class="desc">CRT OVERLAY ON THE INTERFACE</span></div>
+        <div class="info"><span class="name" data-i18n="scanlines">Scanlines</span><span class="desc">CRT OVERLAY ON THE INTERFACE</span></div>
         <button class="toggle on" id="cfg-scan"><span class="knob"></span></button>
       </div>
+      <div class="setting">
+        <div class="info"><span class="name" id="ui-lang-label">Interface language</span><span class="desc">LANGUAGE OF THIS SCREEN - SEPARATE FROM THE LANGUAGE YOU SPEAK TO MEDO</span></div>
+        <select class="cfg" id="cfg-uilang">
+          <option value="en">English</option><option value="mk">Македонски</option>
+          <option value="de">Deutsch</option><option value="fr">Français</option>
+          <option value="es">Español</option><option value="it">Italiano</option>
+          <option value="pt">Português</option><option value="nl">Nederlands</option>
+          <option value="pl">Polski</option><option value="ru">Русский</option>
+          <option value="tr">Türkçe</option><option value="el">Ελληνικά</option>
+          <option value="zh">中文</option><option value="ja">日本語</option>
+          <option value="ko">한국어</option><option value="hi">हिन्दी</option>
+        </select>
+      </div>
       <div class="setting col-layout">
-        <div class="info"><span class="name">Appearance</span><span class="desc">ACCENT COLOR · RESKINS THE WHOLE INTERFACE</span></div>
+        <div class="info"><span class="name" data-i18n="appearance">Appearance</span><span class="desc">ACCENT COLOR · RESKINS THE WHOLE INTERFACE</span></div>
         <div id="swatches"></div>
       </div>
       <div class="head" style="margin-top:8px">LANGUAGE MODEL</div>
       <div class="setting col-layout">
-        <div class="info"><span class="name">Brain</span><span class="desc" id="model-desc">ACTIVE BRAIN · VIA OLLAMA</span></div>
+        <div class="info"><span class="name" data-i18n="brain">Brain</span><span class="desc" id="model-desc">ACTIVE BRAIN · VIA OLLAMA</span></div>
         <div class="seg" id="provider-seg">
           <button data-prov="ollama" class="active">OLLAMA</button>
           <button data-prov="openai">GPT · API</button>
@@ -616,7 +629,7 @@
       </div>
       <div class="head" style="margin-top:8px">MEMORY</div>
       <div class="setting col-layout">
-        <div class="info"><span class="name">Remembered facts</span><span class="desc" id="facts-desc">WHAT MEDO KNOWS ABOUT YOU</span></div>
+        <div class="info"><span class="name" data-i18n="facts">Remembered facts</span><span class="desc" id="facts-desc">WHAT MEDO KNOWS ABOUT YOU</span></div>
         <div id="facts-list" class="sr-list"></div>
         <div class="rowbtns">
           <input id="fact-new" placeholder="remember that…" autocomplete="off" />
@@ -624,16 +637,16 @@
         </div>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">Documents index</span><span class="desc" id="docs-desc">ASK ABOUT YOUR FILES · LOADING…</span></div>
+        <div class="info"><span class="name" data-i18n="documents">Documents index</span><span class="desc" id="docs-desc">ASK ABOUT YOUR FILES · LOADING…</span></div>
         <button class="btn-sm" id="docs-reindex">REINDEX</button>
       </div>
       <div class="setting">
-        <div class="info"><span class="name">File map</span><span class="desc" id="dirs-desc">FOLDER BEACONS ON THE SPHERE · RESCAN AFTER MOVING TO A NEW MACHINE</span></div>
+        <div class="info"><span class="name" data-i18n="file_map">File map</span><span class="desc" id="dirs-desc">FOLDER BEACONS ON THE SPHERE · RESCAN AFTER MOVING TO A NEW MACHINE</span></div>
         <button class="btn-sm" id="dirs-rescan">SCAN THIS PC</button>
       </div>
       <div class="head" style="margin-top:8px">MEDO LINK · DEVICES</div>
       <div class="setting">
-        <div class="info"><span class="name">Device fleet</span><span class="desc" id="link-desc">EXPERIMENTAL ESP32 / RPI SDK · SEE docs/MEDO Link.md</span></div>
+        <div class="info"><span class="name" data-i18n="devices">Device fleet</span><span class="desc" id="link-desc">EXPERIMENTAL ESP32 / RPI SDK · SEE docs/MEDO Link.md</span></div>
         <button class="btn-sm" id="link-refresh">REFRESH</button>
       </div>
       <div id="link-list"></div>
@@ -1069,6 +1082,115 @@
   }
   $('cfg-continuous').onclick = () => toggleMode('continuous', 'cfg-continuous');
   $('cfg-interpreter').onclick = () => toggleMode('interpreter', 'cfg-interpreter');
+
+  /* ---- interface language (HUD only; independent of what you speak) ----
+     Only the visible LABELS are translated. The all-caps description lines
+     under each setting stay English on purpose: they are dense technical
+     shorthand where a loose translation reads worse than the original. */
+  const I18N = {
+    en: { core:'CORE', config:'CONFIG', send:'SEND', ask:'TYPE A COMMAND OR QUESTION…', search:'SEARCH SYSTEMS, FILES, WEB…',
+          voice_activation:'Voice activation', microphone:'Microphone', pointer_mode:'Pointer mode', pc_control:'PC control',
+          continuous:'Continuous conversation', interpreter:'Interpreter mode', lion:'MEDO Lion mode', council:'Specialist council',
+          camera_feed:'Camera feed', scanlines:'Scanlines', appearance:'Appearance', brain:'Brain',
+          facts:'Remembered facts', documents:'Documents index', file_map:'File map', devices:'Device fleet', ui_language:'Interface language' },
+    mk: { core:'ЈАДРО', config:'ПОСТАВКИ', send:'ПРАТИ', ask:'НАПИШИ КОМАНДА ИЛИ ПРАШАЊЕ…', search:'БАРАЈ СИСТЕМИ, ДАТОТЕКИ, ВЕБ…',
+          voice_activation:'Гласовна активација', microphone:'Микрофон', pointer_mode:'Режим на покажувач', pc_control:'Контрола на компјутерот',
+          continuous:'Континуиран разговор', interpreter:'Режим на преведувач', lion:'МЕДО лав режим', council:'Совет на специјалисти',
+          camera_feed:'Слика од камера', scanlines:'Скен-линии', appearance:'Изглед', brain:'Мозок',
+          facts:'Запаметени факти', documents:'Индекс на документи', file_map:'Мапа на датотеки', devices:'Флота уреди', ui_language:'Јазик на интерфејсот' },
+    de: { core:'KERN', config:'EINSTELLUNGEN', send:'SENDEN', ask:'BEFEHL ODER FRAGE EINGEBEN…', search:'SYSTEME, DATEIEN, WEB DURCHSUCHEN…',
+          voice_activation:'Sprachaktivierung', microphone:'Mikrofon', pointer_mode:'Zeigermodus', pc_control:'PC-Steuerung',
+          continuous:'Fortlaufendes Gespräch', interpreter:'Dolmetschermodus', lion:'MEDO Löwenmodus', council:'Fachrat',
+          camera_feed:'Kamerabild', scanlines:'Scanlinien', appearance:'Erscheinungsbild', brain:'Gehirn',
+          facts:'Gespeicherte Fakten', documents:'Dokumentenindex', file_map:'Dateikarte', devices:'Geräteflotte', ui_language:'Oberflächensprache' },
+    fr: { core:'CŒUR', config:'CONFIG', send:'ENVOYER', ask:'TAPEZ UNE COMMANDE OU UNE QUESTION…', search:'RECHERCHER SYSTÈMES, FICHIERS, WEB…',
+          voice_activation:'Activation vocale', microphone:'Microphone', pointer_mode:'Mode pointeur', pc_control:'Contrôle du PC',
+          continuous:'Conversation continue', interpreter:'Mode interprète', lion:'MEDO mode lion', council:'Conseil de spécialistes',
+          camera_feed:'Flux caméra', scanlines:'Lignes de balayage', appearance:'Apparence', brain:'Cerveau',
+          facts:'Faits mémorisés', documents:'Index des documents', file_map:'Carte des fichiers', devices:'Parc d’appareils', ui_language:'Langue de l’interface' },
+    es: { core:'NÚCLEO', config:'AJUSTES', send:'ENVIAR', ask:'ESCRIBE UN COMANDO O PREGUNTA…', search:'BUSCAR SISTEMAS, ARCHIVOS, WEB…',
+          voice_activation:'Activación por voz', microphone:'Micrófono', pointer_mode:'Modo puntero', pc_control:'Control del PC',
+          continuous:'Conversación continua', interpreter:'Modo intérprete', lion:'MEDO modo león', council:'Consejo de especialistas',
+          camera_feed:'Señal de cámara', scanlines:'Líneas de barrido', appearance:'Apariencia', brain:'Cerebro',
+          facts:'Datos recordados', documents:'Índice de documentos', file_map:'Mapa de archivos', devices:'Flota de dispositivos', ui_language:'Idioma de la interfaz' },
+    it: { core:'NUCLEO', config:'IMPOSTAZIONI', send:'INVIA', ask:'SCRIVI UN COMANDO O UNA DOMANDA…', search:'CERCA SISTEMI, FILE, WEB…',
+          voice_activation:'Attivazione vocale', microphone:'Microfono', pointer_mode:'Modalità puntatore', pc_control:'Controllo del PC',
+          continuous:'Conversazione continua', interpreter:'Modalità interprete', lion:'MEDO modalità leone', council:'Consiglio di specialisti',
+          camera_feed:'Flusso della camera', scanlines:'Linee di scansione', appearance:'Aspetto', brain:'Cervello',
+          facts:'Fatti memorizzati', documents:'Indice dei documenti', file_map:'Mappa dei file', devices:'Flotta di dispositivi', ui_language:'Lingua dell’interfaccia' },
+    pt: { core:'NÚCLEO', config:'DEFINIÇÕES', send:'ENVIAR', ask:'ESCREVE UM COMANDO OU PERGUNTA…', search:'PROCURAR SISTEMAS, FICHEIROS, WEB…',
+          voice_activation:'Ativação por voz', microphone:'Microfone', pointer_mode:'Modo ponteiro', pc_control:'Controlo do PC',
+          continuous:'Conversa contínua', interpreter:'Modo intérprete', lion:'MEDO modo leão', council:'Conselho de especialistas',
+          camera_feed:'Sinal da câmara', scanlines:'Linhas de varrimento', appearance:'Aparência', brain:'Cérebro',
+          facts:'Factos memorizados', documents:'Índice de documentos', file_map:'Mapa de ficheiros', devices:'Frota de dispositivos', ui_language:'Idioma da interface' },
+    nl: { core:'KERN', config:'INSTELLINGEN', send:'VERSTUUR', ask:'TYP EEN OPDRACHT OF VRAAG…', search:'ZOEK SYSTEMEN, BESTANDEN, WEB…',
+          voice_activation:'Spraakactivering', microphone:'Microfoon', pointer_mode:'Aanwijzermodus', pc_control:'PC-bediening',
+          continuous:'Doorlopend gesprek', interpreter:'Tolkmodus', lion:'MEDO leeuwmodus', council:'Specialistenraad',
+          camera_feed:'Camerabeeld', scanlines:'Scanlijnen', appearance:'Weergave', brain:'Brein',
+          facts:'Onthouden feiten', documents:'Documentenindex', file_map:'Bestandskaart', devices:'Apparatenvloot', ui_language:'Interfacetaal' },
+    pl: { core:'RDZEŃ', config:'USTAWIENIA', send:'WYŚLIJ', ask:'WPISZ POLECENIE LUB PYTANIE…', search:'SZUKAJ SYSTEMÓW, PLIKÓW, SIECI…',
+          voice_activation:'Aktywacja głosowa', microphone:'Mikrofon', pointer_mode:'Tryb wskaźnika', pc_control:'Kontrola komputera',
+          continuous:'Ciągła rozmowa', interpreter:'Tryb tłumacza', lion:'MEDO tryb lwa', council:'Rada specjalistów',
+          camera_feed:'Obraz z kamery', scanlines:'Linie skanowania', appearance:'Wygląd', brain:'Mózg',
+          facts:'Zapamiętane fakty', documents:'Indeks dokumentów', file_map:'Mapa plików', devices:'Flota urządzeń', ui_language:'Język interfejsu' },
+    ru: { core:'ЯДРО', config:'НАСТРОЙКИ', send:'ОТПРАВИТЬ', ask:'ВВЕДИТЕ КОМАНДУ ИЛИ ВОПРОС…', search:'ПОИСК СИСТЕМ, ФАЙЛОВ, ВЕБА…',
+          voice_activation:'Голосовая активация', microphone:'Микрофон', pointer_mode:'Режим указателя', pc_control:'Управление ПК',
+          continuous:'Непрерывный разговор', interpreter:'Режим переводчика', lion:'MEDO режим льва', council:'Совет специалистов',
+          camera_feed:'Изображение с камеры', scanlines:'Строки развёртки', appearance:'Оформление', brain:'Мозг',
+          facts:'Запомненные факты', documents:'Индекс документов', file_map:'Карта файлов', devices:'Парк устройств', ui_language:'Язык интерфейса' },
+    tr: { core:'ÇEKİRDEK', config:'AYARLAR', send:'GÖNDER', ask:'BİR KOMUT VEYA SORU YAZIN…', search:'SİSTEM, DOSYA, WEB ARA…',
+          voice_activation:'Sesle etkinleştirme', microphone:'Mikrofon', pointer_mode:'İşaretçi modu', pc_control:'PC denetimi',
+          continuous:'Sürekli konuşma', interpreter:'Çevirmen modu', lion:'MEDO aslan modu', council:'Uzman kurulu',
+          camera_feed:'Kamera görüntüsü', scanlines:'Tarama çizgileri', appearance:'Görünüm', brain:'Beyin',
+          facts:'Hatırlanan bilgiler', documents:'Belge dizini', file_map:'Dosya haritası', devices:'Cihaz filosu', ui_language:'Arayüz dili' },
+    el: { core:'ΠΥΡΗΝΑΣ', config:'ΡΥΘΜΙΣΕΙΣ', send:'ΑΠΟΣΤΟΛΗ', ask:'ΓΡΑΨΤΕ ΕΝΤΟΛΗ Ή ΕΡΩΤΗΣΗ…', search:'ΑΝΑΖΗΤΗΣΗ ΣΥΣΤΗΜΑΤΩΝ, ΑΡΧΕΙΩΝ, ΙΣΤΟΥ…',
+          voice_activation:'Φωνητική ενεργοποίηση', microphone:'Μικρόφωνο', pointer_mode:'Λειτουργία δείκτη', pc_control:'Έλεγχος υπολογιστή',
+          continuous:'Συνεχής συνομιλία', interpreter:'Λειτουργία διερμηνέα', lion:'MEDO λειτουργία λέοντα', council:'Συμβούλιο ειδικών',
+          camera_feed:'Ροή κάμερας', scanlines:'Γραμμές σάρωσης', appearance:'Εμφάνιση', brain:'Εγκέφαλος',
+          facts:'Αποθηκευμένα στοιχεία', documents:'Ευρετήριο εγγράφων', file_map:'Χάρτης αρχείων', devices:'Στόλος συσκευών', ui_language:'Γλώσσα διεπαφής' },
+    zh: { core:'核心', config:'设置', send:'发送', ask:'输入命令或问题…', search:'搜索系统、文件、网页…',
+          voice_activation:'语音唤醒', microphone:'麦克风', pointer_mode:'指针模式', pc_control:'电脑控制',
+          continuous:'连续对话', interpreter:'口译模式', lion:'MEDO 狮子模式', council:'专家委员会',
+          camera_feed:'摄像头画面', scanlines:'扫描线', appearance:'外观', brain:'大脑',
+          facts:'已记住的信息', documents:'文档索引', file_map:'文件地图', devices:'设备群', ui_language:'界面语言' },
+    ja: { core:'コア', config:'設定', send:'送信', ask:'コマンドか質問を入力…', search:'システム・ファイル・ウェブを検索…',
+          voice_activation:'音声起動', microphone:'マイク', pointer_mode:'ポインタモード', pc_control:'PC操作',
+          continuous:'連続会話', interpreter:'通訳モード', lion:'MEDO ライオンモード', council:'専門家会議',
+          camera_feed:'カメラ映像', scanlines:'走査線', appearance:'外観', brain:'頭脳',
+          facts:'記憶した事実', documents:'ドキュメント索引', file_map:'ファイルマップ', devices:'デバイス群', ui_language:'表示言語' },
+    ko: { core:'코어', config:'설정', send:'보내기', ask:'명령이나 질문을 입력하세요…', search:'시스템·파일·웹 검색…',
+          voice_activation:'음성 활성화', microphone:'마이크', pointer_mode:'포인터 모드', pc_control:'PC 제어',
+          continuous:'연속 대화', interpreter:'통역 모드', lion:'MEDO 라이온 모드', council:'전문가 위원회',
+          camera_feed:'카메라 화면', scanlines:'스캔라인', appearance:'외관', brain:'두뇌',
+          facts:'기억된 정보', documents:'문서 색인', file_map:'파일 지도', devices:'기기 목록', ui_language:'인터페이스 언어' },
+    hi: { core:'कोर', config:'सेटिंग्स', send:'भेजें', ask:'कमांड या सवाल लिखें…', search:'सिस्टम, फ़ाइलें, वेब खोजें…',
+          voice_activation:'आवाज़ सक्रियण', microphone:'माइक्रोफ़ोन', pointer_mode:'पॉइंटर मोड', pc_control:'पीसी नियंत्रण',
+          continuous:'निरंतर बातचीत', interpreter:'दुभाषिया मोड', lion:'MEDO लायन मोड', council:'विशेषज्ञ परिषद',
+          camera_feed:'कैमरा फ़ीड', scanlines:'स्कैनलाइन', appearance:'रूप', brain:'मस्तिष्क',
+          facts:'याद रखे तथ्य', documents:'दस्तावेज़ सूची', file_map:'फ़ाइल मानचित्र', devices:'उपकरण बेड़ा', ui_language:'इंटरफ़ेस भाषा' },
+  };
+  function applyLanguage(code) {
+    const dict = I18N[code] || I18N.en;
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const v = dict[el.dataset.i18n]; if (v) el.textContent = v;
+    });
+    document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+      const v = dict[el.dataset.i18nPh]; if (v) el.placeholder = v;
+    });
+    const label = document.getElementById('ui-lang-label');
+    if (label) label.textContent = dict.ui_language || 'Interface language';
+    document.documentElement.lang = code;
+    try { localStorage.setItem('medo-ui-lang', code); } catch { }
+  }
+  (() => {
+    const sel = document.getElementById('cfg-uilang');
+    if (!sel) return;
+    let saved = 'en';
+    try { saved = localStorage.getItem('medo-ui-lang') || CONFIG.uiLanguage || 'en'; } catch { }
+    sel.value = I18N[saved] ? saved : 'en';
+    applyLanguage(sel.value);
+    sel.onchange = () => { applyLanguage(sel.value); log('UI LANGUAGE -> ' + sel.value.toUpperCase()); };
+  })();
 
   /* ---- MEDO LION MODE: no confirmations, PC switch ignored ---- */
   let lionOn = false;

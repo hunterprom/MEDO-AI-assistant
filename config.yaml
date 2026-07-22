@@ -181,7 +181,11 @@ stt:                                # M1
   # Auto-detect clamp: Whisper regularly hears Macedonian as Bulgarian/Serbian
   # and then decodes garbage. Detections outside this list trigger ONE forced
   # re-transcription as "mk". Empty list = no clamp.
-  allowed_languages: ["en", "mk"]
+  # Languages MEDO listens for. This is a CLAMP, not a wish list: Whisper
+  # picks from these only, which is what keeps Macedonian from decoding as
+  # Bulgarian. Trim it to the languages you actually speak and accuracy rises.
+  allowed_languages: ["en", "mk", "de", "fr", "es", "it", "pt", "nl", "pl",
+                      "ru", "tr", "el", "zh", "ja", "ko", "hi"]
   beam_size: 5                      # beam search — more accurate than greedy (1)
   vad_filter: true                  # drop non-speech frames before decoding
   condition_on_previous_text: false # avoids runaway repeats on short clips

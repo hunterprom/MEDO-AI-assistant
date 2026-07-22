@@ -111,6 +111,8 @@ class VoiceLoop:
         # Set by the interruptible player when the user barges in mid-reply;
         # the turn loop reads it to skip the wake word and listen immediately.
         self._barged_in = False
+        #: Language of the utterance being handled, so _speak picks its voice.
+        self._turn_language: str | None = None
 
     # --- model loading -------------------------------------------------------
 
@@ -261,20 +263,29 @@ class VoiceLoop:
 
     # --- speak ---------------------------------------------------------------
 
-    async def _speak(self, text: str) -> float:
+    async def _speak(self, text: str, language: str | None = None) -> float:
         """Synthesize and play (interruptibly); returns synth time (ms).
 
-        Cyrillic replies go to the Macedonian neural voice; anything else (and
-        any edge-tts failure — offline, service hiccup) uses local Piper.
+        The voice comes from the language of the turn — the code Whisper
+        reported for what the user just said — so MEDO answers in the language
+        it was addressed in. Falls back to the script test when no language was
+        detected (an announcement, a typed command), and to local Piper on any
+        edge-tts failure, so going offline costs the accent, not the voice.
         """
         if self._tts is None and self._edge is None:  # no voice — reply shown only
             return 0.0
+        from core import languages
+
         t0 = time.perf_counter()
         wav = None
         sr = 0
-        if self._edge is not None and contains_cyrillic(text):
+        spoken_lang = language or self._turn_language
+        if spoken_lang is None and contains_cyrillic(text):
+            spoken_lang = "mk"          # no detection to go on; trust the script
+        use_edge = self._edge is not None and languages.get(spoken_lang) is not None             and spoken_lang != "en"     # English stays on the local Piper voice
+        if use_edge:
             try:
-                wav, sr = await self._edge.synthesize(text)
+                wav, sr = await self._edge.synthesize(text, spoken_lang)
             except Exception:
                 logger.warning("edge-tts failed; falling back to Piper", exc_info=True)
                 wav = None
@@ -417,6 +428,8 @@ class VoiceLoop:
         await self._sm.transition(AssistantState.THINKING)
         text, lang = await asyncio.to_thread(
             self._stt.transcribe_with_language, normalize_peak(audio))
+        # The reply is spoken in the language of the question.
+        self._turn_language = lang
         if not text.strip():
             return True
         if self._INTERP_EXIT.search(text):
@@ -503,7 +516,9 @@ class VoiceLoop:
 
         speaker_task = asyncio.create_task(stream_speaker())
         try:
-            result = await self._router.route(text, on_delta=on_delta)
+            result = await self._router.route(
+                text, context={"language": self._turn_language},
+                on_delta=on_delta)
         finally:
             tail = stream_buf["text"].strip()
             if streamed["count"] and tail:

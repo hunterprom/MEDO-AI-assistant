@@ -273,10 +273,25 @@ class Router:
         except Exception:  # a broken facts DB must never take down the LLM path
             logger.exception("could not load remembered facts")
             facts = []
+        # Answer in the language the user spoke. The voice loop puts the code
+        # Whisper detected into the context; without it we say nothing and the
+        # model keeps its default (English), which is the right fallback for
+        # typed input.
+        prompt = system_prompt(self._settings.personality, facts)
+        spoken = context.get("language")
+        if spoken and str(spoken).lower() != "en":
+            from core import languages
+
+            name = languages.english_name(spoken, "")
+            if name:
+                prompt += (
+                    f"\n\nThe user is speaking {name}. Reply in {name}, "
+                    f"in plain spoken prose."
+                )
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "content": system_prompt(self._settings.personality, facts),
+                "content": prompt,
             },
             *self.conversation.recent_messages(),   # rolling context for follow-ups
             {"role": "user", "content": text},

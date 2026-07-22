@@ -71,6 +71,9 @@ class HudServer:
             # already the trust boundary — it serves folder paths and config.
             "apiToken": self._settings.remote.token,
             "wakePhrase": _wake_display(self._settings.wakeword.phrase),
+            # Interface language default; the picker persists its own choice
+            # in localStorage, so this only seeds a browser that has none.
+            "uiLanguage": self._settings.hud.language,
             "weather": {
                 "city": self._settings.weather.default_city,
                 "lat": self._settings.weather.latitude,

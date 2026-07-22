@@ -216,6 +216,10 @@ class HudConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 8730
     max_dir_dots: int = 300             # how many folder dots to scatter on the orb
+    #: INTERFACE language, picked in the HUD's CONFIG tab. Independent of what
+    #: you speak: the language you read a screen in and the language you talk
+    #: in are usually different decisions.
+    language: str = "en"
 
 
 class STTConfig(BaseModel):
@@ -230,6 +234,10 @@ class STTConfig(BaseModel):
     # decode. Outside-the-set detections are re-transcribed forced to the
     # first non-English entry. Empty = no clamp.
     allowed_languages: list[str] = Field(default_factory=list)
+    #: Which of core/languages.py MEDO listens for and speaks. Empty => all of
+    #: them. Trimming this tightens Whisper's clamp, which is the single
+    #: biggest lever on accuracy for languages that resemble each other.
+    spoken_languages: list[str] = Field(default_factory=list)
     beam_size: int = 5                   # >1 = beam search; more accurate than greedy
     vad_filter: bool = True              # drop non-speech the recorder let through
     condition_on_previous_text: bool = False  # avoids runaway repeats on short clips

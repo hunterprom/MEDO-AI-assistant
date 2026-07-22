@@ -237,11 +237,20 @@ class Transcriber:
         self._config = config
         self._language = None if config.language in ("", "auto") else config.language
         # Bilingual clamp for auto-detect (see pick_forced_language).
-        self._allowed = [
+        allowed = [
             lang.strip().lower()
             for lang in getattr(config, "allowed_languages", []) or []
             if lang.strip()
         ]
+        if not allowed:
+            # Fall back to the supported set rather than to "anything Whisper
+            # knows": an unclamped decode is what turned spoken Macedonian into
+            # garbled Bulgarian, and the same trap waits for every language
+            # here with a close neighbour.
+            from core import languages
+
+            allowed = languages.codes()
+        self._allowed = allowed
         device, compute_type = _resolve_device(config.device, config.compute_type)
         logger.info(
             "loading faster-whisper %r on %s/%s", config.model, device, compute_type
