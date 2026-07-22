@@ -39,6 +39,18 @@ def test_mirror_only_when_requested():
     assert flipped == int(0.7 * 1919)
 
 
+def test_multi_monitor_origin_lets_cursor_reach_other_screens():
+    # Two 1920x1080 monitors side by side with the SECOND to the LEFT of the
+    # primary => virtual desktop origin x0 = -1920, total width 3840.
+    x0, y0, w, h = -1920, 0, 3840, 1080
+    # hand full-left reaches the left (negative-x) monitor
+    assert to_screen(0.0, 0.5, 1.0, w, h, x0=x0, y0=y0)[0] == -1920
+    # hand full-right reaches the far edge of the right monitor
+    assert to_screen(1.0, 0.5, 1.0, w, h, x0=x0, y0=y0)[0] == -1920 + (w - 1)
+    # a positive-origin desktop (second monitor to the RIGHT/BELOW) offsets too
+    assert to_screen(1.0, 1.0, 1.0, 3840, 2160, x0=0, y0=0)[1] == 2159
+
+
 def test_ema_first_sample_passthrough_then_smooths():
     e = Ema(0.5)
     assert e.update(10, 10) == (10, 10)

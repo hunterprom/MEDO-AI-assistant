@@ -112,6 +112,8 @@ def to_screen(
     width: int,
     height: int,
     mirror_x: bool = False,
+    x0: int = 0,
+    y0: int = 0,
 ) -> tuple[int, int]:
     """Map normalized hand coords (0..1) to clamped pixel coords.
 
@@ -119,6 +121,9 @@ def to_screen(
     frame sweeps the whole screen, so small hand motions reach the edges.
     ``mirror_x`` flips horizontally for *unmirrored* cameras; frames that are
     already selfie-mirrored (``vision.flip: true``) must not flip again.
+    ``(x0, y0)`` is the virtual-desktop origin: with multiple monitors it can be
+    negative (a screen left of / above the primary), so the hand range spans the
+    WHOLE multi-monitor canvas and the cursor can cross onto any display.
     """
     if mirror_x:
         nx = 1.0 - nx
@@ -126,7 +131,7 @@ def to_screen(
     sy = 0.5 + (ny - 0.5) * sensitivity
     sx = min(1.0, max(0.0, sx))
     sy = min(1.0, max(0.0, sy))
-    return int(sx * (width - 1)), int(sy * (height - 1))
+    return x0 + int(sx * (width - 1)), y0 + int(sy * (height - 1))
 
 
 class Ema:

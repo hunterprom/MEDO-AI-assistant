@@ -170,14 +170,22 @@ class GestureEngine:
         pcfg = getattr(c, "pointer", None)
         pointer_ready = False
         mouse = None
+        screen_x0 = screen_y0 = 0
         screen_w = screen_h = 0
         if pcfg is not None and getattr(pcfg, "enabled", False):
             try:
                 from vision import mouse as _mouse
 
-                screen_w, screen_h = _mouse.screen_size()
+                # Full virtual desktop (all monitors) so the cursor can cross
+                # onto a second/third screen; fall back to the primary size.
+                if hasattr(_mouse, "screen_bounds"):
+                    screen_x0, screen_y0, screen_w, screen_h = _mouse.screen_bounds()
+                else:
+                    screen_w, screen_h = _mouse.screen_size()
                 mouse = _mouse
                 pointer_ready = screen_w > 0 and screen_h > 0
+                logger.info("pointer canvas: %dx%d at (%d,%d) [all monitors]",
+                            screen_w, screen_h, screen_x0, screen_y0)
             except Exception as exc:
                 logger.warning("pointer mode unavailable on this system: %s", exc)
         ema = Ema(getattr(pcfg, "ema_alpha", 0.4)) if pointer_ready else None
@@ -280,6 +288,7 @@ class GestureEngine:
                             getattr(pcfg, "sensitivity", 2.5),
                             screen_w, screen_h,
                             mirror_x=not c.flip,
+                            x0=screen_x0, y0=screen_y0,
                         )
                         sx, sy = ema.update(px, py)
                         # A pinch always means drag/click; otherwise the pose picks

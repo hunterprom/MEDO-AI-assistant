@@ -30,6 +30,14 @@ class _CGPoint(ctypes.Structure):
     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
 
 
+class _CGSize(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+
+class _CGRect(ctypes.Structure):
+    _fields_ = [("origin", _CGPoint), ("size", _CGSize)]
+
+
 _cg = ctypes.CDLL(
     "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
 )
@@ -59,6 +67,13 @@ _cg.CGDisplayPixelsWide.restype = ctypes.c_size_t
 _cg.CGDisplayPixelsWide.argtypes = [ctypes.c_uint32]
 _cg.CGDisplayPixelsHigh.restype = ctypes.c_size_t
 _cg.CGDisplayPixelsHigh.argtypes = [ctypes.c_uint32]
+# Multi-monitor: enumerate active displays and union their global bounds.
+_cg.CGGetActiveDisplayList.restype = ctypes.c_int32
+_cg.CGGetActiveDisplayList.argtypes = [
+    ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32),
+]
+_cg.CGDisplayBounds.restype = _CGRect
+_cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
 _cg.AXIsProcessTrusted.restype = ctypes.c_bool
 _cf.CFRelease.argtypes = [ctypes.c_void_p]
 
@@ -107,6 +122,37 @@ def screen_size() -> tuple[int, int]:
         )
     display = _cg.CGMainDisplayID()
     return int(_cg.CGDisplayPixelsWide(display)), int(_cg.CGDisplayPixelsHigh(display))
+
+
+def screen_bounds() -> tuple[int, int, int, int]:
+    """Virtual-desktop bounds (x0, y0, width, height) across ALL monitors.
+
+    CGEvent mouse coords live in one global space (main display top-left at
+    origin, other displays offset — possibly negative), so the union of every
+    display's CGDisplayBounds is the full canvas the cursor can roam. Pointer
+    mode maps the hand across this, so gestures reach a second/third monitor.
+    Falls back to the main display when enumeration fails.
+    """
+    try:
+        count = ctypes.c_uint32(0)
+        _cg.CGGetActiveDisplayList(0, None, ctypes.byref(count))
+        n = max(1, count.value)
+        ids = (ctypes.c_uint32 * n)()
+        _cg.CGGetActiveDisplayList(n, ids, ctypes.byref(count))
+        minx = miny = float("inf")
+        maxx = maxy = float("-inf")
+        for i in range(count.value):
+            r = _cg.CGDisplayBounds(ids[i])
+            minx = min(minx, r.origin.x)
+            miny = min(miny, r.origin.y)
+            maxx = max(maxx, r.origin.x + r.size.width)
+            maxy = max(maxy, r.origin.y + r.size.height)
+        if maxx > minx and maxy > miny:
+            return int(minx), int(miny), int(maxx - minx), int(maxy - miny)
+    except Exception:
+        logger.debug("multi-display enumeration failed; using main display", exc_info=True)
+    w, h = screen_size()
+    return 0, 0, w, h
 
 
 def move(x: int, y: int) -> None:

@@ -35,6 +35,25 @@ def screen_size() -> tuple[int, int]:
     return int(u.GetSystemMetrics(0)), int(u.GetSystemMetrics(1))
 
 
+# SM_*VIRTUALSCREEN: the bounding box of ALL monitors. x/y can be negative when
+# a monitor sits left of / above the primary. SetCursorPos accepts these virtual
+# coords, so mapping the hand across this box lets the cursor reach any monitor.
+_SM_XVIRTUALSCREEN, _SM_YVIRTUALSCREEN = 76, 77
+_SM_CXVIRTUALSCREEN, _SM_CYVIRTUALSCREEN = 78, 79
+
+
+def screen_bounds() -> tuple[int, int, int, int]:
+    """Virtual-desktop bounds (x0, y0, width, height) across all monitors."""
+    u = _user32()
+    w = int(u.GetSystemMetrics(_SM_CXVIRTUALSCREEN))
+    h = int(u.GetSystemMetrics(_SM_CYVIRTUALSCREEN))
+    if w > 0 and h > 0:
+        return (int(u.GetSystemMetrics(_SM_XVIRTUALSCREEN)),
+                int(u.GetSystemMetrics(_SM_YVIRTUALSCREEN)), w, h)
+    w, h = screen_size()
+    return 0, 0, w, h
+
+
 def move(x: int, y: int) -> None:
     _user32().SetCursorPos(int(x), int(y))
 

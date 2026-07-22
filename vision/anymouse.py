@@ -26,6 +26,14 @@ def screen_size() -> tuple[int, int]:
     return int(size.width), int(size.height)
 
 
+def screen_bounds() -> tuple[int, int, int, int]:
+    """Virtual-desktop bounds (x0, y0, w, h). pyautogui only knows the primary
+    display, so this is the primary box — multi-monitor spanning needs a native
+    backend (win/mac). Kept so the engine can call screen_bounds() uniformly."""
+    w, h = screen_size()
+    return 0, 0, w, h
+
+
 def move(x: int, y: int) -> None:
     pyautogui.moveTo(int(x), int(y), _pause=False)
 
