@@ -183,6 +183,26 @@ class PointerConfig(BaseModel):
     pose_actions: dict[str, str] = Field(default_factory=dict)  # how far off 90 deg an L (thumb+index) may be
 
 
+class GestureRecognitionConfig(BaseModel):
+    """Exact-signature gesture matching — see vision/gestures.py.
+
+    Named ``gesture_recognition`` and not ``gestures``: ``vision.gestures`` is
+    already the gesture-to-utterance map, and reusing it would silently break
+    that block.
+    """
+
+    #: Minimum depth-inside-band across a signature's required digits. A finger
+    #: sitting exactly on its threshold scores 0, dead-straight scores 1, and a
+    #: gesture scores the MINIMUM of the digits it requires — so this is "every
+    #: required finger is comfortably inside its band", not an average.
+    min_confidence: float = 0.85
+    #: Consecutive frames the same signature must hold before it fires.
+    hold_frames: int = 3
+    #: After firing, the hand must leave the pose before it can fire again.
+    #: Off means a held pose repeats every cooldown.
+    hysteresis: bool = True
+
+
 class BenchConfig(BaseModel):
     """Second workbench camera (M10, skills/bench.py) — on-demand only.
 
@@ -208,6 +228,8 @@ class VisionConfig(BaseModel):
     stability_frames: int = 6               # consecutive frames to confirm a gesture
     cooldown_s: float = 2.0                 # min gap before re-firing a gesture
     pointer: PointerConfig = Field(default_factory=PointerConfig)
+    gesture_recognition: GestureRecognitionConfig = Field(
+        default_factory=GestureRecognitionConfig)
     bench: BenchConfig = Field(default_factory=BenchConfig)
     # Screen agent (skills/screen_agent.py): max actions per task before it
     # stops itself. Gated by the PC-control switch + a spoken confirmation.

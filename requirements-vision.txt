@@ -11,3 +11,8 @@ mediapipe>=0.10.18,<0.10.30   # hand landmarks; pins numpy<2
 opencv-python>=4.9            # camera capture + drawing
 numpy<2                       # required by mediapipe
 PyYAML>=6.0                   # read config.yaml (vision + remote sections)
+
+# --- optional: click snapping (vision/snap.py) ---
+# Windows UI Automation, used to find what is clickable near the cursor so a
+# pinch lands on the button rather than just below it. Absent = clicks stay raw.
+uiautomation>=2.0; sys_platform == "win32"

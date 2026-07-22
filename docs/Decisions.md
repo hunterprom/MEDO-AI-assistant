@@ -94,3 +94,40 @@ Why the super project is shaped the way it is.
   can't set one (EventSource/MJPEG-style embeds); auth fails CLOSED when a
   LAN request arrives before a token exists. `remote.auth_enabled: false`
   restores the old behavior, documented as unsafe.
+
+## Click snapping: preview the target instead of snapping blind
+
+Pointer mode drives the cursor from the index fingertip, and pinching pulls
+that fingertip down as the thumb comes up to meet it. The click therefore lands
+tens of pixels below the button being aimed at.
+
+**Decision: snap to the nearest clickable element, but show which one first.**
+
+The obvious implementation — silently press the nearest button — was rejected.
+A cursor that sometimes clicks somewhere other than where it is drawn destroys
+the one thing a pointer must have, which is that it points. You would stop
+trusting it, and an assistant you have to second-guess is worse than one that
+misses by 30 px. So the chosen target is outlined on screen and the click waits
+`snap_confirm_ms` (default 250 ms) before firing. A wrong pick is visible and
+abortable; set the delay to 0 once you trust it.
+
+Snapping is also opt-out at three levels: disabled in config, nothing within
+the radius, or no accessibility data available all fall back to clicking the
+raw cursor position — the pre-existing behaviour. The feature can only ever
+add precision, never take away a click that used to work.
+
+**Decision: the accessibility tree, not pixel template matching.**
+
+Template matching would have to be told what a button looks like, and "what a
+button looks like" is different in every application, theme, and DPI setting on
+the machine — it would work on the demo and fail on the user's actual tools. UI
+Automation is the OS telling us what is actually clickable, including the
+control's real bounding box and role, which is exactly the question being
+asked. It also degrades honestly: an app that exposes no accessibility data
+reports nothing, and we click raw, rather than a matcher confidently finding a
+"button" in a texture.
+
+The tree is *probed*, not walked: `ControlFromPoint` at the cursor plus two
+rings of eight points. Walking a window's full element tree is far too slow to
+sit inside a click, and the probe answers the only question that matters —
+what is reachable at these pixels.

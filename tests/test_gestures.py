@@ -127,9 +127,11 @@ def pinch_hand(touching=True):
     (dict(pinky=True), PINKY_UP),         # pinky only = volume down in pointer mode
     (dict(index=True, middle=True), VICTORY),
     (dict(ring=True), UNKNOWN),           # a lone ring finger stays unknown
-    # THREE: index+middle+ring up, pinky folded — thumb must not matter.
+    # THREE: index+middle+ring up, pinky folded, THUMB TUCKED. The signature
+    # table specifies every digit, so a thumb sticking out is no longer three —
+    # it matches nothing, rather than silently resolving to the nearest pose.
     (dict(index=True, middle=True, ring=True), THREE),
-    (dict(thumb=True, index=True, middle=True, ring=True), THREE),
+    (dict(thumb=True, index=True, middle=True, ring=True), UNKNOWN),
     # ROCK: index+pinky up, middle+ring folded — thumb must not matter.
     (dict(index=True, pinky=True), ROCK),
     (dict(thumb=True, index=True, pinky=True), ROCK),
@@ -194,7 +196,11 @@ def test_an_ambiguous_thumb_alone_blocks_the_gesture():
 
 def test_thresholds_are_tunable():
     # Widen "extended" far enough and the half-closed fingers count as up again.
-    assert classify_landmarks(closing_fist(), extended_min_deg=110.0) == FOUR
+    # The confidence floor has to come down with it: a finger only just inside a
+    # widened band is, by definition, barely holding the state — which is
+    # exactly what confidence measures.
+    assert classify_landmarks(closing_fist(), extended_min_deg=110.0,
+                              min_confidence=0.0) == FOUR
 
 
 # --- ROCK needs a real spread, and the new L_SHAPE ---------------------------
@@ -220,15 +226,28 @@ def test_l_shape_needs_a_right_angle_between_thumb_and_index():
 
 
 def test_l_shape_needs_the_other_fingers_curled():
-    # Same thumb/index corner but with the middle finger up => not an L.
+    """Same thumb/index corner with the middle finger up is not an L.
+
+    Nor is it a victory sign: that signature tucks the thumb. A pose matching
+    no signature is UNKNOWN — the table has no "nearest gesture" fallback, and
+    that absence is the feature.
+    """
     p = hand(thumb=True, index=True, middle=True, thumb_splay_deg=-120.0)
-    assert classify_landmarks(p) == VICTORY
+    assert classify_landmarks(p) == UNKNOWN
+    # Tuck the thumb and it becomes a clean victory.
+    assert classify_landmarks(hand(index=True, middle=True)) == VICTORY
 
 
-def test_pinch_touching_tips_beats_open_palm():
-    # All five digits measure "extended", but the touching thumb/index tips
-    # must classify as PINCH — the rule runs before the OPEN_PALM check.
-    assert classify_landmarks(pinch_hand(touching=True)) == PINCH
+def test_pinch_needs_the_other_fingers_curled():
+    """PINCH is thumb and index together with the hand closed.
+
+    It used to require middle/ring/pinky EXTENDED — an OK-sign, not a pinch —
+    which meant the natural pinching pose classified as something else.
+    """
+    # Tips touching but every finger still out: an OK-sign, not a pinch.
+    assert classify_landmarks(pinch_hand(touching=True)) == OPEN_PALM
+    # Tips touching with the hand closed IS the pinch.
+    assert classify_landmarks(pointing_pinch(touching=True)) == PINCH
 
 
 def test_spread_thumb_and_index_is_not_a_pinch():
@@ -252,8 +271,12 @@ def pointing_pinch(touching=True):
 
 
 def test_pointer_click_pinch_fires_from_pointing_pose():
-    # The decoupled click detector must fire even though the pose is not PINCH.
-    assert classify_landmarks(pointing_pinch(touching=True)) != PINCH
+    """The click detector is independent of classification.
+
+    It measures only the thumb-to-index gap, so it fires from the natural
+    pointing-and-pinching pose whatever the table calls that hand — pointer
+    mode must not depend on a gesture name resolving.
+    """
     assert index_thumb_pinch(pointing_pinch(touching=True)) is True
     assert index_thumb_pinch(pointing_pinch(touching=False)) is False
 
@@ -280,3 +303,167 @@ def test_stabilizer_resets_after_neutral_pose():
     assert s.update(UNKNOWN) is None
     assert s.update(THUMBS_UP) is None
     assert s.update(THUMBS_UP) == THUMBS_UP
+
+
+# --- exact signatures, confidence, debounce, hysteresis ------------------------
+#
+# The A2 contract: a gesture is an exact per-finger signature. One finger in the
+# wrong state is not "close enough", a pose held loosely is not confident, and a
+# pose held steady is ONE event, not a stream of them.
+
+
+def test_every_signature_has_a_complete_finger_spec():
+    from vision.gestures import ANY, CURLED, EXTENDED, FINGERS, SIGNATURES
+
+    assert SIGNATURES, "the table is the only definition of a gesture"
+    for sig in SIGNATURES:
+        states = sig.states()
+        assert set(states) == set(FINGERS), sig.name
+        assert all(v in (EXTENDED, CURLED, ANY) for v in states.values()), sig.name
+        assert sig.doc, f"{sig.name} has no description"
+
+
+def test_signature_names_are_unique():
+    from vision.gestures import SIGNATURES
+
+    names = [s.name for s in SIGNATURES]
+    assert len(names) == len(set(names))
+
+
+@pytest.mark.parametrize("builder,expected", [
+    (dict(index=True, middle=True, ring=True), THREE),
+    (dict(index=True, middle=True, ring=True, pinky=True), FOUR),
+    (dict(index=True, middle=True), VICTORY),
+    (dict(index=True, pinky=True), ROCK),
+    (dict(thumb=True, index=True, middle=True, ring=True, pinky=True), OPEN_PALM),
+    (dict(), FIST),
+])
+def test_the_exact_signature_fires(builder, expected):
+    assert classify_landmarks(hand(**builder)) == expected
+
+
+@pytest.mark.parametrize("builder", [
+    dict(index=True, middle=True, ring=True, thumb=True),   # three + thumb out
+    dict(index=True, middle=True, pinky=True),              # victory + pinky
+    dict(middle=True, ring=True, pinky=True),               # four minus the index
+    dict(middle=True, pinky=True),                          # wrong two fingers
+    dict(ring=True),                                        # a lone ring finger
+    dict(thumb=True, middle=True),                          # thumb + middle only
+])
+def test_one_finger_off_does_not_fire(builder):
+    """No nearest-match fallback: a pose that is not a signature is nothing."""
+    assert classify_landmarks(hand(**builder)) == UNKNOWN
+
+
+def test_sub_threshold_confidence_does_not_fire():
+    """Right shape, fingers barely inside their bands -> not confident enough."""
+    from vision.gestures import classify_with_confidence
+
+    # Every finger sits 2 degrees inside its band: the shape is a clean THREE.
+    marginal = hand(index=True, middle=True, ring=True,
+                    bend={"index": 162.0, "middle": 162.0, "ring": 162.0,
+                          "pinky": 98.0, "thumb": 98.0})
+    name, confidence = classify_with_confidence(marginal, min_confidence=0.0)
+    assert name == THREE and confidence < 0.2, "should read as a weak match"
+    # With the shipped floor it is rejected outright.
+    assert classify_landmarks(marginal) == UNKNOWN
+    # Lower the floor and the same hand is accepted — the knob works.
+    assert classify_landmarks(marginal, min_confidence=0.05) == THREE
+
+
+def test_confidence_is_the_weakest_required_finger():
+    from vision.gestures import CURLED, EXTENDED, finger_confidence
+
+    assert finger_confidence(180.0, EXTENDED, 160.0, 100.0) == 1.0
+    assert finger_confidence(160.0, EXTENDED, 160.0, 100.0) == 0.0
+    assert finger_confidence(40.0, CURLED, 160.0, 100.0) == 1.0    # a real curl
+    assert finger_confidence(100.0, CURLED, 160.0, 100.0) == 0.0
+
+
+# --- debounce ------------------------------------------------------------------
+
+
+def test_two_frames_do_not_fire_but_three_do():
+    stabilizer = GestureStabilizer(stability_frames=3, cooldown_frames=0)
+    assert stabilizer.update(FIST) is None          # 1
+    assert stabilizer.update(FIST) is None          # 2
+    assert stabilizer.update(FIST) == FIST          # 3
+
+
+def test_a_broken_run_restarts_the_count():
+    """One misread frame in a stream must not accumulate toward a fire."""
+    stabilizer = GestureStabilizer(stability_frames=3, cooldown_frames=0)
+    stabilizer.update(FIST)
+    stabilizer.update(UNKNOWN)                      # hand in transit
+    assert stabilizer.update(FIST) is None
+    assert stabilizer.update(FIST) is None
+    assert stabilizer.update(FIST) == FIST
+
+
+# --- hysteresis ----------------------------------------------------------------
+
+
+def test_a_held_gesture_fires_once_not_repeatedly():
+    stabilizer = GestureStabilizer(stability_frames=2, cooldown_frames=0)
+    fired = [stabilizer.update(VICTORY) for _ in range(12)]
+    assert fired.count(VICTORY) == 1, "holding a pose is one event"
+
+
+def test_it_re_arms_only_after_the_pose_is_released():
+    stabilizer = GestureStabilizer(stability_frames=2, cooldown_frames=0)
+    assert [stabilizer.update(VICTORY) for _ in range(4)].count(VICTORY) == 1
+    stabilizer.update(UNKNOWN)                      # hand relaxes: re-armed
+    assert [stabilizer.update(VICTORY) for _ in range(2)].count(VICTORY) == 1
+
+
+def test_switching_straight_to_another_gesture_releases_the_first():
+    stabilizer = GestureStabilizer(stability_frames=2, cooldown_frames=0)
+    [stabilizer.update(VICTORY) for _ in range(2)]
+    assert [stabilizer.update(FIST) for _ in range(2)].count(FIST) == 1
+
+
+def test_reset_clears_the_latch():
+    stabilizer = GestureStabilizer(stability_frames=2, cooldown_frames=0)
+    [stabilizer.update(FIST) for _ in range(2)]
+    stabilizer.reset()
+    assert [stabilizer.update(FIST) for _ in range(2)].count(FIST) == 1
+
+
+# --- every gesture is reachable ------------------------------------------------
+
+
+def test_every_defined_gesture_is_dispatchable():
+    """The "not all gestures apply" bug: defined in the table, bound to nothing.
+
+    Anything reported UNBOUND classifies perfectly and then does nothing, which
+    is indistinguishable from broken recognition when you are waving at a camera.
+    """
+    from vision.gestures import dispatch_report
+    from vision.run import DEFAULT_GESTURES
+
+    unbound = [name for name, where in dispatch_report(utterances=DEFAULT_GESTURES)
+               if where == "UNBOUND"]
+    assert not unbound, f"defined but unreachable: {unbound}"
+
+
+def test_the_list_cli_reports_success_when_everything_is_bound():
+    from vision.gestures import _main
+
+    assert _main(["--list"]) == 0
+
+
+def test_two_hand_zoom_needs_both_hands():
+    from vision.gestures import ZOOM, classify_pair
+
+    one = hand(thumb=True, index=True, thumb_splay_deg=-150.0)
+    assert classify_pair([one])[0] == UNKNOWN, "one hand is not a two-hand gesture"
+    name, _confidence = classify_pair([one, one])
+    assert name == ZOOM
+
+
+def test_two_hand_zoom_rejects_a_mismatched_pair():
+    from vision.gestures import classify_pair
+
+    zoom_hand = hand(thumb=True, index=True, thumb_splay_deg=-150.0)
+    other = hand(index=True, middle=True)
+    assert classify_pair([zoom_hand, other])[0] == UNKNOWN

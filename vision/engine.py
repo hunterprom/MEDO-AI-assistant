@@ -51,6 +51,7 @@ from vision.gestures import (
     GestureRecognizer,
     index_thumb_pinch,
 )
+from vision.snap import UiaProvider, draw_highlight, resolve_click
 from vision.pointer import (
     DRAG,
     MOVE,
@@ -215,6 +216,12 @@ class GestureEngine:
         vol_dn_gate = ClickDebouncer(vol_interval)
         prev_iy: float | None = None   # previous fingertip y, for scroll/zoom deltas
         pinch_down = False             # is the left button currently held (drag)?
+        # Accessibility provider for click snapping. Absent (or unusable) means
+        # every click stays exactly where the cursor is, as before.
+        snap_provider = UiaProvider() if getattr(pcfg, "snap_enabled", True) else None
+        if snap_provider is not None and not snap_provider.available:
+            logger.info("click snapping on, but no UI Automation — clicks stay raw")
+            snap_provider = None
         was_pointer = False
 
         try:
@@ -308,10 +315,32 @@ class GestureEngine:
                         try:
                             if action == DRAG:
                                 if not pinch_down:
+                                    # Snap BEFORE pressing: the pinch drags the
+                                    # fingertip down, so the raw point sits low by
+                                    # the time the button goes down.
+                                    decision = resolve_click(
+                                        int(sx), int(sy),
+                                        enabled=bool(getattr(pcfg, "snap_enabled", True)),
+                                        radius_px=int(getattr(pcfg, "snap_radius_px", 100)),
+                                        above_bias_px=float(
+                                            getattr(pcfg, "snap_above_bias_px", 20.0)),
+                                        confirm_ms=float(
+                                            getattr(pcfg, "snap_confirm_ms", 250)),
+                                        provider=snap_provider,
+                                        highlight=(draw_highlight
+                                                   if getattr(pcfg, "snap_highlight", True)
+                                                   else None),
+                                    )
+                                    mouse.move(decision.x, decision.y)
                                     mouse.press_left()
                                     pinch_down = True
-                                    last_fired, last_utterance = "pinch", "drag / click"
-                                mouse.move(int(sx), int(sy))
+                                    last_fired = "pinch"
+                                    last_utterance = (
+                                        f"click -> {decision.target.name[:24]}"
+                                        if decision.snapped and decision.target
+                                        else "drag / click")
+                                else:
+                                    mouse.move(int(sx), int(sy))
                             else:
                                 if pinch_down:
                                     mouse.release_left()

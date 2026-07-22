@@ -97,6 +97,34 @@ vision:                             # camera hand-gesture control (sidecar proce
   min_tracking_confidence: 0.5
   stability_frames: 6               # consecutive frames to confirm a gesture
   cooldown_s: 2.0                   # min gap before re-firing a gesture
+  # --- exact gesture signatures (vision/gestures.py) --------------------------
+  # Every gesture is an EXACT per-finger signature, not a heuristic. A pose that
+  # does not match every required digit is UNKNOWN — there is no "nearest
+  # gesture" fallback, which is what stopped in-between poses firing actions.
+  #   E = extended  C = curled  . = don't care        T I M R P
+  #   pinch      E E C C C   + thumb/index tips touching
+  #   l_shape    E E C C C   + tips apart, thumb-index at ~90 deg   -> next tab
+  #   zoom       E E C C C   + tips apart, BOTH HANDS               -> zoom
+  #   rock       . E C C E   + index/pinky splayed >= 50 deg        -> zoom
+  #   victory    C E E C C   + index/middle splayed                 -> scroll
+  #   three      C E E E C                                          -> right click
+  #   four       C E E E E                                          -> taskbar
+  #   open_palm  E E E E E
+  #   thumbs_up  E C C C C                                          -> volume up
+  #   pinky_up   C C C C E                                          -> volume down
+  #   point_up   . E C C C   + tips apart, not an L                 -> move cursor
+  #   fist       C C C C C                                          -> idle / exit
+  # Run  .venv\Scripts\python -m vision.gestures --list  to print this table
+  # live, with each gesture's binding — anything shown UNBOUND is defined but
+  # unreachable.
+  gesture_recognition:
+    min_confidence: 0.85            # how deep inside its band every REQUIRED finger
+                                    # must sit (0 = on the threshold, 1 = perfect).
+                                    # gestures hard to trigger? lower to ~0.7
+    hold_frames: 3                  # consecutive frames the same signature must hold
+                                    # before it fires. raise if gestures still flicker
+    hysteresis: true                # after firing, the hand must leave the pose before
+                                    # it can fire again. false = a held pose repeats
   pointer:                          # gesture mouse control ("pointer on|off", HUD toggle)
     enabled: true                   # feature available (runtime toggle always starts OFF)
     sensitivity: 2.5                # hand movement -> cursor movement amplification

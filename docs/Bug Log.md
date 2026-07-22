@@ -59,3 +59,37 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
   port 8710.
 - v1's two-finger chat scroll and open-palm-wake/fist-barge-in gestures are
   not carried over yet (need voice-loop integration). → [[Roadmap]]
+
+## Gestures fired on ambiguous poses; some gestures never dispatched
+
+**Symptom.** Two complaints that turned out to share a cause. Gestures fired
+while a hand was moving *between* poses — closing a fist would flash through
+the horns pose and fire a zoom. And several defined gestures "never applied":
+you could make them perfectly and nothing happened.
+
+**Cause.** Recognition was an if-chain of loose heuristics. A finger counted as
+extended if its tip was farther from the wrist than its middle joint, which is
+true for every pose between fully open and fully closed — so a hand in transit
+satisfied real branches by accident. Worse, the chain's order was the only
+thing disambiguating overlapping poses, and that order was implicit.
+
+The second half was simpler and more embarrassing: some gestures existed in the
+classifier but were bound to no action at all. They classified correctly and
+then did nothing, which from the far side of a camera is indistinguishable from
+broken recognition.
+
+**Fix.** Replaced the heuristics with an explicit `GestureSignature` table —
+one entry per gesture, an exact state for all five digits, plus geometric
+constraints. A pose matching no signature is UNKNOWN; there is deliberately no
+"nearest gesture" fallback. Added a confidence score (how deep inside its band
+each *required* finger sits, taking the minimum), a hold of 3 consecutive
+frames, and hysteresis so a held pose is one event rather than a stream.
+
+For the dispatch half: `dispatch_report()` maps every signature to where it
+goes, `python -m vision.gestures --list` prints it, and the sidecar logs it at
+startup. Anything UNBOUND is now visible instead of silently inert. A test
+fails the build if any gesture is defined but unreachable.
+
+**Also caught while fixing it:** in permissive (non-strict) mode a resolved
+ambiguous finger scored zero confidence, so the mode that exists to be lenient
+rejected everything.

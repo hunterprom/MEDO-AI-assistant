@@ -82,6 +82,15 @@ class PointerRunConfig:
 
 
 @dataclass
+class GestureRecognitionRunConfig:
+    """Mirrors core.config.GestureRecognitionConfig (separate venv, no import)."""
+
+    min_confidence: float = 0.85
+    hold_frames: int = 3
+    hysteresis: bool = True
+
+
+@dataclass
 class VisionRunConfig:
     """Plain config for the sidecar (mirrors core.config.VisionConfig fields)."""
 
@@ -95,6 +104,8 @@ class VisionRunConfig:
     cooldown_s: float = 2.0
     gestures: dict = field(default_factory=lambda: dict(DEFAULT_GESTURES))
     pointer: PointerRunConfig = field(default_factory=PointerRunConfig)
+    gesture_recognition: GestureRecognitionRunConfig = field(
+        default_factory=GestureRecognitionRunConfig)
     bench_enabled: bool = False         # M10: on-demand 2nd camera (/bench.jpg)
     bench_index: int = 1
 
@@ -109,6 +120,7 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
     v = data.get("vision", {}) or {}
     r = data.get("remote", {}) or {}
     p = v.get("pointer", {}) or {}
+    g = v.get("gesture_recognition", {}) or {}
     cfg = VisionRunConfig(
         camera_index=v.get("camera_index", 0),
         stream_port=v.get("stream_port", 8731),
@@ -121,6 +133,11 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
         bench_enabled=bool((v.get("bench", {}) or {}).get("enabled", False)),
         bench_index=int((v.get("bench", {}) or {}).get("camera_index", 1)),
         gestures={**DEFAULT_GESTURES, **(v.get("gestures", {}) or {})},
+        gesture_recognition=GestureRecognitionRunConfig(
+            min_confidence=float(g.get("min_confidence", 0.85)),
+            hold_frames=int(g.get("hold_frames", 3)),
+            hysteresis=bool(g.get("hysteresis", True)),
+        ),
         pointer=PointerRunConfig(
             enabled=bool(p.get("enabled", True)),
             sensitivity=float(p.get("sensitivity", 2.5)),
@@ -320,6 +337,22 @@ def main() -> None:
     cfg, api_url = load_config(Path(args.config))
     if args.api:
         api_url = args.api.rstrip("/")
+
+    # Say out loud what recognition loaded and where each gesture goes. The
+    # "some gestures never fire" bug was invisible precisely because nothing
+    # ever stated which ones were bound.
+    try:
+        from vision.gestures import dispatch_report
+
+        report = dispatch_report(cfg.pointer.pose_actions, cfg.gestures)
+        bound = [f"{name}->{where.split(',')[0]}" for name, where in report
+                 if where != "UNBOUND"]
+        logger.info("gestures loaded (%d): %s", len(report), ", ".join(bound))
+        missing = [name for name, where in report if where == "UNBOUND"]
+        if missing:
+            logger.warning("gestures defined but UNBOUND: %s", ", ".join(missing))
+    except Exception:
+        logger.debug("could not report gesture bindings", exc_info=True)
 
     poster = make_gesture_poster(api_url, load_api_token(Path(args.config)))
     engine = GestureEngine(cfg, poster)
