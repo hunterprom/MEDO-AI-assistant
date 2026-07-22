@@ -399,3 +399,35 @@ def test_resolve_site_by_url():
     assert resolve_site_by_url("https://open.spotify.com/search/x").key == "spotify"
     assert resolve_site_by_url("https://example.com/") is None
     assert resolve_site_by_url("") is None
+
+
+# --- "play me something interesting" ------------------------------------------
+#
+# A mood is not a topic, but it IS a search: "interesting video" is a perfectly
+# good YouTube query, and asking "about what?" of someone who wants to be
+# entertained is the wrong answer.
+
+
+@pytest.mark.parametrize("phrase,expected", [
+    ("play me an interesting video", "interesting video"),
+    ("play me a funny video", "funny video"),
+    ("play something interesting", "interesting video"),
+    ("play something entertaining", "entertaining video"),
+])
+@pytest.mark.asyncio
+async def test_a_mood_becomes_the_search(phrase, expected):
+    from skills.sites import PlaySkill
+
+    session = _PlaySession()
+    skill = PlaySkill(opener=lambda u: True, session=session)
+    r = await skill.execute(SkillRequest(text=phrase, match=skill.match(phrase)))
+    assert r.success, phrase
+    assert quote_plus(expected) in session.went[0], session.went
+
+
+def test_mood_patterns_do_not_steal_local_playback():
+    from skills.sites import PlaySkill
+
+    skill = PlaySkill(opener=lambda u: True)
+    for phrase in ("play some music", "play the song", "pause the music"):
+        assert skill.match(phrase) is None, phrase

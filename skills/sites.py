@@ -553,6 +553,14 @@ class PlaySkill(Skill):
             # YouTube. MediaSkill keeps "play the music" (local playback).
             re.compile(r"\bplay\s+(?:me\s+)?(?:a\s+|some\s+|the\s+)?videos?\s+"
                        r"(?:of|about|with|for|on)\s+(?P<qv>.+)", re.IGNORECASE),
+            # "play me an interesting video" / "play something funny" — the
+            # user named a mood, not a topic. That IS the search: "interesting
+            # video" is a perfectly good YouTube query, and asking "about
+            # what?" when someone wants to be entertained is the wrong answer.
+            re.compile(r"\bplay\s+(?:me\s+)?(?:an?|some|any)\s+(?P<qadj>[\w\s-]{3,40}?)"
+                       r"\s+(?:video|clip)s?\b", re.IGNORECASE),
+            re.compile(r"\bplay\s+(?:me\s+)?(?:something|anything)\s+"
+                       r"(?P<qmood>[\w\s-]{3,40}?)\s*[.!?]*$", re.IGNORECASE),
             # MK: "пушти релаксирачки џез на јутјуб"
             re.compile(rf"\b(?:пушти|свири|пуштиј)(?:\s+(?:ми|ме))?\s+(?P<qm>.+?)\s+"
                        rf"(?:на|во|од)\s+(?P<sitem>{alt})\b", re.IGNORECASE),
@@ -567,7 +575,12 @@ class PlaySkill(Skill):
         spoken = (request.args.get("site") or gd.get("site")
                   or gd.get("sitem") or "")
         query = clean_query(request.args.get("query") or gd.get("q")
-                            or gd.get("qv") or gd.get("qm") or gd.get("qmv") or "")
+                            or gd.get("qv") or gd.get("qm") or gd.get("qmv")
+                            or gd.get("qadj") or gd.get("qmood") or "")
+        # "play me an interesting video" -> search "interesting video": the
+        # bare adjective is a weak query, the noun is what makes it one.
+        if (gd.get("qadj") or gd.get("qmood")) and query and "video" not in query:
+            query = f"{query} video"
         # "play the first video" / "play that": no site, no query — the user
         # means the page already on screen. Searching for the literal words
         # "first video" (which is what this used to do) is never what was meant.

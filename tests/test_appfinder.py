@@ -130,10 +130,20 @@ async def test_opening_a_discovered_app_launches_its_shortcut(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_opening_something_not_installed_fails_cleanly(monkeypatch):
+async def test_opening_something_not_installed_is_left_for_the_llm(monkeypatch):
+    """The fast path declines rather than answering "I couldn't find blender".
+
+    Matching is gated on discovery now, so an app nobody has never reaches this
+    skill — the router carries on and the model can say something useful about
+    it. Reached directly (an LLM tool call), it still fails cleanly.
+    """
     opened = []
+    monkeypatch.setattr("skills.appfinder.installed_apps", lambda force=False: APPS)
     monkeypatch.setattr("skills.appfinder.open_path", lambda p: opened.append(p))
-    result = await _say(OpenDiscoveredAppSkill(), "open blender", monkeypatch)
+    skill = OpenDiscoveredAppSkill()
+
+    assert skill.match("open blender") is None
+    result = await skill.execute(SkillRequest(text="", args={"app": "blender"}))
     assert result.success is False and opened == []
 
 
@@ -262,3 +272,30 @@ async def test_a_failed_install_reports_why(monkeypatch):
 
 def test_installing_is_gated_by_the_pc_switch():
     assert InstallAppSkill().controls_pc is True
+
+
+# --- the fallback must not swallow ordinary sentences -------------------------
+#
+# "open <anything>" has to be broad, so on its own it claimed any sentence
+# containing run/start: "start over please" became the app "over please", and
+# "…to run it to find me an interesting video" became an app name in full.
+
+
+@pytest.mark.parametrize("phrase", [
+    "start over please",
+    "run the numbers for me",
+    "use skills from the metal project to run it to find me an interesting video",
+    "open the pod bay doors",
+    "start a timer for five minutes",
+])
+def test_the_fallback_passes_on_sentences_that_name_no_app(monkeypatch, phrase):
+    monkeypatch.setattr("skills.appfinder.installed_apps", lambda force=False: APPS)
+    assert OpenDiscoveredAppSkill().match(phrase) is None, phrase
+
+
+@pytest.mark.parametrize("phrase", [
+    "open obsidian", "launch bambu studio", "start google chrome",
+])
+def test_the_fallback_still_claims_real_apps(monkeypatch, phrase):
+    monkeypatch.setattr("skills.appfinder.installed_apps", lambda force=False: APPS)
+    assert OpenDiscoveredAppSkill().match(phrase) is not None, phrase

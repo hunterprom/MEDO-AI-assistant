@@ -348,6 +348,24 @@ class OpenDiscoveredAppSkill(Skill):
                    re.IGNORECASE),
     ]
 
+    def match(self, text: str):
+        """Claim the utterance only when the name resolves to a real app.
+
+        The pattern above has to be broad — an app can be called anything — so
+        on its own it swallows any sentence containing "run" or "start":
+        "start over please" became the app "over please", and "…to run it to
+        find me an interesting video" became an app name in full. Matching is
+        therefore gated on discovery: if nothing by that name is installed,
+        this skill never claimed the sentence and the router carries on to the
+        LLM, which is the right home for those.
+        """
+        found = super().match(text)
+        if found is None:
+            return None
+        groups = found.groupdict()
+        name = (groups.get("app") or groups.get("appm") or "").strip()
+        return found if name and find_app(name) is not None else None
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
