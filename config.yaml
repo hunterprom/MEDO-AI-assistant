@@ -131,6 +131,25 @@ vision:                             # camera hand-gesture control (sidecar proce
     #   four fingers, thumb tucked        -> focus taskbar (Win+T, then arrows/Enter)
     # Held longer and debounced harder than a click, because they jump you between
     # windows and a single misread frame must never fire one.
+    # --- click snapping ---------------------------------------------------------
+    # Pinching pulls the fingertip DOWN as the thumb comes up, so the click lands
+    # just below the button you were aiming at. Snap asks the OS what is clickable
+    # near the cursor and presses the nearest one instead.
+    # It never snaps silently: the chosen target is outlined on screen and the
+    # click waits snap_confirm_ms, so a wrong pick is visible and you can pull your
+    # hand back. Nothing in range, or no accessibility data -> clicks the raw
+    # cursor position, exactly as before.
+    snap_enabled: true
+    snap_radius_px: 100             # capture circle around the cursor. bigger =
+                                    # more forgiving but more likely to pick a
+                                    # neighbour; 0 disables snapping entirely
+    snap_confirm_ms: 250            # preview delay before the click. 0 = instant
+                                    # (still outlines the target)
+    snap_above_bias_px: 20.0        # distance discount for targets ABOVE the
+                                    # cursor, since the drift is downward. raise
+                                    # if it still lands low; 0 = pure distance
+    snap_highlight: true            # draw the ring/box. false = snap silently
+                                    # (not recommended — that is the trust issue)
     nav_hold_frames: 5
     nav_debounce_ms: 900
     # Rebind any pose. Actions: move, drag, scroll, zoom, right_click, volume_up,

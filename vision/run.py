@@ -71,6 +71,11 @@ class PointerRunConfig:
     curled_max_deg: float = 100.0
     zoom_min_spread_deg: float = 50.0
     l_shape_tolerance_deg: float = 25.0
+    snap_enabled: bool = True
+    snap_radius_px: int = 100
+    snap_confirm_ms: int = 250
+    snap_above_bias_px: float = 20.0
+    snap_highlight: bool = True
     nav_hold_frames: int = 5
     nav_debounce_ms: int = 900
     pose_actions: dict = field(default_factory=dict)
@@ -131,6 +136,11 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
             curled_max_deg=float(p.get("curled_max_deg", 100.0)),
             zoom_min_spread_deg=float(p.get("zoom_min_spread_deg", 50.0)),
             l_shape_tolerance_deg=float(p.get("l_shape_tolerance_deg", 25.0)),
+            snap_enabled=bool(p.get("snap_enabled", True)),
+            snap_radius_px=int(p.get("snap_radius_px", 100)),
+            snap_confirm_ms=int(p.get("snap_confirm_ms", 250)),
+            snap_above_bias_px=float(p.get("snap_above_bias_px", 20.0)),
+            snap_highlight=bool(p.get("snap_highlight", True)),
             nav_hold_frames=int(p.get("nav_hold_frames", 5)),
             nav_debounce_ms=int(p.get("nav_debounce_ms", 900)),
             pose_actions=dict(p.get("pose_actions", {}) or {}),

@@ -161,6 +161,20 @@ class PointerConfig(BaseModel):
     # Window/tab navigation poses (L = next tab, four = taskbar). Held longer
     # and debounced harder than a click: these jump you between windows, so a
     # single misread frame must never fire one.
+    # --- click snapping (vision/snap.py) ------------------------------------
+    #: A pinch pulls the fingertip down as the thumb comes up, so the click
+    #: lands just below the button. Snap presses the nearest clickable element
+    #: instead — after showing which one.
+    snap_enabled: bool = True
+    snap_radius_px: int = 100
+    #: Preview delay. The chosen target is outlined on screen and the click
+    #: waits this long, so a wrong pick is visible and you can pull back.
+    #: 0 = click immediately (still outlines it).
+    snap_confirm_ms: int = 250
+    #: Distance discount for targets ABOVE the cursor — the drift is downward,
+    #: so an equally near target above is the one you were reaching for.
+    snap_above_bias_px: float = 20.0
+    snap_highlight: bool = True
     nav_hold_frames: int = 5
     nav_debounce_ms: int = 900
     #: pose -> action overrides, e.g. {"open_palm": "switch_window"}. Actions:
