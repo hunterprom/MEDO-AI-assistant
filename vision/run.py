@@ -63,6 +63,14 @@ class PointerRunConfig:
     zoom_gain: float = 25.0
     volume_interval_ms: int = 180
     exit_hold_frames: int = 18
+    # Gesture geometry. This dataclass is built field-by-field from the YAML,
+    # so anything added to core.config.PointerConfig has to be mirrored here or
+    # the sidecar dies with AttributeError the moment engine.py reads it.
+    strict_gestures: bool = True
+    extended_min_deg: float = 160.0
+    curled_max_deg: float = 100.0
+    zoom_min_spread_deg: float = 50.0
+    l_shape_tolerance_deg: float = 25.0
 
 
 @dataclass
@@ -115,6 +123,11 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
             zoom_gain=float(p.get("zoom_gain", 25.0)),
             volume_interval_ms=int(p.get("volume_interval_ms", 180)),
             exit_hold_frames=int(p.get("exit_hold_frames", 18)),
+            strict_gestures=bool(p.get("strict_gestures", True)),
+            extended_min_deg=float(p.get("extended_min_deg", 160.0)),
+            curled_max_deg=float(p.get("curled_max_deg", 100.0)),
+            zoom_min_spread_deg=float(p.get("zoom_min_spread_deg", 50.0)),
+            l_shape_tolerance_deg=float(p.get("l_shape_tolerance_deg", 25.0)),
         ),
     )
     host = r.get("host", "127.0.0.1")

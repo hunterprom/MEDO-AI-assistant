@@ -3,6 +3,8 @@ shipped config.yaml must load with the new fields."""
 
 from __future__ import annotations
 
+import dataclasses
+
 from core.config import load_settings
 
 OLD_V2_CONFIG = """
@@ -59,3 +61,28 @@ def test_shipped_config_loads_with_new_fields():
     assert s.stt.initial_prompt in (None, "")
     assert s.vision.pointer.click_debounce_ms == 600
     assert s.memory.max_facts == 20
+
+
+def test_sidecar_pointer_config_mirrors_the_main_one():
+    """The vision sidecar has its own dataclass, built field-by-field.
+
+    It runs in a separate venv and cannot import core.config, so every field
+    added to PointerConfig must be mirrored in PointerRunConfig AND in the
+    loader that fills it. Forgetting either kills the sidecar at startup with
+    an AttributeError the moment engine.py reads the missing knob — which is
+    exactly what happened when the gesture-strictness knobs were added.
+    """
+    import inspect
+
+    from core.config import PointerConfig
+    from vision.run import PointerRunConfig, load_config
+
+    expected = set(PointerConfig.model_fields)
+    actual = {f.name for f in dataclasses.fields(PointerRunConfig)}
+    missing = expected - actual
+    assert not missing, f"PointerRunConfig is missing: {sorted(missing)}"
+
+    # …and the loader must actually pass them, not just declare them.
+    source = inspect.getsource(load_config)
+    unset = [name for name in expected if f"{name}=" not in source]
+    assert not unset, f"load_config never sets: {sorted(unset)}"

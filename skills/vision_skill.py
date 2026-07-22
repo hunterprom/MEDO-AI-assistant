@@ -29,7 +29,15 @@ from skills.base import Skill, SkillRequest, SkillResult
 ANSWER_MK = " Answer in Macedonian."
 
 DESCRIBE_CAMERA_PROMPT = (
-    "Describe what you see in one or two short spoken sentences. Plain text."
+    "Describe what you see in one or two short spoken sentences. Plain text.\n"
+    "Identify objects as specifically as the image allows: not 'a device' but "
+    "'a black digital watch'; not 'a board' but 'an Arduino-style "
+    "microcontroller board with a USB-B socket'. Small dark objects on a dark "
+    "background are the usual failure — say what its shape, size relative to a "
+    "hand, and any visible markings suggest. If you can read a part number, "
+    "silkscreen or logo, read it out; that is usually the whole answer. When "
+    "you genuinely cannot tell, name your best guess AND say it is a guess "
+    "rather than inventing a confident label."
 )
 DESCRIBE_SCREEN_PROMPT = (
     "This is a computer screen. Describe what is on it in one or two short "
@@ -43,6 +51,13 @@ POINT_PROMPT = (
     "This is a close-up of a computer screen, centered on the user's mouse "
     "cursor. Tell the user what the cursor is pointing at, in one or two "
     "short spoken sentences. Plain text."
+)
+#: For a photo or a picture rather than a scene — "what's in this picture".
+#: A photograph wants composition and subject; an object wants a part number.
+DESCRIBE_PICTURE_PROMPT = (
+    "Describe this picture in two or three short spoken sentences: the "
+    "subject, what is happening, and anything notable about the setting or "
+    "style. Read out any text visible in the image. Plain text, no markdown."
 )
 
 
