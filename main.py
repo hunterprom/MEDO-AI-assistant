@@ -269,6 +269,16 @@ def build_registry(
     registry.register(FileEditSkill(whitelist))
     registry.register(OpenInEditorSkill(whitelist, apps_table))
     registry.register(FilesSkill(whitelist))
+    # Application discovery. LocateApp answers "do I have X" (it only looks);
+    # InstallApp is gated on a spoken yes AFTER naming the resolved package.
+    from skills.appfinder import (
+        InstallAppSkill,
+        LocateAppSkill,
+        OpenDiscoveredAppSkill,
+    )
+
+    registry.register(LocateAppSkill())
+    registry.register(InstallAppSkill())
     registry.register(VolumeSkill())
     registry.register(MediaSkill())
     registry.register(TypeTextSkill())
@@ -308,6 +318,11 @@ def build_registry(
         "reminders": reminder_store,
         "doc_index": doc_index,
     })
+
+    # "open <anything installed>" — deliberately last of the openers: its
+    # pattern is broad by necessity, so it only ever sees what the configured
+    # launcher, the website opener and the file skills did not want.
+    registry.register(OpenDiscoveredAppSkill())
 
     # Web skills (network; degrade gracefully offline; broad patterns last).
     registry.register(weather_skill)
