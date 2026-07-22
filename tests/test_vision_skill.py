@@ -47,6 +47,8 @@ def test_camera_and_screen_queries_route_to_the_right_skill():
     """Camera vs screen must not collide — and a 'you->yuo' STT mishear or an
     'on your camera' suffix must still hit the camera skill (not fall to the
     LLM, which then parrots stale answers)."""
+    from skills.vision_skill import SeeScreenSkill
+
     cam = SeeCameraSkill(_settings_with_dead_ports())
     scr = SeeScreenSkill(_settings_with_dead_ports())
 
