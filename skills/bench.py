@@ -89,9 +89,20 @@ def default_ocr(jpeg: bytes) -> str:
         import pytesseract
         from PIL import Image
 
-        exe = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
-        if exe.exists():
-            pytesseract.pytesseract.tesseract_cmd = str(exe)
+        # pytesseract defaults to whatever's on PATH — but a GUI-launched app
+        # (run.command from Finder, run.bat) doesn't inherit the shell PATH, so
+        # Homebrew/Windows installs go unseen and OCR silently returns "".
+        # Probe the usual install locations for THIS OS as well.
+        for candidate in (
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",   # Windows
+            "/opt/homebrew/bin/tesseract",                     # macOS (Apple Silicon)
+            "/usr/local/bin/tesseract",                        # macOS (Intel) / Linux
+            "/usr/bin/tesseract",                              # Linux
+        ):
+            exe = Path(candidate)
+            if exe.exists():
+                pytesseract.pytesseract.tesseract_cmd = str(exe)
+                break
         return pytesseract.image_to_string(Image.open(io.BytesIO(jpeg))) or ""
     except Exception:
         logger.debug("tesseract unavailable; skipping OCR", exc_info=True)

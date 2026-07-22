@@ -59,7 +59,12 @@ def drain_sentences(buffer: str, min_len: int = 24) -> tuple[list[str], str]:
 
 
 def find_ffmpeg() -> str | None:
-    """Locate ffmpeg (PATH first, then the winget install). None if absent."""
+    """Locate ffmpeg (PATH, then the usual per-OS install spots). None if absent.
+
+    PATH alone isn't enough: an app launched from Finder/Explorer does NOT
+    inherit the shell's PATH, so a Homebrew ffmpeg in /opt/homebrew/bin is
+    invisible and Macedonian replies silently fall back to the English voice.
+    """
     path = shutil.which("ffmpeg")
     if path:
         return path
@@ -68,6 +73,11 @@ def find_ffmpeg() -> str | None:
         hits = sorted(base.glob("Gyan.FFmpeg*/**/bin/ffmpeg.exe"))
         if hits:
             return str(hits[-1])
+    for candidate in ("/opt/homebrew/bin/ffmpeg",   # macOS (Apple Silicon brew)
+                      "/usr/local/bin/ffmpeg",      # macOS (Intel brew) / Linux
+                      "/usr/bin/ffmpeg"):           # Linux distro package
+        if Path(candidate).exists():
+            return candidate
     return None
 
 
