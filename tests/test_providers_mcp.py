@@ -38,7 +38,11 @@ def test_new_providers_accepted() -> None:
 
 
 def test_unknown_provider_rejected() -> None:
-    with pytest.raises(Exception):
+    # ValidationError specifically: a blind Exception would also pass if the
+    # test itself had a typo and raised NameError.
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
         LLMConfig(provider="skynet")
 
 

@@ -20,6 +20,7 @@ else here — they destroy information:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import shutil
@@ -222,7 +223,10 @@ class FileEditSkill(Skill):
 
     async def _dictate(self, path: Path, text: str, to_top: bool,
                        speak_mk: bool) -> SkillResult:
-        try:
+        def _write() -> None:
+            # Read, back up and write in ONE worker hop. The event loop also
+            # drives TTS streaming and the HUD's event feed, so a slow disk
+            # here is an audible gap in MEDO's voice.
             content = path.read_text(encoding="utf-8")
             backup(path)
             if to_top:
@@ -231,6 +235,9 @@ class FileEditSkill(Skill):
                 sep = "" if not content or content.endswith("\n") else "\n"
                 new_content = f"{content}{sep}{text}\n"
             path.write_text(new_content, encoding="utf-8")
+
+        try:
+            await asyncio.to_thread(_write)
         except OSError as exc:
             logger.warning("dictate failed on %s: %s", path, exc)
             return SkillResult(
@@ -250,7 +257,7 @@ class FileEditSkill(Skill):
             return SkillResult("Што да заменам?" if speak_mk
                                else "What should I replace?", success=False)
         try:
-            content = path.read_text(encoding="utf-8")
+            content = await asyncio.to_thread(path.read_text, encoding="utf-8")
         except OSError:
             return SkillResult(
                 f"Не можам да ја прочитам {path.name}." if speak_mk
@@ -274,9 +281,9 @@ class FileEditSkill(Skill):
                 needs_confirmation=True,
                 data={"path": str(path), "count": count})
 
-        saved = backup(path)
+        saved = await asyncio.to_thread(backup, path)
         try:
-            path.write_text(updated, encoding="utf-8")
+            await asyncio.to_thread(path.write_text, updated, encoding="utf-8")
         except OSError:
             return SkillResult(
                 f"Не успеав да запишам во {path.name}." if speak_mk
@@ -356,8 +363,6 @@ class WriteInAppSkill(Skill):
         return key if key in self._apps else None
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        import asyncio
-
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
         app = (request.args.get("app") or gd.get("app") or "").strip()

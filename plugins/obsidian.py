@@ -145,7 +145,10 @@ class ObsidianOpenSkill(Skill):
         import subprocess
 
         try:  # the obsidian:// protocol works no matter where the exe lives
-            subprocess.Popen(["cmd", "/c", "start", "", "obsidian://open"], shell=False)
+            # noqa: ASYNC220 - Popen returns immediately; we never wait on it,
+            # so this does not block the loop the way subprocess.run would.
+            subprocess.Popen(  # noqa: ASYNC220
+                ["cmd", "/c", "start", "", "obsidian://open"], shell=False)
             return SkillResult("Opening Obsidian.")
         except Exception:
             return SkillResult("I couldn't open Obsidian — is it installed?", success=False)

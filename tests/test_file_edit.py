@@ -315,5 +315,5 @@ async def test_unknown_app_is_refused(writer):
     assert r.success is False
 
 
-def test_is_gated_by_the_pc_control_switch(writer):
+def test_write_in_app_is_gated_by_the_pc_control_switch(writer):
     assert writer.controls_pc is True

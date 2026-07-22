@@ -8,6 +8,8 @@ degrade with a clear message where an OS isn't wired up yet.
 
 from __future__ import annotations
 
+import asyncio
+
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -292,12 +294,17 @@ class ScreenshotSkill(Skill):
         stamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
         target = self._save_dir / f"screenshot-{stamp}.png"
         try:
-            if IS_MACOS:
-                subprocess.run(["screencapture", "-x", str(target)], check=True)
-            else:
-                import pyautogui
+            def _capture() -> None:
+                # Grabbing and encoding a full screen takes long enough to be
+                # audible as a gap if it runs on the event loop.
+                if IS_MACOS:
+                    subprocess.run(["screencapture", "-x", str(target)], check=True)
+                else:
+                    import pyautogui
 
-                pyautogui.screenshot().save(str(target))
+                    pyautogui.screenshot().save(str(target))
+
+            await asyncio.to_thread(_capture)
         except Exception as exc:  # permission denied, headless, etc.
             return SkillResult(f"I couldn't take a screenshot: {exc}", success=False)
         return SkillResult(f"Screenshot saved to {target.name}.", data={"path": str(target)})
@@ -316,6 +323,11 @@ class ScreenshotSkill(Skill):
 # --------------------------------------------------------------------------- #
 # Power (lock / sleep / shutdown* / restart*)
 # --------------------------------------------------------------------------- #
+#: The only actions PowerSkill will ever take. Anything else — including
+#: nothing at all — is a question, not an action.
+_POWER_ACTIONS = ("lock", "sleep", "shutdown", "restart")
+
+
 class PowerSkill(Skill):
     name = "power"
     controls_pc = True
@@ -328,14 +340,24 @@ class PowerSkill(Skill):
         re.compile(r"\b(?:restart|reboot)\b", re.IGNORECASE),
     ]
 
-    def _action(self, text: str) -> str:
+    def _action(self, text: str) -> str | None:
+        """Which power action the words name, or None if they name none.
+
+        There is deliberately NO default. This used to fall through to
+        "sleep", which meant any call that reached the skill without matching
+        text — an LLM tool call with empty arguments, a test harness invoking
+        execute() directly — suspended the machine with no confirmation. A
+        power skill must never infer an action from silence.
+        """
         if "restart" in text or "reboot" in text:
             return "restart"
         if "shut" in text:
             return "shutdown"
         if "lock" in text:
             return "lock"
-        return "sleep"
+        if "sleep" in text or "suspend" in text:
+            return "sleep"
+        return None
 
     def _run(self, action: str) -> str:
         os_name = current_os()
@@ -369,12 +391,24 @@ class PowerSkill(Skill):
         return f"{verbs[action]} now."
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        action = self._action(request.text.lower())
-        destructive = action in ("shutdown", "restart")
-        if destructive and not request.context.get("confirmed"):
-            phrase = {"shutdown": "shut down", "restart": "restart"}[action]
+        # The LLM path can call this with an explicit action; the fast path
+        # infers it from the words. Either way an unnamed action is a question,
+        # never an assumption.
+        requested = str(request.args.get("action") or "").strip().lower()
+        action = requested if requested in _POWER_ACTIONS else \
+            self._action(request.text.lower())
+        if action is None:
             return SkillResult(
-                f"Are you sure you want to {phrase} the machine? Say yes to confirm.",
+                "Do you want me to lock, sleep, restart, or shut down?",
+                success=False)
+        # Everything except locking the screen interrupts what you were doing,
+        # so everything except locking asks first. Sleep used to be silent —
+        # and a stray sleep costs you your session just as surely as a reboot.
+        if action != "lock" and not request.context.get("confirmed"):
+            phrase = {"shutdown": "shut down", "restart": "restart",
+                      "sleep": "put the machine to sleep"}[action]
+            return SkillResult(
+                f"Are you sure you want to {phrase}? Say yes to confirm.",
                 needs_confirmation=True,
             )
         return SkillResult(self._run(action), data={"action": action})

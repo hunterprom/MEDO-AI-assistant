@@ -652,7 +652,8 @@ class LLMClient:
                 *argv,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd=os.path.expanduser("~"),  # neutral cwd: don't adopt MEDO's repo context
+                cwd=os.path.expanduser("~"),  # noqa: ASYNC240 - pure string op, no I/O
+                # neutral cwd: don't adopt MEDO's repo context
             )
         except OSError as exc:
             raise LLMUnavailableError(f"could not launch {cmd!r}: {exc}") from exc

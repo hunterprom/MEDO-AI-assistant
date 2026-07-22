@@ -126,7 +126,7 @@ class FactsStore:
             if not vectors:
                 return
             with self._connect() as conn:
-                for (fact_id, _), vec in zip(rows, vectors):
+                for (fact_id, _), vec in zip(rows, vectors, strict=True):
                     conn.execute(
                         "UPDATE facts SET embedding = ? WHERE id = ?",
                         (vec.tobytes(), fact_id),

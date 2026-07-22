@@ -112,3 +112,42 @@ def test_actuating_skills_declare_controls_pc(registry):
         skill = registry.get(name)
         if skill is not None:
             assert skill.controls_pc, f"{name} acts on the PC but isn't gated"
+
+
+#: Skills whose degenerate-input path reaches the network, a camera, or a
+#: model. Excluded to keep the suite deterministic and fast.
+NEEDS_THE_WORLD = {"briefing", "see_camera", "see_screen", "see_bench",
+                   "point_at", "weather", "news", "web_search", "documents"}
+
+
+@pytest.mark.asyncio
+async def test_every_answering_skill_survives_degenerate_input(registry):
+    """Call every NON-actuating skill with no match and no args.
+
+    A correct skill answers "what did you mean?"; a buggy one raises — KeyError
+    on a regex group that never matched, AttributeError on a None match,
+    TypeError from a signature that drifted. That is the exact path taken when
+    the LLM calls a tool with arguments it invented, so it is worth sweeping.
+
+    ``controls_pc`` skills are deliberately NOT executed here. Calling
+    ``execute()`` directly bypasses the router, which is the only thing that
+    enforces the PC-control switch — an earlier version of this test swept
+    every skill and suspended the machine, because PowerSkill inferred "sleep"
+    from empty input and slept without confirmation. A test must never be the
+    thing that acts on the user's computer. That those skills are gated at all
+    is covered by ``test_actuating_skills_declare_controls_pc``.
+    """
+    from skills.base import SkillRequest
+
+    broken = []
+    for skill in registry.all():
+        if skill.name in NEEDS_THE_WORLD or skill.controls_pc:
+            continue
+        try:
+            result = await skill.execute(SkillRequest(text="", args={}, context={}))
+        except Exception as exc:                       # noqa: BLE001 - report all
+            broken.append(f"{skill.name}: {type(exc).__name__}: {exc}")
+            continue
+        if result is None or not hasattr(result, "speech"):
+            broken.append(f"{skill.name}: returned {type(result).__name__}")
+    assert not broken, "skills that crash on empty input:\n  " + "\n  ".join(broken)

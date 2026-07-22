@@ -153,7 +153,10 @@ class DocumentIndex:
                 break
             with self._connect() as conn:
                 conn.execute("DELETE FROM doc_chunks WHERE path = ?", (key,))
-                for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
+                # strict: fewer vectors than chunks means the embedder failed
+                # partway; silently indexing the prefix would leave the
+                # document searchable but quietly incomplete.
+                for i, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
                     conn.execute(
                         "INSERT INTO doc_chunks (path, mtime, idx, text, embedding)"
                         " VALUES (?, ?, ?, ?, ?)",

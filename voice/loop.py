@@ -370,10 +370,16 @@ class VoiceLoop:
             return False
         from core.events import Event, EventType
 
-        try:
-            path = Path(self._modes.dictation_path)
+        path = Path(self._modes.dictation_path)
+
+        def _append() -> None:
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(text.rstrip() + "\n")
+
+        try:
+            # to_thread: this runs once per spoken line, and the loop it would
+            # block is the one streaming the next sentence to the speakers.
+            await asyncio.to_thread(_append)
         except OSError:
             logger.exception("dictation write failed")
             await self._speak("I couldn't write that down.")

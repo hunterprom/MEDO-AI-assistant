@@ -62,13 +62,21 @@ class MediaSkill(Skill):
                    re.IGNORECASE),
     ]
 
-    def _action(self, text: str) -> str:
-        """Map the utterance to a canonical action name."""
+    def _action(self, text: str) -> str | None:
+        """Map the utterance to a canonical action name, or None for neither.
+
+        No default: this used to fall through to "playpause", so a call
+        carrying no recognisable words toggled whatever had media focus — an
+        action taken from no request at all.
+        """
         if re.search(r"\b(?:next|skip|следна)\b", text):
             return "next"
         if re.search(r"\b(?:previous|last|back|претходна)\b", text):
             return "previous"
-        return "playpause"  # play / pause / resume / stop all toggle
+        if re.search(r"\b(?:play|pause|resume|stop|пушти|пуштиј|паузирај|"
+                     r"запри|стопирај|продолжи)\b", text):
+            return "playpause"   # play / pause / resume / stop all toggle
+        return None
 
     def _run(self, action: str) -> str:
         """Perform ``action`` on the current OS; always returns speech."""
@@ -93,6 +101,10 @@ class MediaSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         action = self._action(request.text.lower())
+        if action is None:
+            # No default: a bare call used to toggle play/pause on whatever
+            # had media focus, which is a real action taken from no request.
+            return SkillResult("Play, pause, next or previous?", success=False)
         return SkillResult(self._run(action), data={"action": action})
 
     def tool_schema(self) -> dict[str, Any]:
