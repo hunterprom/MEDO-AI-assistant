@@ -54,9 +54,9 @@ from vision.gestures import (
 from vision.pointer import (
     DRAG,
     MOVE,
+    NEXT_TAB,
     RIGHT_CLICK,
     SCROLL,
-    NEXT_TAB,
     SWITCH_WINDOW,
     TASKBAR,
     VOLUME_DOWN,
@@ -66,6 +66,7 @@ from vision.pointer import (
     Ema,
     PoseHold,
     ScrollAccumulator,
+    build_pose_actions,
     pointer_action,
     to_screen,
 )

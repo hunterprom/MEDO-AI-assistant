@@ -200,3 +200,32 @@ def test_every_backend_exposes_the_navigation_surface():
         source = Path(f"vision/{name}.py").read_text(encoding="utf-8")
         defined = set(re.findall(r"^def (\w+)", source, re.MULTILINE))
         assert required <= defined, f"{name} is missing {sorted(required - defined)}"
+
+
+def test_engine_imports_every_pointer_symbol_it_uses():
+    """A NameError inside the engine loop only fires when a hand appears.
+
+    vision/engine.py needs mediapipe, so the suite cannot import it and a
+    missing import survives every test — it surfaces as the camera silently
+    dying at runtime. This checks statically that every symbol engine.py
+    borrows from vision.pointer is actually in its import list.
+    """
+    import ast
+    from pathlib import Path
+
+    import vision.pointer as pointer_mod
+
+    source = Path("vision/engine.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("vision"):
+            imported.update(alias.asname or alias.name for alias in node.names)
+
+    # Real Name loads only — a regex over the source counts mentions in
+    # comments ("# action == IDLE") and would fail on its own false positives.
+    used = {node.id for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    exported = {n for n in vars(pointer_mod) if not n.startswith("_")}
+    missing = (exported & used) - imported
+    assert not missing, f"vision/engine.py uses but never imports: {sorted(missing)}"
