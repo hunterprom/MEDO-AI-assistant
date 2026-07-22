@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from core.config import Settings
-from skills.base import SkillRequest
+from skills.base import SkillRequest, SkillResult
 from skills.vision_skill import SeeCameraSkill, _describe
 
 
