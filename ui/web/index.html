@@ -149,7 +149,9 @@
     transition: border-color .2s, box-shadow .2s, background .3s;
   }
   #micbtn:hover { border-color: #7fd0ff; box-shadow: 0 0 34px rgba(56,168,255,.5); }
-  body[data-state="listening"] #micbtn { background: rgba(56,168,255,.22); }
+  body[data-state="listening"] #micbtn, #micbtn.listening { background: rgba(56,168,255,.22); border-color: #7fd0ff; }
+  #micbtn.listening { animation: micpulse 1.1s ease-in-out infinite; }
+  @keyframes micpulse { 0%,100% { box-shadow: 0 0 20px rgba(56,168,255,.35); } 50% { box-shadow: 0 0 40px rgba(56,168,255,.75); } }
   #micdot { width: 10px; height: 10px; border-radius: 50%; background: #1c5f9e; box-shadow: 0 0 10px rgba(56,168,255,.9); flex: none; }
   body[data-state="listening"] #micdot { background: #7fd0ff; }
 
@@ -715,21 +717,66 @@
   $('tab-core').onclick = () => go('core');
   $('tab-comms').onclick = () => go('comms');
   $('tab-config').onclick = () => go('config');
-  async function triggerWake() {
-    try {
-      const r = await fetch(`${API}/wake`, { method: 'POST' });
-      log(r.ok ? 'WAKE (manual)' : 'WAKE — voice mode not running');
-    } catch { log('WAKE — API offline'); }
-  }
   async function interruptSpeech() {
     try {
       const r = await fetch(`${API}/interrupt`, { method: 'POST' });
       log(r.ok ? 'INTERRUPT' : 'INTERRUPT failed');
     } catch { log('INTERRUPT — API offline'); }
   }
+
+  /* ---- tap-to-talk ----------------------------------------------------------
+     The mic button must WORK in every launch mode. If MEDO is running with
+     --voice, POST /wake starts a server-side turn (the wake-word loop). If it
+     ISN'T (e.g. --hud --serve only), /wake 409s and we fall back to the
+     browser's own speech recognition: capture speech here, send the transcript
+     to /ask. So "tap to wake" always does something, voice mode or not. */
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recog = null;                       // active recognizer, or null
+  function stopListen() { if (recog) { try { recog.stop(); } catch {} } }
+  function browserListen() {
+    if (!SpeechRec) {                     // Safari/Firefox: no Web Speech API
+      log('TAP-TO-TALK needs Chrome/Edge — type below instead');
+      $('miclabel').textContent = DEFAULT_MIC_LABEL; $('draft').focus(); return;
+    }
+    if (recog) return;                    // already listening
+    recog = new SpeechRec();
+    recog.lang = navigator.language || 'en-US';
+    recog.interimResults = true;
+    let heard = '';
+    $('micbtn').classList.add('listening');
+    $('miclabel').textContent = '● LISTENING… (TAP TO STOP)';
+    recog.onresult = e => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) heard += t; else interim += t;
+      }
+      $('miclabel').textContent = '● ' + (heard + interim).toUpperCase().slice(0, 42);
+    };
+    recog.onerror = ev => log('MIC — ' + ev.error);
+    recog.onend = () => {
+      recog = null;
+      $('micbtn').classList.remove('listening');
+      $('miclabel').textContent = DEFAULT_MIC_LABEL;
+      const q = heard.trim();
+      if (q) ask(q); else $('draft').focus();
+    };
+    try { recog.start(); } catch { recog = null; $('miclabel').textContent = DEFAULT_MIC_LABEL; }
+  }
+  async function wakeOrTalk() {
+    go('comms');                           // show the conversation + focus input
+    let served = false;
+    try {
+      const r = await fetch(`${API}/wake`, { method: 'POST' });   // server voice mode?
+      served = r.ok;
+      log(r.ok ? 'WAKE (voice mode)' : 'no voice mode — using tap-to-talk');
+    } catch { log('WAKE — API offline'); }
+    if (!served) browserListen();          // fall back to browser push-to-talk
+  }
   $('micbtn').onclick = () => {
-    if (document.body.dataset.state === 'speaking') interruptSpeech();  // barge-in
-    else { triggerWake(); go('comms'); }
+    if (document.body.dataset.state === 'speaking') { interruptSpeech(); return; }
+    if (recog) { stopListen(); return; }   // tap again = stop listening now
+    wakeOrTalk();
   };
 
   /* ---- waveform bars (24, staggered like the design) ---- */
@@ -1279,7 +1326,7 @@
   }
   $('dev-scan').onclick = $('cfg-scan').onclick = () => { scan = !scan; applyScan(); };
   applyScan();
-  $('dev-voice').onclick = () => { triggerWake(); go('comms'); };
+  $('dev-voice').onclick = () => { wakeOrTalk(); };
 
   /* ---- appearance: accent color themes ----
      The whole HUD (and the orb canvas) is recolored with a single hue-rotate/
