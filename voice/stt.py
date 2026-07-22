@@ -18,7 +18,7 @@ Robustness layers on top of the raw model:
 from __future__ import annotations
 
 import logging
-import string
+import unicodedata
 
 import numpy as np
 
@@ -71,13 +71,48 @@ JUNK_TRANSCRIPTS: frozenset[str] = frozenset(
         "copyright",
         "transcribed by httpsotterai",
         "subtitles by the amaraorg community",
+        # Non-English silence hallucinations — with language auto-detect on,
+        # Whisper invents these on silence too (a "Gracias"/"De nada" exchange
+        # from nothing is the classic case). Belt-and-suspenders alongside
+        # narrowing stt.allowed_languages to what you actually speak.
+        "gracias",              # es
+        "muchas gracias",
+        "gracias por ver el video",
+        "gracias por ver",
+        "de nada",
+        "adios",
+        "hasta luego",
+        "merci",                # fr
+        "merci beaucoup",
+        "merci davoir regarde",
+        "danke",                # de
+        "vielen dank",
+        "danke schon",
+        "grazie",               # it
+        "grazie per lattenzione",
+        "obrigado",             # pt
+        "obrigada",
+        "gracias por su atencion",
+        "фала",                 # mk
+        "фала многу",
+        "благодарам",
+        "довидување",
+        "продолжуваме",
     }
 )
 
 
 def _canonical(text: str) -> str:
-    """Lowercase ``text``, strip punctuation, and collapse whitespace."""
-    stripped = text.lower().translate(str.maketrans("", "", string.punctuation))
+    """Lowercase ``text``, strip punctuation, and collapse whitespace.
+
+    Strips ALL Unicode punctuation (category ``P*``), not just ASCII — so
+    Spanish '¡Gracias!' and other non-English phantoms normalize to their bare
+    form and match the junk set.
+    """
+    lowered = text.lower()
+    stripped = "".join(
+        c for c in lowered if not unicodedata.category(c).startswith("P")
+    )
     return " ".join(stripped.split())
 
 

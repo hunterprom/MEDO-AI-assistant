@@ -47,6 +47,19 @@ def test_filter_transcript_junk_only_returns_empty():
     assert filter_transcript([(".", 0.30, -0.40)]) == ""
 
 
+def test_filter_transcript_drops_non_english_silence_phantoms():
+    # With language auto-detect, Whisper hallucinates foreign phrases on silence
+    # ("Gracias"/"De nada" from nothing). Confident scores would pass the
+    # per-segment gate, so the junk-set (now multilingual + Unicode-punct aware)
+    # must still catch them.
+    for phantom in ["Gracias.", "¡Gracias!", "De nada.", "¿De nada?",
+                    "Merci.", "Danke!", "Grazie.", "Obrigado.",
+                    "Фала.", "Благодарам!"]:
+        assert filter_transcript([(phantom, 0.30, -0.10)]) == "", phantom
+    # A real foreign sentence (not a known phantom) must survive.
+    assert filter_transcript([("gracias por el cafe de esta manana", 0.1, -0.2)]) != ""
+
+
 def test_filter_transcript_junk_check_is_whole_transcript_only():
     # "thank you" inside a real sentence must not nuke the transcript.
     segments = [("Thank you, now open Chrome.", 0.05, -0.30)]
