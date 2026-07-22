@@ -148,10 +148,21 @@ class SeeCameraSkill(Skill):
     description = "Describe what the webcam currently sees."
 
     patterns = [
-        re.compile(r"\bwhat\s+(?:do|can)\s+you\s+see\b", re.IGNORECASE),
+        # "you" is tolerated as the common Whisper mishears (yuo/u) so a small
+        # STT slip doesn't drop the query to the LLM (which then parrots stale
+        # answers from memory instead of actually looking).
+        # ...but a "see" query that names the SCREEN belongs to see_screen
+        # (registered after this), so exclude it here.
+        re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b(?!.*\bscreen\b)",
+                   re.IGNORECASE),
         re.compile(r"\bdescribe\s+(?:what\s+you\s+see|the\s+(?:camera|room|view))\b", re.IGNORECASE),
         re.compile(r"\blook\s+(?:at\s+(?:me|this)|around)\b", re.IGNORECASE),
-        re.compile(r"\bcan\s+you\s+see\s+me\b", re.IGNORECASE),
+        re.compile(r"\bcan\s+you\s+see\s+(?:me|anything|this)\b", re.IGNORECASE),
+        # Camera-oriented phrasings (never 'screen' — that's the see_screen skill).
+        re.compile(r"\b(?:see|look\s+at|check|use|through)\s+(?:the\s+|your\s+|my\s+)?"
+                   r"(?:camera|webcam)\b", re.IGNORECASE),
+        re.compile(r"\bwhat(?:'?s| is)?\s+(?:on|in\s+front\s+of)\s+(?:the\s+|your\s+|my\s+)?"
+                   r"(?:camera|webcam)\b", re.IGNORECASE),
         # MK. The lookahead matters: this skill is registered BEFORE the screen
         # one, so a bare "што гледаш" must not swallow "што гледаш на екранот".
         re.compile(r"\bшто\s+гледаш\b(?!.*екран)", re.IGNORECASE),
@@ -204,6 +215,9 @@ class SeeScreenSkill(Skill):
     patterns = [
         re.compile(r"\bwhat(?:'?s| is)\s+on\s+(?:my|the)\s+screen\b", re.IGNORECASE),
         re.compile(r"\b(?:read|describe)\s+(?:my|the)\s+screen\b", re.IGNORECASE),
+        # "what do you see on the screen" — a see-query that names the screen.
+        re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b(?=.*\bscreen\b)",
+                   re.IGNORECASE),
         # "can you see my screen" / "look at my screen" / "what am I looking
         # at" went to the LLM, which would claim it can't see screens instead
         # of calling this tool — catch the common phrasings deterministically.

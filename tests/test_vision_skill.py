@@ -43,6 +43,26 @@ def test_vision_patterns_catch_can_you_see_phrasings():
     assert scr.match("what is this") is None
 
 
+def test_camera_and_screen_queries_route_to_the_right_skill():
+    """Camera vs screen must not collide — and a 'you->yuo' STT mishear or an
+    'on your camera' suffix must still hit the camera skill (not fall to the
+    LLM, which then parrots stale answers)."""
+    cam = SeeCameraSkill(_settings_with_dead_ports())
+    scr = SeeScreenSkill(_settings_with_dead_ports())
+
+    def routes_to(q):
+        c, s = cam.match(q) is not None, scr.match(q) is not None
+        return "cam" if c and not s else "scr" if s and not c else "?"
+
+    for q in ("what do you see", "what do yuo see on your camera",
+              "what's on the webcam", "look at the camera", "use your camera",
+              "can you see anything"):
+        assert routes_to(q) == "cam", q
+    for q in ("what do you see on the screen", "read my screen",
+              "what's on my screen"):
+        assert routes_to(q) == "scr", q
+
+
 def test_system_prompt_forbids_claiming_blindness():
     from core.config import PersonalityConfig
     from llm.prompts import system_prompt
