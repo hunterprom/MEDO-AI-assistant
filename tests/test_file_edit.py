@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.platform import current_os
 from core.safety import PathWhitelist
 from skills.base import SkillRequest
 from skills.file_edit import (
@@ -265,6 +266,10 @@ APPS = {"notepad": {"windows": "start notepad", "darwin": "open -a TextEdit",
                     "linux": "gedit"},
         "editor": {"windows": "code", "darwin": "code", "linux": "code"}}
 
+#: The skill resolves the launch command for the CURRENT OS, so the expected
+#: value has to as well — hardcoding the Windows string failed on macOS/Linux.
+EXPECTED_NOTEPAD_CMD = APPS["notepad"][current_os()]
+
 
 @pytest.fixture
 def writer():
@@ -292,7 +297,7 @@ async def test_launches_the_app_then_types(writer, monkeypatch):
     monkeypatch.setattr("skills.desktop.type_into_focused", lambda t: typed.append(t))
     phrase = "write buy milk and eggs in notepad"
     r = await writer.execute(SkillRequest(text=phrase, match=writer.match(phrase)))
-    assert r.success and launched == ["start notepad"]
+    assert r.success and launched == [EXPECTED_NOTEPAD_CMD]
     assert typed == ["buy milk and eggs"]
 
 

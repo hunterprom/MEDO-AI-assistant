@@ -143,3 +143,46 @@ async def test_point_at_crops_around_cursor_and_describes():
     assert r.success and r.speech == "A settings icon."
     assert seen["size"] == (480, 480)          # exactly the cursor crop
     assert r.data["cursor"] == [100, 100]
+
+
+async def test_point_at_refuses_when_cursor_is_off_the_captured_display():
+    """Multi-monitor: the cursor reports virtual-desktop coords, but the capture
+    may only cover the primary screen. Clamping the crop would confidently
+    describe the WRONG pixels — MEDO must say it can't see there instead."""
+    from PIL import Image
+
+    from skills.vision_skill import PointAtSkill
+
+    def capture():                      # 1920x1080 primary; cursor on monitor 2
+        return Image.new("RGB", (1920, 1080), "white"), (2500, 400)
+
+    called = {"describe": False}
+
+    async def describe(image_b64: str) -> SkillResult:
+        called["describe"] = True
+        return SkillResult("should never run")
+
+    skill = PointAtSkill(_settings_with_dead_ports(), capture=capture,
+                         describe=describe)
+    r = await skill.execute(SkillRequest(text="what is this?"))
+    assert r.success is False
+    assert "capture" in r.speech.lower() or "can't" in r.speech.lower()
+    assert called["describe"] is False   # never described the wrong region
+
+
+async def test_point_at_accepts_a_cursor_inside_the_capture():
+    """Sanity: the new bounds check must not reject legitimate positions."""
+    from PIL import Image
+
+    from skills.vision_skill import PointAtSkill, SkillResult
+
+    def capture():
+        return Image.new("RGB", (1920, 1080), "white"), (960, 540)
+
+    async def describe(image_b64: str) -> SkillResult:
+        return SkillResult("A window.")
+
+    skill = PointAtSkill(_settings_with_dead_ports(), capture=capture,
+                         describe=describe)
+    r = await skill.execute(SkillRequest(text="what is this?"))
+    assert r.success and r.speech == "A window."

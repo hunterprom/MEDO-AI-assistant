@@ -61,6 +61,36 @@ DESCRIBE_PICTURE_PROMPT = (
 )
 
 
+def grab_desktop():
+    """(screenshot of the WHOLE virtual desktop, its ``(origin_x, origin_y)``).
+
+    ``pyautogui.screenshot()`` only captures the PRIMARY display, so on a
+    multi-monitor setup anything on a second screen was invisible — and the
+    cursor position (which is virtual-desktop wide, and can be negative for a
+    monitor left of / above the primary) indexed the WRONG pixels, silently
+    describing the wrong region instead of failing. Windows can grab every
+    screen at once; elsewhere we fall back to the primary capture and return
+    the origin so callers can translate/bounds-check honestly.
+    """
+    import sys
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            from PIL import ImageGrab
+
+            u = ctypes.windll.user32
+            img = ImageGrab.grab(all_screens=True)
+            # image (0,0) == virtual-desktop origin (SM_X/YVIRTUALSCREEN)
+            return img, (int(u.GetSystemMetrics(76)), int(u.GetSystemMetrics(77)))
+        except Exception:  # noqa: BLE001 - fall back to the primary grab
+            pass
+    import pyautogui
+
+    return pyautogui.screenshot(), (0, 0)
+
+
 def crop_box(cx: int, cy: int, width: int, height: int,
              size: int = 480) -> tuple[int, int, int, int]:
     """Square crop centered on the cursor, clamped inside the screen.
@@ -244,9 +274,9 @@ class SeeScreenSkill(Skill):
             or "прочитај" in text          # "прочитај го екранот" = read it out
         )
         try:
-            import pyautogui
-
-            shot = await asyncio.to_thread(pyautogui.screenshot)
+            # Whole virtual desktop, not just the primary display — otherwise a
+            # window on a second monitor is simply invisible to "read my screen".
+            shot, _origin = await asyncio.to_thread(grab_desktop)
             buf = io.BytesIO()
             shot.save(buf, format="PNG")
             small = await asyncio.to_thread(_shrink, buf.getvalue())
@@ -311,11 +341,17 @@ class PointAtSkill(Skill):
 
     @staticmethod
     def _default_capture():
-        """(full-screen PIL image, cursor xy) — runs in a worker thread."""
+        """(desktop image, cursor xy IN IMAGE COORDS) — runs in a worker thread.
+
+        The cursor reports virtual-desktop coordinates, so it's translated into
+        the captured image's space; otherwise a cursor on a second monitor
+        pointed at the wrong pixels of the primary one.
+        """
         import pyautogui
 
+        shot, (ox, oy) = grab_desktop()
         pos = pyautogui.position()
-        return pyautogui.screenshot(), (int(pos.x), int(pos.y))
+        return shot, (int(pos.x) - ox, int(pos.y) - oy)
 
     async def _default_describe(self, image_b64: str) -> SkillResult:
         return await _describe(self._settings, image_b64, POINT_PROMPT)
@@ -325,6 +361,17 @@ class PointAtSkill(Skill):
             shot, (cx, cy) = await asyncio.to_thread(self._capture)
         except Exception as exc:
             return SkillResult(f"I couldn't capture the screen: {exc}", success=False)
+        # Honest failure beats a confidently wrong answer: if the cursor sits on
+        # a display this capture doesn't cover, say so instead of clamping the
+        # crop to the primary screen's edge and describing the wrong pixels.
+        if not (0 <= cx < shot.width and 0 <= cy < shot.height):
+            return SkillResult(
+                "Стрелката е на екран што не можам да го фотографирам."
+                if mk.is_cyrillic(request.text) else
+                "The cursor is on a display I can't capture — move it to the "
+                "main screen and ask again.",
+                success=False,
+            )
         crop = shot.crop(crop_box(cx, cy, shot.width, shot.height))
         buf = io.BytesIO()
         crop.save(buf, format="PNG")
