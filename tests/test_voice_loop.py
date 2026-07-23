@@ -5,6 +5,8 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock
 
+import numpy as np
+
 from core.config import load_settings
 from core.metrics import LatencyLog
 from voice.loop import VoiceLoop
@@ -64,6 +66,141 @@ def test_custom_wake_model_path_resolves(tmp_path):
     tflite = tmp_path / "hey_medo.tflite"
     tflite.write_bytes(b"fake")
     assert _resolve_model_path(str(tflite)) == str(tflite)
+
+
+# --- barge-in: "medo" interrupts, noise does not (default = wake) -------------
+
+
+class _WakeFrame:
+    """A mic frame carrying the wake word. A plain object (not an ndarray) so it
+    can be tagged; the voice-energy path is never reached on it in wake mode."""
+
+    rms = 0.0
+
+
+class _FakeWake:
+    """Scores high only on a frame that IS the wake word ("medo")."""
+
+    def predict(self, frame):
+        return 0.9 if isinstance(frame, _WakeFrame) else 0.0
+
+    def reset(self):
+        pass
+
+
+def _quiet_frame():
+    return np.zeros(1280, dtype=np.int16)      # frames are int16 PCM
+
+
+def _loud_frame():
+    # rms 10000/32768 ≈ 0.3 — well above barge_min_rms once baseline settles
+    return np.full(1280, 10000, dtype=np.int16)
+
+
+def _cfg(mode):
+    s = load_settings()
+    s.audio.barge_mode = mode
+    return s.audio
+
+
+def test_wake_mode_ignores_loud_noise():
+    # The default: a random word / noise stream never interrupts.
+    frames = [_loud_frame() for _ in range(30)]
+    why = VoiceLoop.watch_for_barge(iter(frames), _FakeWake(), _cfg("wake"))
+    assert why is None
+
+
+def test_wake_mode_interrupts_on_the_wake_word():
+    frames = [_quiet_frame(), _quiet_frame(), _WakeFrame(), _quiet_frame()]
+    why = VoiceLoop.watch_for_barge(iter(frames), _FakeWake(), _cfg("wake"))
+    assert why == "wake word over playback"
+
+
+def test_voice_mode_still_interrupts_on_sustained_noise():
+    # Opt back in to the old behaviour: quiet leakage first (baseline settles
+    # low), then sustained loud speech trips the energy bar.
+    frames = [_quiet_frame() for _ in range(8)] + [_loud_frame() for _ in range(8)]
+    why = VoiceLoop.watch_for_barge(iter(frames), _FakeWake(), _cfg("voice"))
+    assert why == "voice over playback"
+
+
+def test_off_mode_ignores_both_wake_and_noise():
+    frames = [_WakeFrame()] + [_loud_frame() for _ in range(30)]
+    why = VoiceLoop.watch_for_barge(iter(frames), _FakeWake(), _cfg("off"))
+    assert why is None
+
+
+def test_barge_needs_sustained_wake_frames_when_configured():
+    # A single wake-scoring frame (a transient) must not interrupt when the
+    # wake word requires several consecutive frames.
+    wake = _FakeWake()
+    wake.trigger_frames = 2
+    one = [_quiet_frame(), _WakeFrame(), _quiet_frame(), _quiet_frame()]
+    assert VoiceLoop.watch_for_barge(iter(one), wake, _cfg("wake")) is None
+    two = [_WakeFrame(), _WakeFrame(), _quiet_frame()]
+    assert VoiceLoop.watch_for_barge(iter(two), wake, _cfg("wake")) \
+        == "wake word over playback"
+
+
+def test_explicit_interrupt_signal_wins_in_every_mode():
+    for mode in ("wake", "voice", "off"):
+        ev = threading.Event()
+        ev.set()
+        why = VoiceLoop.watch_for_barge(
+            iter([_quiet_frame()]), _FakeWake(), _cfg(mode), wake_event=ev)
+        assert why == "interrupt signal"
+        assert ev.is_set() is False        # consumed
+
+
+def test_default_barge_mode_is_wake():
+    assert load_settings().audio.barge_mode == "wake"
+
+
+# --- after an interrupt: go to standby, don't sit listening -------------------
+
+def _relisten_loop(*, awaiting=False, continuous=False, listen_after_barge=False):
+    loop = _make_loop()
+    loop._router.awaiting_confirmation = awaiting     # MagicMock attr -> real bool
+    loop._modes.continuous = continuous
+    loop._settings.conversation.listen_after_barge = listen_after_barge
+    return loop
+
+
+def test_interrupt_returns_to_standby_by_default():
+    # The complaint this fixes: after saying "medo" to cut MEDO off (and NOT
+    # saying a command), MEDO must not keep listening to the silence.
+    loop = _relisten_loop()
+    assert loop._should_relisten(barged_in=True) is False
+
+
+def test_interrupt_can_keep_listening_when_opted_in():
+    loop = _relisten_loop(listen_after_barge=True)
+    assert loop._should_relisten(barged_in=True) is True
+
+
+def test_a_normal_turn_returns_to_standby():
+    loop = _relisten_loop()
+    assert loop._should_relisten(barged_in=False) is False
+
+
+def test_confirmation_still_relistens_even_after_a_barge():
+    # "are you sure?" always keeps the mic open, regardless of the barge rule.
+    loop = _relisten_loop(awaiting=True)
+    assert loop._should_relisten(barged_in=True) is True
+
+
+def test_continuous_mode_always_relistens():
+    loop = _relisten_loop(continuous=True)
+    assert loop._should_relisten(barged_in=False) is True
+
+
+def test_default_listen_after_barge_is_off():
+    assert load_settings().conversation.listen_after_barge is False
+
+
+def test_wake_requires_sustained_frames_by_default():
+    # The anti-false-wake default: more than one frame must clear the threshold.
+    assert load_settings().wakeword.trigger_frames >= 2
 
 
 def test_missing_custom_model_falls_back_to_bundled(tmp_path, monkeypatch):

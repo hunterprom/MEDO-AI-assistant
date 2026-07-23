@@ -405,8 +405,9 @@ class RemoteServer:
                 # Session modes (continuous conversation, interpreter).
                 "continuous": self._modes.continuous,
                 "interpreter": self._modes.interpreter,
-                # MEDO Lion Mode: no confirmations, PC switch ignored.
-                "lion_mode": self._settings.safety.lion_mode,
+                # MEDO Lion Mode: the defensive-security profile (surfaces
+                # read-only audit skills + deep-red skin; safety unchanged).
+                "lion_mode": self._settings.mode.lion,
                 # Which local CLI agents exist on this machine (for the HUD).
                 "cli_available": await asyncio.to_thread(self._cli_availability),
             }
@@ -722,20 +723,21 @@ class RemoteServer:
         return web.json_response({"ok": True, "on": enabled})
 
     async def _handle_lion(self, request: web.Request) -> web.Response:
-        """MEDO LION MODE from the HUD.
+        """MEDO LION MODE (the defensive-security profile) from the HUD.
 
-        Runtime-only on purpose — it is never written to the secrets file, so
-        it cannot survive a restart. A switch that removes every confirmation
-        is one you should have to turn on deliberately, each session.
+        Runtime-only on purpose — it resets on restart, because a profile is a
+        thing you enter for a task. It changes presentation and which skills
+        are surfaced; it does NOT touch any safety rule (see docs/Decisions.md).
         """
         try:
             enabled = bool((await request.json()).get("on"))
         except (ValueError, TypeError):
             return _error(400, "body must be JSON like {\"on\": true}")
-        self._settings.safety.lion_mode = enabled
-        logger.warning("LION MODE %s via companion API — confirmations %s",
-                       "ON" if enabled else "OFF",
-                       "DISABLED" if enabled else "restored")
+        self._settings.mode.lion = enabled
+        logger.info("LION MODE %s via companion API — defensive-security "
+                    "profile %s (safety gate unchanged)",
+                    "ON" if enabled else "OFF",
+                    "surfaced" if enabled else "hidden")
         return web.json_response({"ok": True, "on": enabled})
 
     async def _handle_council(self, request: web.Request) -> web.Response:

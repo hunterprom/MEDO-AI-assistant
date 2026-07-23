@@ -63,6 +63,7 @@ from skills.system import (
 from skills.timers import TimerSkill
 from skills.vision_skill import SeeCameraSkill, SeeScreenSkill
 from skills.weather import WeatherSkill
+from skills.webfetch import WebFetchSkill
 from skills.websearch import WebSearchSkill
 
 # Never let a pretty glyph kill the app: on legacy/cp1252 consoles (and
@@ -167,6 +168,14 @@ def build_registry(
     from skills.lion import LionModeSkill
 
     registry.register(LionModeSkill(settings))
+    # Lion mode's defensive-security skills — read-only, local, advisory. They
+    # surface themselves only while mode.lion is on (their match() checks it),
+    # so registering them always is harmless. They borrow the council's LLM
+    # helper for the prose in their advice; None => they fall back to facts.
+    from skills.security import build_security_skills
+
+    for _sec in build_security_skills(settings, whitelist, explain=expert):
+        registry.register(_sec)
     # The specialist council + the wiring helper that borrows its electrical
     # engineer. Before the broad web/search skills, whose "how do I ..." and
     # "ask ..." patterns would otherwise swallow them.
@@ -252,6 +261,14 @@ def build_registry(
         from skills.documents import DocumentsSkill
 
         registry.register(DocumentsSkill(doc_index))
+    # "import this file" — takes ONE file into the managed store and pushes it
+    # through that same index (or, for a picture, its vision description).
+    # Registered before the file skills so "import ~/Downloads/spec.pdf" isn't
+    # read as an open/find. Works without doc_index: it still copies and
+    # describes, and says plainly that it couldn't index.
+    from skills.importer import ImportFileSkill
+
+    registry.register(ImportFileSkill(settings, whitelist, doc_index))
     # Editing before finding: "edit notes.md" is a specific action, while
     # FilesSkill's verbs (find/search/open) don't overlap with it. Both are
     # confined to the same whitelist.
@@ -327,7 +344,21 @@ def build_registry(
     # Web skills (network; degrade gracefully offline; broad patterns last).
     registry.register(weather_skill)
     registry.register(news_skill)
+    # Reading a page BEFORE searching for one: web_fetch's patterns all demand
+    # either a URL or an explicit "page/страница" noun, so they are narrow
+    # enough to sit ahead of web_search's greedy "search … for …" — and
+    # "summarize <url>" must not be read as a search for the word "summarize".
+    if settings.web_fetch.enabled:
+        registry.register(WebFetchSkill(settings.web_fetch, summarize))
     registry.register(WebSearchSkill(summarize))
+
+    # Last, once every skill exists: the user's own trigger phrases from
+    # config.yaml (skills.triggers). They are appended to the very same
+    # `patterns` list the built-ins use, so nothing downstream — the router,
+    # the registry, the tests — has to know a phrase came from config.
+    from core.triggers import apply_triggers
+
+    apply_triggers(registry, settings.skills.get("triggers", {}))
     return registry
 
 
@@ -704,7 +735,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
     hud_server: HudServer | None = None
     if hud or settings.hud.enabled:
-        hud_server = HudServer(settings, bus)
+        hud_server = HudServer(settings, bus, registry=registry)
         await hud_server.start()
         console.print(
             f"[bold cyan]HUD:[/bold cyan] open "

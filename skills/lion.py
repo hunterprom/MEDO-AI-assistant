@@ -1,21 +1,27 @@
-"""MEDO Lion Mode — stop asking, just do it.
+"""MEDO Lion Mode — the defensive-security expert profile.
 
-While Lion Mode is on the router skips the spoken confirmation before
-destructive actions and ignores the PC-control switch. It is the "I know what
-I'm doing, get out of the way" mode.
+Lion mode is a PROFILE, not a bypass. Turning it on:
 
-What it deliberately does NOT do, because these bound *where* MEDO can act
-rather than *whether it asks first*:
+* reskins the HUD deep red and shows a LION indicator;
+* SURFACES a group of read-only, local-machine, advisory security skills
+  (see skills/security.py): a listening-port audit, a firewall audit, a
+  process explainer, a file-permission explainer, and an update/hygiene check.
 
-* the file whitelist still applies — a mis-heard filename must not reach your
-  system drive just because you stopped wanting prompts;
-* ``browser.blocked_domains`` still applies;
-* the text-only rule on file edits still applies, and edits still leave a .bak.
+What it deliberately does NOT do — and this is the whole point, stated so no
+one wires it back the other way:
 
-Turning it ON asks for confirmation, which is not a joke: it is the last
-prompt you will get, so it is the one worth answering deliberately. Turning it
-OFF never asks. It also resets to off on restart — a mode for a task, not a
-setting you forget you left on.
+* it does not touch the confirmation gate. MEDO still asks before every
+  destructive action, in lion mode exactly as out of it;
+* it does not touch the path whitelist or the PC-control switch;
+* it grants no new power to act. Every skill it surfaces is read-only and
+  advisory — "here is what I see, you decide."
+
+Turning it on therefore needs no scary confirmation: it lowers no guardrail.
+It still resets to off on restart, because it is a mode you enter for a task.
+
+(This replaced an earlier "stop asking me" bypass. An unrestricted mode is a
+liability; a defensive-security profile is a real, hireable specialty. See
+docs/Decisions.md.)
 """
 
 from __future__ import annotations
@@ -28,26 +34,31 @@ from core.config import Settings
 from skills.base import Skill, SkillRequest, SkillResult
 
 ON_REPLY = (
-    "Lion mode on. I won't ask before acting, and the PC control switch no "
-    "longer stops me. Say 'lion mode off' when you're done."
+    "Lion mode on. Defensive-security tools are live: security check, firewall "
+    "audit, process and permission explainers, and an update check — all "
+    "read-only, this machine only. Your safety gate is unchanged; I still ask "
+    "before anything destructive. Say 'lion mode off' when you're done."
 )
 ON_REPLY_MK = (
-    "Лав мод е вклучен. Нема да прашувам пред да дејствувам. Кажи „лав мод "
-    "исклучи“ кога ќе завршиш."
+    "Лав мод е вклучен. Одбранбените алатки се активни: безбедносна проверка, "
+    "проверка на заштитниот ѕид, објаснувања за процеси и дозволи, и проверка "
+    "за надградби — само за читање, само за овој компјутер. Безбедносната "
+    "заштита останува иста. Кажи „лав мод исклучи“ кога ќе завршиш."
 )
-OFF_REPLY = "Lion mode off. I'll ask before destructive actions again."
-OFF_REPLY_MK = "Лав мод е исклучен. Пак ќе прашувам пред опасни дејства."
+OFF_REPLY = "Lion mode off. The defensive-security tools are put away."
+OFF_REPLY_MK = "Лав мод е исклучен. Одбранбените алатки се склонети."
 
 
 class LionModeSkill(Skill):
-    """Toggle MEDO Lion Mode."""
+    """Toggle MEDO Lion Mode (the defensive-security profile)."""
 
     name = "lion_mode"
     controls_pc = False          # the switch itself isn't an action on the PC
     description = (
-        "Turn MEDO Lion Mode on or off. In lion mode MEDO stops asking for "
-        "confirmation before destructive actions and ignores the PC control "
-        "switch. Only use when the user explicitly asks for it by name."
+        "Turn MEDO Lion Mode on or off. Lion mode is a defensive-security "
+        "profile: it reskins the interface and surfaces read-only, "
+        "local-machine security-audit skills. It does NOT change any safety "
+        "rule or confirmation. Use when the user asks for it by name."
     )
 
     _ON = r"on|enable|engage|activate|start"
@@ -82,25 +93,21 @@ class LionModeSkill(Skill):
         else:
             # Bare "lion mode" toggles, which is what people mean when they
             # bark it mid-task.
-            want_on = not self._settings.safety.lion_mode
+            want_on = not self._settings.mode.lion
 
         if not want_on:
-            self._settings.safety.lion_mode = False
+            self._settings.mode.lion = False
             return SkillResult(OFF_REPLY_MK if speak_mk else OFF_REPLY,
                                data={"lion_mode": False})
 
-        if self._settings.safety.lion_mode:
+        if self._settings.mode.lion:
             return SkillResult("Лав мод е веќе вклучен." if speak_mk
                                else "Lion mode is already on.",
                                data={"lion_mode": True})
-        # The last prompt you'll get, so make it count.
-        if not request.context.get("confirmed"):
-            return SkillResult(
-                "Лав мод значи дека нема да прашувам пред опасни дејства. "
-                "Сигурен си?" if speak_mk else
-                "Lion mode means I stop asking before destructive actions. "
-                "Are you sure?", needs_confirmation=True)
-        self._settings.safety.lion_mode = True
+        # No confirmation: lion mode lowers no guardrail, so gating it behind a
+        # prompt would only teach the habit of clicking through security
+        # prompts. It just enters the profile.
+        self._settings.mode.lion = True
         return SkillResult(ON_REPLY_MK if speak_mk else ON_REPLY,
                            data={"lion_mode": True})
 

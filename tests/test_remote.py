@@ -309,11 +309,11 @@ async def test_lion_mode_toggles_and_is_reported_in_status(server_client):
     assert (await (await client.get("/status")).json())["lion_mode"] is False
 
     data = await (await client.post("/control/lion", json={"on": True})).json()
-    assert data["on"] is True and server._settings.safety.lion_mode is True
+    assert data["on"] is True and server._settings.mode.lion is True
     assert (await (await client.get("/status")).json())["lion_mode"] is True
 
     await client.post("/control/lion", json={"on": False})
-    assert server._settings.safety.lion_mode is False
+    assert server._settings.mode.lion is False
 
 
 @pytest.mark.asyncio

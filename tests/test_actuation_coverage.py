@@ -65,7 +65,7 @@ def _tool_router(monkeypatch, tool_name, *, pc_on=True, lion=False):
     """A router whose model always calls ``tool_name`` once, then answers."""
     settings = load_settings()
     settings.safety.pc_control_enabled = pc_on
-    settings.safety.lion_mode = lion
+    settings.mode.lion = lion
     act, boom = _Actuator(), _Destructive()
     registry = SkillRegistry()
     registry.register(act)
@@ -110,17 +110,20 @@ async def test_llm_destructive_tool_call_stops_for_confirmation(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lion_mode_lets_a_destructive_tool_call_straight_through(monkeypatch):
+async def test_lion_mode_does_not_let_a_destructive_tool_call_through(monkeypatch):
+    # Lion mode is a presentation profile; the LLM-path gate is unchanged.
     router, _, boom = _tool_router(monkeypatch, "power", lion=True)
-    await router.route("power down")
-    assert boom.ran is True and router.awaiting_confirmation is False
+    result = await router.route("power down")
+    assert boom.ran is False
+    assert result.speech == "Sure?" and router.awaiting_confirmation is True
 
 
 @pytest.mark.asyncio
-async def test_lion_mode_overrides_pc_control_on_the_llm_path(monkeypatch):
+async def test_lion_mode_does_not_override_pc_control_on_the_llm_path(monkeypatch):
     router, act, _ = _tool_router(monkeypatch, "apps", pc_on=False, lion=True)
-    await router.route("do the thing")
-    assert act.ran is True
+    result = await router.route("do the thing")
+    assert act.ran is False
+    assert PC_CONTROL_OFF_REPLY in result.speech or result.speech == "All done."
 
 
 @pytest.mark.asyncio

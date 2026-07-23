@@ -46,6 +46,13 @@ class Specialist:
     title: str                      # spoken back: "the electrical engineer"
     prompt: str                     # the role framing handed to the model
     triggers: tuple[str, ...] = ()  # words that route a question here
+    #: Other ways this specialist gets ADDRESSED by name — chiefly the
+    #: Macedonian title, with its definite-article endings ("електроинженерот").
+    #: Distinct from ``triggers``, which are subject words that route a
+    #: question here: "прашај го адвокатот" names the lawyer, "договор" merely
+    #: suggests them. Without these, ``skills/council.py``'s Macedonian
+    #: "прашај го …" pattern matched and then resolved to nobody.
+    aliases: tuple[str, ...] = ()
     #: True when this specialist is much better with real tools (reading files,
     #: running code, fetching a datasheet) — i.e. worth a real CLI sub-agent.
     wants_tools: bool = False
@@ -61,6 +68,8 @@ COUNCIL: tuple[Specialist, ...] = (
         ("circuit", "voltage", "current", "resistor", "capacitor", "led",
          "ground", "amp", "power supply", "mosfet", "transistor", "pcb",
          "solder", "струја", "напон", "отпорник", "коло"),
+        aliases=("електроинженер", "електро инженер", "инженер за струја",
+                 "electronics engineer", "electrical"),
         wants_tools=True,
     ),
     Specialist(
@@ -71,6 +80,8 @@ COUNCIL: tuple[Specialist, ...] = (
         "about what breaks first in a real build.",
         ("robot", "servo", "actuator", "kinematic", "gait", "imu", "encoder",
          "torque", "motor", "quadruped", "робот", "мотор"),
+        aliases=("роботичар", "инженер за роботика", "robotics engineer",
+                 "robot engineer"),
         wants_tools=True,
     ),
     Specialist(
@@ -80,6 +91,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "and manufacturability. You give numbers and safety factors.",
         ("bearing", "gear", "tolerance", "stress", "material", "3d print",
          "filament", "cad", "fillet", "bracket", "лежиште", "материјал"),
+        aliases=("машински инженер", "машинец", "mech engineer"),
     ),
     Specialist(
         "physics", "the physicist",
@@ -88,6 +100,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "applying. You are comfortable with order-of-magnitude arguments.",
         ("physics", "force", "energy", "momentum", "thermodynamic", "optics",
          "gravity", "relativity", "физика", "енергија", "сила"),
+        aliases=("физичар", "физика"),
     ),
     Specialist(
         "quantum", "the quantum physicist",
@@ -97,6 +110,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "classical randomness up as quantum weirdness.",
         ("quantum", "qubit", "entangle", "superposition", "decoherence",
          "quantum computing", "квантн"),
+        aliases=("квантен физичар", "квантниот физичар", "quantum"),
     ),
     Specialist(
         "mathematics", "the mathematician",
@@ -105,6 +119,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "You say 'that is not well defined' when it is not.",
         ("prove", "theorem", "integral", "derivative", "matrix", "algebra",
          "probability", "statistic", "equation", "математик", "равенка"),
+        aliases=("математичар", "математика", "mathematics", "maths", "math"),
     ),
     Specialist(
         "software", "the software engineer",
@@ -113,6 +128,8 @@ COUNCIL: tuple[Specialist, ...] = (
         "point out the bug that will actually bite, not the stylistic one.",
         ("code", "bug", "function", "api", "python", "compile", "algorithm",
          "refactor", "код", "програм"),
+        aliases=("програмер", "софтверски инженер", "developer", "programmer",
+                 "software developer"),
         wants_tools=True,
     ),
     Specialist(
@@ -123,6 +140,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "information and not legal advice for a specific situation.",
         ("legal", "law", "contract", "liability", "licence", "license",
          "copyright", "gdpr", "правн", "закон", "договор"),
+        aliases=("адвокат", "правник", "attorney", "solicitor"),
     ),
     Specialist(
         "finance", "the financial analyst",
@@ -131,6 +149,8 @@ COUNCIL: tuple[Specialist, ...] = (
         "You note that this is analysis, not investment advice.",
         ("invest", "cash flow", "profit", "margin", "loan", "interest rate",
          "valuation", "budget", "финанс", "камата", "буџет"),
+        aliases=("финансиски аналитичар", "финансиер", "financial adviser",
+                 "financial advisor", "analyst"),
     ),
     Specialist(
         "economics", "the economist",
@@ -139,6 +159,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "with empirical support from a theoretical prediction.",
         ("economy", "inflation", "market", "supply and demand", "tariff",
          "gdp", "економ", "инфлациј", "пазар"),
+        aliases=("економист", "економија", "economics"),
     ),
 )
 
@@ -159,6 +180,7 @@ def load_council(extra: dict[str, Any] | None = None) -> tuple[Specialist, ...]:
             title=str(spec.get("title", f"the {key} specialist")),
             prompt=str(spec["prompt"]),
             triggers=tuple(str(t).lower() for t in spec.get("triggers", ())),
+            aliases=tuple(str(a).lower() for a in spec.get("aliases", ())),
             wants_tools=bool(spec.get("wants_tools", False)),
         )
     return tuple(members.values())
@@ -178,14 +200,34 @@ def find_specialist(spoken: str,
     if not want:
         return None
     want = re.sub(r"^(?:the|a|an|our|my)\s+", "", want)
+    # Macedonian glues the definite article onto the noun ("адвокат" ->
+    # "адвокатот", "физичар" -> "физичарот"), so an alias can never be compared
+    # for equality — the spoken form is the alias plus a suffix. Stripping the
+    # article here keeps the alias table free of every inflected variant.
+    #
+    # Per WORD, because the article rides the adjective in a phrase:
+    # "машински инженер" is spoken "машинскиОТ инженер", with the suffix in
+    # the middle. Only words of 5+ characters are touched, so short function
+    # words ("за", "на") survive intact.
+    bare = " ".join(
+        re.sub(r"(?:та|то|те|от|ов|ва)$", "", w) if len(w) >= 5 else w
+        for w in want.split(" ")
+    )
     for member in council:
         title = member.title.lower().removeprefix("the ")
         if want in (member.key, title) or want.rstrip("s") == member.key:
             return member
-    # "ask the electrical guy" — fall back to a containment match.
+        for alias in member.aliases:
+            alias = alias.lower()
+            if want == alias or bare == alias:
+                return member
+    # "ask the electrical guy" / "прашај го електроинженерот" — containment,
+    # so a title with an extra word or an article still lands.
     for member in council:
         title = member.title.lower().removeprefix("the ")
         if want in title or title in want:
+            return member
+        if any(a.lower() in want for a in member.aliases if len(a) >= 5):
             return member
     return None
 

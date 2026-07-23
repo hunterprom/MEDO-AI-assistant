@@ -84,19 +84,37 @@ class WakeWord:
         from openwakeword.model import Model
 
         self.threshold = config.threshold
+        # How many consecutive over-threshold frames make a wake. The consumer
+        # (voice loop) counts them; exposed here so both the standby wait and
+        # the barge-in watcher agree on it.
+        self.trigger_frames = max(1, int(getattr(config, "trigger_frames", 1)))
         model_path = _resolve_model_path(config.phrase)
         # Framework follows the model file: .tflite needs tflite-runtime,
         # everything else (bundled + custom .onnx) runs on onnxruntime.
         framework = "tflite" if model_path.endswith(".tflite") else "onnx"
-        self._model = Model(
-            wakeword_models=[model_path],
-            inference_framework=framework,
-        )
+        kwargs: dict = {"wakeword_models": [model_path],
+                        "inference_framework": framework}
+        vad = float(getattr(config, "vad_threshold", 0.0) or 0.0)
+        if vad > 0.0:
+            kwargs["vad_threshold"] = vad
+        try:
+            self._model = Model(**kwargs)
+        except Exception:
+            # The speech-gate (VAD) model may be missing/undownloadable offline;
+            # never let that kill voice — run without it.
+            if "vad_threshold" in kwargs:
+                logger.warning("wake-word VAD unavailable — running without it")
+                kwargs.pop("vad_threshold")
+                self._model = Model(**kwargs)
+            else:
+                raise
         # openWakeWord keys predictions by model name (e.g. "hey_jarvis_v0.1").
         keys = list(self._model.models.keys())
         root = config.phrase.split("_")[0]
         self._key = next((k for k in keys if config.phrase in k or root in k), keys[0])
-        logger.info("wake word ready: %r (threshold %.2f)", self._key, self.threshold)
+        logger.info("wake word ready: %r (threshold %.2f, %d frame%s)",
+                    self._key, self.threshold, self.trigger_frames,
+                    "" if self.trigger_frames == 1 else "s")
 
     def predict(self, frame: np.ndarray) -> float:
         """Score one int16 frame; returns the confidence for the wake phrase."""

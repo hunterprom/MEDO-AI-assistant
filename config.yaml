@@ -50,6 +50,11 @@ conversation:                       # continuous mode (voice/loop.py, core/modes
   continuous: false
   followup_window_s: 8.0            # mic stays open this long for a follow-up,
                                     # then falls back to standby on silence
+  # After you interrupt MEDO by saying "medo" over its reply, keep listening for
+  # a follow-up without the wake word? false = interrupting just stops MEDO and
+  # it returns to standby (it won't sit there recording the silence after).
+  # true = chain "medo — actually, do X" in one breath.
+  listen_after_barge: false
   # Dictation ("take dictation" … "stop dictation"): everything heard is
   # written down instead of answered, with no wake word between lines. Composing
   # involves pauses, so it gets a longer silence gate and ceiling than a command.
@@ -92,6 +97,11 @@ vision:                             # camera hand-gesture control (sidecar proce
   camera_index: 0
   stream_port: 8731                 # MJPEG stream the HUD embeds
   flip: true                        # mirror the selfie view
+  # Draw the coloured hand skeleton on the camera feed? false = invisible
+  # tracking: gestures still work, but neither you nor the vision model sees
+  # coloured lines on your hands (that overlay is drawn on the very frame the
+  # "what do you see" model looks at). true = show it as pointer feedback.
+  show_hand_tracking: false
   max_fps: 15                       # throttle inference on CPU
   min_detection_confidence: 0.6
   min_tracking_confidence: 0.5
@@ -230,6 +240,20 @@ stt:                                # M1
   device: "auto"                    # auto | cuda | cpu
   compute_type: "auto"
   language: null                    # null = auto-detect per utterance (Macedonian + English)
+  # Manual language selection. "auto" detects per utterance (the default);
+  # any code below FORCES it — Whisper stops guessing, decodes as that
+  # language, and MEDO answers in it. Same lever as `language:` above, spelled
+  # so "auto" is an obvious option; setting this wins.
+  #
+  # Reliable to force: en, mk, de, fr, es, it, pt, nl, pl, ru, tr, el, ja, ko,
+  # zh, hi — every language in core/languages.py has a matching neural voice.
+  # Anything else falls back to auto-detect with a warning in the log.
+  #
+  # Worth forcing when auto-detect keeps guessing wrong: short commands carry
+  # little signal, and close neighbours (mk vs bg/sr, es vs pt, hi vs ur) are
+  # where it actually fails. The cost is that MEDO stops understanding your
+  # other languages until you set this back to "auto".
+  language_mode: "auto"             # auto | en | mk | de | ja | ...
   # Auto-detect clamp: Whisper regularly hears Macedonian as Bulgarian/Serbian
   # and then decodes garbage. Detections outside this list trigger ONE forced
   # re-transcription as "mk". Empty list = no clamp.
@@ -276,6 +300,21 @@ wakeword:                           # M1
   # <0.2 on near-misses, so 0.5 separates cleanly. Nudge down if your voice/mic
   # under-triggers, up if it false-fires.
   threshold: 0.5
+  # WAKING ON RANDOM SOUNDS? This is the main fix, no retraining needed. MEDO
+  # only wakes when the score stays above `threshold` for this many consecutive
+  # ~80 ms frames. A clap or a stray word spikes for ONE frame; a real
+  # "hey medo" holds for several. 1 = the old twitchy single-frame trigger.
+  # Raise to 3-4 if it still wakes to noise; lower toward 1 if it starts
+  # missing a genuine "hey medo".
+  trigger_frames: 3
+  # Speech gate (0 = off). Set ~0.5 to make MEDO ignore anything that isn't
+  # SPEECH — music, door bangs, keyboard clatter never even get scored. Uses
+  # openWakeWord's VAD model; if it can't load, MEDO warns and runs without it.
+  vad_threshold: 0.0
+  # Still too many false wakes after the above? The model itself can be retrained
+  # longer/with more data: .venv\Scripts\python -m voice.train_wakeword --generate
+  # then follow docs/Wake Word Training.md (more negative samples + more epochs
+  # is what lowers the false-positive rate).
 
 audio:                              # M1
   # Which microphone the wake word listens on — a PRIORITY LIST: the first
@@ -295,11 +334,19 @@ audio:                              # M1
   silence_threshold: 0.015
   silence_duration_s: 1.4
   max_utterance_s: 30.0
-  # Barge-in (talking over a reply). The bar is your voice vs MEDO's own sound
-  # leaking back into the mic, so it depends on your speakers and room. On this
-  # machine leakage measures ~0.011 rms; barge_rms_ratio 2.0 puts the bar at
-  # ~0.022. Lower it if interrupting doesn't work; raise it if MEDO cuts itself
-  # off. Run: .venv\Scripts\python -m voice.bargecheck  to measure live.
+  # What may interrupt MEDO mid-reply:
+  #   wake  = ONLY the wake word ("medo") or the HUD/watch interrupt button;
+  #           a random word or background noise won't cut it off (default).
+  #   voice = also any sustained speech/noise over the reply — talk over MEDO
+  #           without saying its name (older, twitchier behaviour).
+  #   off   = only the HUD/watch button; the mic never interrupts playback.
+  barge_mode: "wake"
+  # The knobs below apply to the wake/voice detectors. The energy bar (used
+  # only in "voice" mode) is your voice vs MEDO's own sound leaking back into
+  # the mic, so it depends on your speakers and room. On this machine leakage
+  # measures ~0.011 rms; barge_rms_ratio 2.0 puts the bar at ~0.022. Lower
+  # barge_wake_threshold if saying "medo" over MEDO doesn't stop it; raise it
+  # if MEDO cuts itself off. Run: .venv\Scripts\python -m voice.bargecheck
   barge_wake_threshold: 0.25
   barge_rms_ratio: 2.0
   barge_min_rms: 0.02
@@ -321,19 +368,45 @@ safety:                             # M2
   # ("PC control") — the live choice persists per machine in
   # secrets.local.yaml. Sensing (vision, weather, questions) always works.
   pc_control_enabled: true
-  # MEDO LION MODE. Off, and it resets to off on every restart. While on, MEDO
-  # stops asking before destructive actions and ignores pc_control_enabled.
-  # It does NOT widen whitelist_dirs or browser.blocked_domains: those bound
-  # WHERE MEDO may act, and "stop asking me" is not a reason to let a
-  # mis-heard word reach your system drive. Turn on by voice: "lion mode on"
-  # (it asks once — the last time it will).
-  lion_mode: false
   whitelist_dirs:                   # files.py may only touch these trees
     - "~/Documents"
     - "~/Downloads"
     - "~/Desktop"
 
+mode:
+  # Expert PROFILES — presentation + which skills are surfaced. NOT safety
+  # switches: none of these relax the confirmation gate, the whitelist, or the
+  # PC-control switch.
+  #
+  # MEDO LION MODE — the defensive-security profile. Off, and it resets to off
+  # on every restart. While on it reskins the HUD deep red, shows a LION
+  # indicator, and surfaces read-only, LOCAL-machine audit skills: a listening-
+  # port check, a firewall audit, a process explainer, a file-permission
+  # explainer, and an update/hygiene check. It is DEFENSIVE-ONLY — it will not
+  # scan other machines, write exploits, crack credentials, or disable MEDO's
+  # own guards, and it changes nothing about safety. Turn on by voice:
+  # "lion mode on".
+  lion: false
+
 skills:
+  # Your own wording for any skill, without touching Python. Each phrase below
+  # becomes one more fast-path trigger for that skill — matched literally (not
+  # as a regex), case-insensitively, anywhere in the sentence, and tried BEFORE
+  # the built-in patterns. Works in any language MEDO listens to.
+  #
+  # Skill names are the ones printed by `python main.py --list-skills`; a name
+  # that doesn't exist is logged as a warning at startup, not silently ignored.
+  # Phrases shorter than 3 characters are rejected — "go" would shadow half the
+  # router. A custom phrase does NOT bypass safety: a skill that asks for
+  # confirmation still asks.
+  #
+  # Examples (uncomment and edit):
+  # triggers:
+  #   news:      ["што има ново", "catch me up"]
+  #   weather:   ["дали ќе врне", "do i need a jacket"]
+  #   documents: ["што пишува во", "look it up in my files"]
+  triggers: {}
+
   # apps.py — logical name -> per-platform launch command.
   # Cross-platform defaults; edit for your machine.
   apps:
@@ -443,6 +516,33 @@ news:                               # M3
     - "https://makfax.com.mk/feed/"
     - "https://www.slobodenpecat.mk/feed/"
     - "https://kanal5.com.mk/rss.aspx"
+
+web_fetch:                          # skills/webfetch.py — READ a page, not just open it
+  # "read https://…", "what does this page say about X", "summarize <url>",
+  # "прочитај ја страницата", "земи <url>", "што пишува на <url>".
+  #
+  # SAFETY: only a URL YOU supplied is fetched silently. A link that arrived
+  # from an imported document or from tool output is untrusted third-party
+  # text, so MEDO names the host and asks first; file://, javascript: and
+  # data: links are refused outright, never offered. See docs/Decisions.md.
+  enabled: true                     # false removes the skill entirely — no patterns,
+                                    # no tool the model can call. Turn it off if MEDO
+                                    # must never make outbound requests you didn't
+                                    # initiate from the browser yourself.
+  timeout_s: 15                     # whole-read deadline, not just connect. Raise for
+                                    # slow news sites; lower if you would rather be
+                                    # told "it took too long" than sit through a pause.
+  max_bytes: 2000000                # ~2 MB of HTML is already a very long article. The
+                                    # download is ABORTED mid-stream past this, so
+                                    # raising it spends real memory and time on
+                                    # endless/hostile pages; lower it on a small box.
+  max_redirects: 3                  # enough for http -> https -> www. Raise only if a
+                                    # site you actually read hides behind a longer
+                                    # chain; more hops is usually a tracker or a loop.
+  # Sent as-is on every request. Change it if a site you read blocks this one
+  # (some 403 unknown clients) — but a UA that claims to be a person's Chrome
+  # is a lie that also breaks the moment their fingerprinting tightens.
+  user_agent: "Mozilla/5.0 (compatible; MEDO/2.0; local voice assistant)"
 
 vision_llm:                         # "what do you see" / "read my screen" / bench
   # qwen2.5vl:3b replaced moondream (2026-07-20): the re-published moondream

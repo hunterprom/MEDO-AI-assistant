@@ -166,6 +166,8 @@ class VoiceLoop:
         peak_score = peak_rms = 0.0
         last_report = time.monotonic()
         frames = 0
+        run = 0                 # consecutive over-threshold frames (anti-noise)
+        need = getattr(wake, "trigger_frames", 1)
         while True:
             if self._settings.audio.input_device != opened_device:
                 logger.info("input device changed — reopening the microphone")
@@ -184,8 +186,11 @@ class VoiceLoop:
                 return "go"
             frame = mic.read_frame()               # ~80 ms/frame, so /wake lands fast
             score = wake.predict(frame)
-            if score >= wake.threshold:
-                logger.info("wake word detected (score %.2f)", score)
+            # Require the phrase to hold above threshold for `need` frames: a
+            # transient noise spikes for one frame, a spoken "hey medo" doesn't.
+            run = run + 1 if score >= wake.threshold else 0
+            if run >= need:
+                logger.info("wake word detected (score %.2f, %d frames)", score, run)
                 return "go"
             peak_score = max(peak_score, score)
             peak_rms = max(peak_rms, frame_rms(frame))
@@ -201,14 +206,71 @@ class VoiceLoop:
 
     # --- barge-in ------------------------------------------------------------
 
+    @staticmethod
+    def watch_for_barge(frames, wake, audio_cfg, wake_event=None) -> str | None:
+        """Decide whether to interrupt playback, over an iterable of mic frames.
+
+        The interrupt triggers depend on ``audio_cfg.barge_mode``:
+
+        * ``"wake"``  — ONLY the wake word ("medo") over the reply, or the
+          explicit HUD/watch interrupt signal. Random words and background
+          noise are ignored. (Default.)
+        * ``"voice"`` — additionally, sustained mic energy well above the
+          reply's own speaker-leakage baseline (measured live over the first
+          frames). The older "talk over MEDO" behaviour.
+        * ``"off"``   — only the explicit interrupt signal; the mic never
+          interrupts.
+
+        Pure of audio hardware so it can be unit-tested: ``frames`` is any
+        iterable of PCM frames and ``wake`` any object with
+        ``predict(frame) -> float``. Returns the reason string, or ``None`` if
+        the frames ran out with no barge-in.
+        """
+        mode = getattr(audio_cfg, "barge_mode", "wake")
+        wake_enabled = mode in ("wake", "voice")
+        voice_enabled = mode == "voice"
+        need = getattr(wake, "trigger_frames", 1)   # same anti-noise gate as standby
+        baseline: float | None = None   # EMA of mic RMS incl. TTS leakage
+        loud_run = 0
+        wake_run = 0
+        n = 0
+        for frame in frames:
+            n += 1
+            if wake_event is not None and wake_event.is_set():
+                wake_event.clear()
+                return "interrupt signal"
+            if wake_enabled:
+                # Same sustained-phrase rule as standby: one loud frame that
+                # happens to score high must not count as "medo".
+                wake_run = (wake_run + 1
+                            if wake.predict(frame) >= audio_cfg.barge_wake_threshold
+                            else 0)
+                if wake_run >= need:
+                    return "wake word over playback"
+            if not voice_enabled:
+                continue          # mode "wake"/"off": energy never interrupts
+            rms = frame_rms(frame)
+            if baseline is None:
+                baseline = rms
+            elif n <= 6 or rms < baseline * 1.5:
+                # Track the reply's own loudness only while nothing shouts over
+                # it, so a talking user can't raise the bar.
+                baseline += 0.2 * (rms - baseline)
+            loud = rms >= max(baseline * audio_cfg.barge_rms_ratio,
+                              audio_cfg.barge_min_rms)
+            # Ignore the first frames: the baseline is still settling.
+            loud_run = loud_run + 1 if (loud and n > 6) else 0
+            if loud_run >= audio_cfg.barge_hold_frames:
+                return "voice over playback"
+        return None
+
     def _play_interruptible(self, wav, sr: int) -> bool:
         """Play a reply while watching the mic; True if the user barged in.
 
-        Interrupts on any of: the HUD/watch interrupt signal (``wake_event``),
-        the wake phrase at a playback-lowered threshold, or sustained mic
-        energy well above the reply's own speaker-leakage baseline (measured
-        live during the first frames of playback). Falls back to blocking
-        playback if the mic can't be opened.
+        The barge triggers themselves live in :meth:`watch_for_barge`; this
+        wires it to the live mic and speaker. ``barge_mode: "off"`` still lets
+        the explicit HUD/watch signal through. Falls back to blocking playback
+        if the mic can't be opened.
         """
         import sounddevice as sd
 
@@ -217,49 +279,26 @@ class VoiceLoop:
         audio_cfg = self._settings.audio
         sd.play(wav, samplerate=sr, device=self._settings.audio.output_device)
         stream = sd.get_stream()
-        interrupted = False
-        why = ""
+        why: str | None = None
         try:
             wake.reset()
-            baseline: float | None = None   # EMA of mic RMS incl. TTS leakage
-            loud_run = 0
-            frames = 0
             with Microphone(self._settings.audio.sample_rate,
                             device=self._settings.audio.input_device) as m:
-                while stream.active:
-                    frame = m.read_frame()  # 80 ms cadence paces this loop
-                    frames += 1
-                    if self._wake_event is not None and self._wake_event.is_set():
-                        self._wake_event.clear()
-                        interrupted, why = True, "interrupt signal"
-                        break
-                    if wake.predict(frame) >= audio_cfg.barge_wake_threshold:
-                        interrupted, why = True, "wake word over playback"
-                        break
-                    rms = frame_rms(frame)
-                    if baseline is None:
-                        baseline = rms
-                    elif frames <= 6 or rms < baseline * 1.5:
-                        # Track the reply's own loudness only while nothing
-                        # shouts over it, so a talking user can't raise the bar.
-                        baseline += 0.2 * (rms - baseline)
-                    loud = rms >= max(baseline * audio_cfg.barge_rms_ratio,
-                                      audio_cfg.barge_min_rms)
-                    # Ignore the first frames: the baseline is still settling.
-                    loud_run = loud_run + 1 if (loud and frames > 6) else 0
-                    if loud_run >= audio_cfg.barge_hold_frames:
-                        interrupted, why = True, "voice over playback"
-                        break
+                def live_frames():
+                    while stream.active:
+                        yield m.read_frame()   # 80 ms cadence paces this loop
+                why = self.watch_for_barge(
+                    live_frames(), wake, audio_cfg, self._wake_event)
         except Exception:  # mic busy/unavailable — degrade to plain playback
             logger.debug("barge-in watcher failed", exc_info=True)
             sd.wait()
             return False
         finally:
             wake.reset()
-        if interrupted:
+        if why:
             sd.stop()
             logger.info("barge-in (%s): reply interrupted, listening", why)
-        return interrupted
+        return why is not None
 
     # --- speak ---------------------------------------------------------------
 
@@ -547,16 +586,23 @@ class VoiceLoop:
             stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
         ))
         self._ui.turn(result, self._log.turns[-1])
-        # Listen again right away (no wake word) when MEDO asked "are you
-        # sure?", the user just interrupted, or continuous mode is on — in all
-        # three cases they clearly want to keep talking.
-        next_require_wake = not (
-            self._modes.continuous
-            or self._router.awaiting_confirmation
-            or self._barged_in
-        )
+        next_require_wake = not self._should_relisten(self._barged_in)
         self._barged_in = False
         return next_require_wake
+
+    def _should_relisten(self, barged_in: bool) -> bool:
+        """Whether to open the mic again WITHOUT the wake word after this turn.
+
+        Yes when MEDO just asked "are you sure?" or continuous mode is on — the
+        user is clearly mid-conversation. A barge-in is different: with
+        wake-word interruption, saying "medo" to cut MEDO off does NOT mean a
+        command is coming, so by default we return to standby instead of
+        sitting in LISTENING recording the silence (or noise) that follows.
+        Set conversation.listen_after_barge to keep the old follow-up window.
+        """
+        if self._router.awaiting_confirmation or self._modes.continuous:
+            return True
+        return barged_in and self._settings.conversation.listen_after_barge
 
     # --- the loop ------------------------------------------------------------
 

@@ -97,6 +97,7 @@ class VisionRunConfig:
     camera_index: int = 0
     stream_port: int = 8731
     flip: bool = True
+    show_hand_tracking: bool = False    # draw the coloured hand skeleton?
     max_fps: int = 15
     min_detection_confidence: float = 0.6
     min_tracking_confidence: float = 0.5
@@ -125,6 +126,7 @@ def load_config(path: Path) -> tuple[VisionRunConfig, str]:
         camera_index=v.get("camera_index", 0),
         stream_port=v.get("stream_port", 8731),
         flip=v.get("flip", True),
+        show_hand_tracking=bool(v.get("show_hand_tracking", False)),
         max_fps=v.get("max_fps", 15),
         min_detection_confidence=v.get("min_detection_confidence", 0.6),
         min_tracking_confidence=v.get("min_tracking_confidence", 0.5),

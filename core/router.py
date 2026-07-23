@@ -206,21 +206,18 @@ class Router:
         return await self._llm_reply(text, context, on_delta)
 
     async def _run_skill(self, skill: Skill, request: SkillRequest) -> RouteResult:
-        """Execute a fast-path skill, deferring for confirmation if it asks."""
-        # LION MODE overrides the PC-control switch: the whole point of the
-        # mode is "stop asking me". The path whitelist is NOT overridden —
-        # see SafetyConfig.lion_mode for why that line is drawn there.
-        lion = self._settings.safety.lion_mode
-        if skill.controls_pc and not (self._settings.safety.pc_control_enabled or lion):
+        """Execute a fast-path skill, deferring for confirmation if it asks.
+
+        There is deliberately NO profile that relaxes this gate. Lion mode
+        (mode.lion) surfaces extra skills and reskins the HUD, but the
+        confirmation and PC-control checks below run identically whether it is
+        on or off — see docs/Decisions.md.
+        """
+        if skill.controls_pc and not self._settings.safety.pc_control_enabled:
             return RouteResult(path=RoutePath.FAST, speech=PC_CONTROL_OFF_REPLY,
                               skill_name=skill.name)
-        if lion:
-            # Skills gate themselves on this too (the confirmation branch reads
-            # it), so tell them the answer is already yes.
-            request.context = {**request.context, "confirmed": True}
         outcome = await skill.execute(request)
-        if (outcome.needs_confirmation and self._settings.safety.confirm_destructive
-                and not lion):
+        if (outcome.needs_confirmation and self._settings.safety.confirm_destructive):
             # Stash the request; the next utterance is treated as the yes/no.
             self._pending = (skill, request)
         elif outcome.success and not skill.requires_confirmation:
@@ -405,20 +402,17 @@ class Router:
             name = fn.get("name", "")
             args = fn.get("arguments") or {}
             gated_skill = self._registry.get(name)
-            lion = self._settings.safety.lion_mode
             if (gated_skill is not None and gated_skill.controls_pc
-                    and not (self._settings.safety.pc_control_enabled or lion)):
+                    and not self._settings.safety.pc_control_enabled):
                 # Belt to the tool-filter's braces: even a hallucinated call
                 # to an actuation tool is refused when PC control is off.
                 result = SkillResult(PC_CONTROL_OFF_REPLY, success=False)
             else:
-                if lion:
-                    context = {**context, "confirmed": True}
                 result = await dispatch_tool(self._registry, name, args, context)
             used_skill = name
 
             if (result.needs_confirmation
-                    and self._settings.safety.confirm_destructive and not lion):
+                    and self._settings.safety.confirm_destructive):
                 skill = self._registry.get(name)
                 if skill is not None:
                     request = SkillRequest(text=text, args=args, context=context)

@@ -177,6 +177,48 @@ class DocumentIndex:
         return {"indexed": indexed, "pruned": pruned, "chunks": chunks_total,
                 "enabled": True}
 
+    def index_file(self, path: Path) -> int:
+        """Chunk, embed and store ONE file. Returns the chunk count (0 = nothing).
+
+        The import skill needs a document searchable immediately, and
+        :meth:`reindex` is the wrong tool: it walks every root, which is slow
+        and would also pick up unrelated edits the user did not ask about.
+        This is the same chunk -> embed -> store pipeline reindex uses, applied
+        to a single path, so imports land in the same table the documents skill
+        already searches. Sync — call via ``asyncio.to_thread``.
+
+        The caller is responsible for the whitelist check; this only refuses
+        what it cannot usefully index.
+        """
+        if self._embedder is None:
+            return 0
+        path = Path(path)
+        if path.suffix.lower() not in INDEXED_EXTS:
+            return 0
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return 0
+        chunks = chunk_text(extract_text(path))
+        if not chunks:
+            return 0
+        vectors = self._embedder(chunks)
+        if not vectors:
+            return 0
+        key = os.path.normpath(str(path))
+        with self._connect() as conn:
+            # Re-importing the same file replaces its chunks rather than
+            # doubling them, so the answer does not drift with import count.
+            conn.execute("DELETE FROM doc_chunks WHERE path = ?", (key,))
+            for i, (chunk, vec) in enumerate(zip(chunks, vectors, strict=True)):
+                conn.execute(
+                    "INSERT INTO doc_chunks (path, mtime, idx, text, embedding)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (key, mtime, i, chunk, vec.tobytes()),
+                )
+        logger.info("indexed import %s (%d chunks)", path.name, len(chunks))
+        return len(chunks)
+
     # -- search ---------------------------------------------------------------
 
     def search(self, query: str, k: int = 4) -> list[dict]:

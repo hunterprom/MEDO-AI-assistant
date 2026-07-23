@@ -652,8 +652,14 @@ class GestureRecognizer:
         curled_max_deg: float = CURLED_MAX_DEG,
         zoom_min_spread_deg: float = ZOOM_MIN_SPREAD_DEG,
         l_shape_tolerance_deg: float = L_SHAPE_TOLERANCE_DEG,
+        draw_overlay: bool = False,
     ) -> None:
         import mediapipe as mp
+
+        # Whether to paint the coloured hand skeleton onto the frame. Off by
+        # default: that frame is also what the vision model sees, and tracking
+        # works without it.
+        self._draw_overlay = draw_overlay
 
         # Keyword-only with defaults so existing call sites keep working; the
         # caller passes config.vision.pointer values in when it wants to tune.
@@ -696,13 +702,17 @@ class GestureRecognizer:
             for hand in result.multi_hand_landmarks[:2]:
                 lms = hand.landmark
                 hands.append((classify_landmarks(lms, **self._opts), lms))
-                self._draw.draw_landmarks(
-                    annotated,
-                    hand,
-                    self._mp.solutions.hands.HAND_CONNECTIONS,
-                    self._styles.get_default_hand_landmarks_style(),
-                    self._styles.get_default_hand_connections_style(),
-                )
+                # Tracking always runs (classify_landmarks above); only the
+                # visible skeleton is optional, so the streamed feed and the
+                # vision model see a clean camera image by default.
+                if self._draw_overlay:
+                    self._draw.draw_landmarks(
+                        annotated,
+                        hand,
+                        self._mp.solutions.hands.HAND_CONNECTIONS,
+                        self._styles.get_default_hand_landmarks_style(),
+                        self._styles.get_default_hand_connections_style(),
+                    )
             gesture, landmarks = hands[0]
         return gesture, annotated, landmarks, hands
 

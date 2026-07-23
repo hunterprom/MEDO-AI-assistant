@@ -231,7 +231,7 @@ class _DestructiveSkill(Skill):
 def _lion_router(pc_on: bool, lion: bool):
     settings = load_settings()
     settings.safety.pc_control_enabled = pc_on
-    settings.safety.lion_mode = lion
+    settings.mode.lion = lion
     act, boom = _ActSkill(), _DestructiveSkill()
     registry = SkillRegistry()
     registry.register(act)
@@ -241,33 +241,38 @@ def _lion_router(pc_on: bool, lion: bool):
     return router, act, boom
 
 
+# Lion mode is a PRESENTATION profile, not a bypass. The safety gate must
+# behave identically whether it is on or off — these tests lock that in.
+
 @pytest.mark.asyncio
-async def test_lion_mode_overrides_the_pc_control_switch():
+async def test_lion_mode_does_not_override_the_pc_control_switch():
     router, act, _ = _lion_router(pc_on=False, lion=True)
     r = await router.route("open chrome")
-    assert act.ran is True and r.speech != PC_CONTROL_OFF_REPLY
+    assert act.ran is False and r.speech == PC_CONTROL_OFF_REPLY
 
 
 @pytest.mark.asyncio
-async def test_lion_mode_skips_the_confirmation_gate():
+async def test_lion_mode_does_not_skip_the_confirmation_gate():
     router, _, boom = _lion_router(pc_on=True, lion=True)
-    r = await router.route("wipe it")
-    # startswith, not ==: the persona layer may add a quip to a success.
-    assert boom.ran is True and r.speech.startswith("Done.")
-    assert router.awaiting_confirmation is False
-
-
-@pytest.mark.asyncio
-async def test_without_lion_mode_the_gate_still_holds():
-    router, _, boom = _lion_router(pc_on=True, lion=False)
     r = await router.route("wipe it")
     assert boom.ran is False and r.speech == "Are you sure?"
     assert router.awaiting_confirmation is True
 
 
 @pytest.mark.asyncio
+async def test_the_gate_is_identical_with_lion_on_and_off():
+    on, _, boom_on = _lion_router(pc_on=True, lion=True)
+    off, _, boom_off = _lion_router(pc_on=True, lion=False)
+    r_on = await on.route("wipe it")
+    r_off = await off.route("wipe it")
+    assert r_on.speech == r_off.speech == "Are you sure?"
+    assert boom_on.ran is boom_off.ran is False
+    assert on.awaiting_confirmation is off.awaiting_confirmation is True
+
+
+@pytest.mark.asyncio
 async def test_lion_mode_does_not_widen_the_file_whitelist(tmp_path):
-    """The bound on WHERE MEDO may act is not a confirmation prompt."""
+    """The bound on WHERE MEDO may act is untouched by the profile."""
     from core.safety import PathWhitelist
     from skills.file_edit import FileEditSkill
 
@@ -275,7 +280,7 @@ async def test_lion_mode_does_not_widen_the_file_whitelist(tmp_path):
     outside.write_text("classified\n", encoding="utf-8")
     try:
         settings = load_settings()
-        settings.safety.lion_mode = True
+        settings.mode.lion = True
         skill = FileEditSkill(PathWhitelist([str(tmp_path)]))
         phrase = "add oops to lion-outside.txt"
         r = await skill.execute(SkillRequest(text=phrase, match=skill.match(phrase),

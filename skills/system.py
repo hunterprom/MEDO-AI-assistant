@@ -12,6 +12,7 @@ import asyncio
 
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -232,22 +233,33 @@ class VolumeSkill(Skill):
 # --------------------------------------------------------------------------- #
 class SystemInfoSkill(Skill):
     name = "system_info"
-    description = "Report battery, CPU, and memory usage."
+    description = "Report battery, CPU, memory, and free disk space."
 
     patterns = [
         re.compile(r"\bbattery\b", re.IGNORECASE),
         re.compile(r"\b(?:cpu|processor)\s*(?:usage|load)?\b", re.IGNORECASE),
         re.compile(r"\b(?:ram|memory)\s*(?:usage)?\b", re.IGNORECASE),
         re.compile(r"\bsystem\s+(?:status|stats|info)\b", re.IGNORECASE),
+        # Disk / storage. Deliberately broad on the words people actually use
+        # for it ("how much space do I have", "free space", "storage left").
+        re.compile(r"\b(?:disk|drive|storage)\s*(?:space|usage)?\b", re.IGNORECASE),
+        re.compile(r"\b(?:free|available|much|enough)\s+(?:space|storage|room)\b",
+                   re.IGNORECASE),
+        re.compile(r"\bspace\s+(?:left|remaining|free|do\s+i\s+have|on\s+(?:my|the)"
+                   r"\s+(?:pc|computer|drive|disk|machine))\b", re.IGNORECASE),
+        # MK: "колку простор/место имам", "слободен простор"
+        re.compile(r"\b(?:простор|место)\b", re.IGNORECASE),
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         text = request.text.lower()
-        want_batt = "battery" in text
-        want_cpu = "cpu" in text or "processor" in text
-        want_mem = "ram" in text or "memory" in text
-        if not (want_batt or want_cpu or want_mem):  # "system status" -> all
-            want_batt = want_cpu = want_mem = True
+        want_batt = "battery" in text or "батериј" in text
+        want_cpu = "cpu" in text or "processor" in text or "процесор" in text
+        want_mem = "ram" in text or "memory" in text or "меморија" in text
+        want_disk = any(w in text for w in (
+            "disk", "drive", "storage", "space", "room", "простор", "место"))
+        if not (want_batt or want_cpu or want_mem or want_disk):  # "system status"
+            want_batt = want_cpu = want_mem = want_disk = True
 
         parts: list[str] = []
         data: dict[str, Any] = {}
@@ -259,6 +271,19 @@ class SystemInfoSkill(Skill):
             mem = psutil.virtual_memory()
             parts.append(f"memory at {mem.percent:.0f} percent")
             data["mem_percent"] = mem.percent
+        if want_disk:
+            # The system drive: where "how much space do I have" is really asked.
+            path = "C:\\" if sys.platform == "win32" else "/"
+            try:
+                du = psutil.disk_usage(path)
+                free_gb, total_gb = du.free / 1e9, du.total / 1e9
+                parts.append(
+                    f"{free_gb:.0f} GB free of {total_gb:.0f} GB on the system drive")
+                data["disk"] = {"free_gb": round(free_gb, 1),
+                                "total_gb": round(total_gb, 1),
+                                "percent_used": du.percent}
+            except OSError:
+                parts.append("I couldn't read the disk")
         if want_batt:
             batt = psutil.sensors_battery()
             if batt is None:

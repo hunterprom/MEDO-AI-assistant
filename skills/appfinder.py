@@ -148,8 +148,18 @@ def score_name(candidate: str, wanted: str) -> float:
     if wanted in candidate:
         # Prefer the shortest container: "Obsidian" beats "Obsidian Sandbox".
         return 0.7 + 0.2 * (len(wanted) / len(candidate))
-    words = {w for w in re.findall(r"\w+", candidate)}
-    return 0.5 if wanted in words else 0.0
+    cand_words = {w for w in re.findall(r"\w+", candidate)}
+    if wanted in cand_words:
+        return 0.5
+    # Distinctive-token match: "Fusion 360" should still find "Autodesk Fusion"
+    # (Autodesk dropped the "360"), and "photoshop 2024" find "Adobe Photoshop".
+    # Require EVERY substantial word of the request (>=4 chars, not a bare
+    # version number) to be present, so "in my PC" can't match anything.
+    want_words = re.findall(r"\w+", wanted)
+    significant = [w for w in want_words if len(w) >= 4 and not w.isdigit()]
+    if significant and all(w in cand_words for w in significant):
+        return 0.55
+    return 0.0
 
 
 def find_app(name: str, apps: list[FoundApp] | None = None) -> FoundApp | None:
@@ -273,6 +283,33 @@ class LocateAppSkill(Skill):
         re.compile(r"\bкаде\s+е\s+инсталиран(?:а|о)?\s+(?P<appm2>[\w .+-]+)",
                    re.IGNORECASE),
     ]
+
+    #: An app name never starts with one of these — they mark a quantity or a
+    #: place, not a program. "how much space do I have IN my PC" captured
+    #: "in my PC" as an app and answered "I don't see in my PC installed"; the
+    #: real question was about disk space (system_info handles that).
+    _NOT_APP_LEAD = frozenset({
+        "in", "on", "at", "of", "any", "some", "more", "much", "enough",
+        "free", "room", "space", "left", "remaining", "storage", "disk",
+    })
+
+    def match(self, text: str):
+        # A "how much / how many …" question is about a quantity, never "do I
+        # have <app>". Decline so it can reach the skill that answers it.
+        if re.match(r"\s*how\s+(?:much|many)\b", text, re.IGNORECASE):
+            return None
+        found = super().match(text)
+        if found is None:
+            return None
+        gd = found.groupdict()
+        name = (gd.get("app") or gd.get("app2") or gd.get("app3")
+                or gd.get("app4") or gd.get("appm") or gd.get("appm2") or "").strip()
+        # A capture that begins with a quantity/location word is filler, not an
+        # app — e.g. "in my PC". (The no-capture "what apps do I have" pattern
+        # leaves name empty and is unaffected.)
+        if name and name.lower().split()[0] in self._NOT_APP_LEAD:
+            return None
+        return found
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}

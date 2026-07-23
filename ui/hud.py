@@ -31,8 +31,13 @@ _WEB_DIR = Path(__file__).resolve().parent / "web"
 class HudServer:
     """Serves the HUD page and an SSE event feed off the EventBus."""
 
-    def __init__(self, settings: Settings, bus: EventBus) -> None:
+    def __init__(self, settings: Settings, bus: EventBus,
+                 registry=None) -> None:
         self._settings = settings
+        # The live skill registry, so the cluster-sphere view is built from
+        # what is actually registered — not a hardcoded picture. None (tests /
+        # HUD-only launches) simply yields an empty graph.
+        self._registry = registry
         self._runner: web.AppRunner | None = None
         self._clients: set[asyncio.Queue] = set()
         bus.subscribe(EventType.STATE_CHANGED, self._on_state)
@@ -74,6 +79,19 @@ class HudServer:
             # Interface language default; the picker persists its own choice
             # in localStorage, so this only seeds a browser that has none.
             "uiLanguage": self._settings.hud.language,
+            # Look: base theme + composable effect layers + cluster-view
+            # quality. Cosmetic only; the browser persists its own choice.
+            "ui": {
+                "theme": self._settings.ui.theme,
+                "effects": list(self._settings.ui.effects),
+                "spheres": {
+                    "enabled": self._settings.ui.spheres.enabled,
+                    "quality": self._settings.ui.spheres.quality,
+                },
+            },
+            # The agent cluster graph (spheres + skill-stars), built from the
+            # live registry so it stays truthful as skills are added.
+            "agents": self._agent_graph(),
             "weather": {
                 "city": self._settings.weather.default_city,
                 "lat": self._settings.weather.latitude,
@@ -88,6 +106,27 @@ class HudServer:
         }
         html = html.replace("__MEDO_CONFIG__", json.dumps(page_config))
         return web.Response(text=html, content_type="text/html")
+
+    def _agent_graph(self) -> dict:
+        """The cluster-view graph, or an empty one when there's no registry.
+
+        Built from the *enabled* council roster so a specialist switched off in
+        config doesn't appear as a star it can never light.
+        """
+        if self._registry is None:
+            return {"spheres": [], "skillDomain": {}}
+        try:
+            from core.agents import agent_graph
+            from core.council import enabled_council, load_council
+
+            council = enabled_council(
+                load_council(self._settings.council.extra),
+                self._settings.council.disabled,
+            )
+            return agent_graph(self._registry, council)
+        except Exception:                       # never let the map break the page
+            logger.warning("could not build the agent graph", exc_info=True)
+            return {"spheres": [], "skillDomain": {}}
 
     async def _events(self, request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(headers={

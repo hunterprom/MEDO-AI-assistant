@@ -40,6 +40,52 @@ def test_find_specialist_by_key_and_title():
     assert find_specialist("nobody at all") is None
 
 
+@pytest.mark.parametrize("spoken,key", [
+    # Macedonian glues the article on, so these are alias + suffix.
+    ("електроинженерот", "electrical"),
+    ("електроинженер", "electrical"),
+    ("адвокатот", "law"),
+    ("правникот", "law"),
+    ("физичарот", "physics"),
+    ("математичарот", "mathematics"),
+    ("роботичарот", "robotics"),
+    ("програмерот", "software"),
+    ("економистот", "economics"),
+    ("машинскиот инженер", "mechanical"),
+])
+def test_find_specialist_resolves_macedonian_titles(spoken, key):
+    # The Macedonian "прашај го …" pattern has always existed; until aliases
+    # were added it matched and then resolved to nobody, so every Macedonian
+    # specialist request dead-ended in "I don't have that specialist".
+    found = find_specialist(spoken)
+    assert found is not None and found.key == key
+
+
+def test_macedonian_request_reaches_the_specialist_skill():
+    skill = AskSpecialistSkill(load_settings(), _expert())
+    assert skill.match("прашај го електроинженерот за заземјување") is not None
+
+
+@pytest.mark.parametrize("text", [
+    "what does this page say about batteries",
+    "what does this article say about tariffs",
+    "прашај ја оваа страница за батерии",
+    "ask nobody about anything",
+])
+def test_a_name_that_is_not_a_specialist_is_not_claimed(text):
+    # The patterns must capture a free-form name, which made them greedy:
+    # "this page" was captured as an expert and the fast path stopped there,
+    # so web_fetch never got the chance to read the page.
+    skill = AskSpecialistSkill(load_settings(), _expert())
+    assert skill.match(text) is None
+
+
+def test_config_can_add_aliases_for_a_custom_specialist():
+    council = load_council({"chef": {"prompt": "You cook.", "title": "the chef",
+                                     "aliases": ["готвач"]}})
+    assert find_specialist("готвачот", council).key == "chef"
+
+
 def test_rank_specialists_picks_the_relevant_fields():
     assert "electrical" in [s.key for s in rank_specialists(
         "what resistor do I need for this led circuit")]
@@ -152,47 +198,50 @@ async def test_convene_falls_back_when_no_field_matches(settings):
 
 
 @pytest.mark.asyncio
-async def test_lion_mode_asks_before_turning_on(settings):
-    settings.safety.lion_mode = False
+async def test_lion_mode_turns_on_without_a_confirmation(settings):
+    # It lowers no guardrail, so gating it behind a prompt would only teach the
+    # habit of clicking through security dialogs.
+    settings.mode.lion = False
     skill = LionModeSkill(settings)
     r = await skill.execute(SkillRequest(text="lion mode on",
                                          match=skill.match("lion mode on")))
-    assert r.needs_confirmation is True
-    assert settings.safety.lion_mode is False        # not yet
+    assert r.success and r.needs_confirmation is False
+    assert settings.mode.lion is True
 
 
 @pytest.mark.asyncio
-async def test_lion_mode_engages_after_confirmation(settings):
-    settings.safety.lion_mode = False
+async def test_lion_on_reply_states_the_safety_gate_is_unchanged(settings):
+    settings.mode.lion = False
     skill = LionModeSkill(settings)
     r = await skill.execute(SkillRequest(text="lion mode on",
-                                         match=skill.match("lion mode on"),
-                                         context={"confirmed": True}))
-    assert r.success and settings.safety.lion_mode is True
+                                         match=skill.match("lion mode on")))
+    # the spoken reply must not imply any relaxation of safety
+    assert "unchanged" in r.speech.lower() or "still ask" in r.speech.lower()
+    assert "stop asking" not in r.speech.lower()
 
 
 @pytest.mark.asyncio
 async def test_lion_mode_off_never_asks(settings):
-    settings.safety.lion_mode = True
+    settings.mode.lion = True
     skill = LionModeSkill(settings)
     r = await skill.execute(SkillRequest(text="lion mode off",
                                          match=skill.match("lion mode off")))
     assert r.success and r.needs_confirmation is False
-    assert settings.safety.lion_mode is False
+    assert settings.mode.lion is False
 
 
 @pytest.mark.asyncio
 async def test_lion_mode_macedonian(settings):
-    settings.safety.lion_mode = True
+    settings.mode.lion = True
     skill = LionModeSkill(settings)
     r = await skill.execute(SkillRequest(text="исклучи лав мод",
                                          match=skill.match("исклучи лав мод")))
-    assert settings.safety.lion_mode is False and "Лав" in r.speech
+    assert settings.mode.lion is False and "Лав" in r.speech
 
 
 def test_lion_mode_defaults_off_every_start():
     # It is a mode for a task, not a setting you leave behind.
-    assert load_settings().safety.lion_mode is False
+    assert load_settings().mode.lion is False
 
 
 # --- wiring helper ------------------------------------------------------------

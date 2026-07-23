@@ -235,6 +235,7 @@ class GestureEngine:
             curled_max_deg=c.pointer.curled_max_deg,
             zoom_min_spread_deg=c.pointer.zoom_min_spread_deg,
             l_shape_tolerance_deg=c.pointer.l_shape_tolerance_deg,
+            draw_overlay=getattr(c, "show_hand_tracking", False),
         )
         except Exception as exc:
             self.error = f"MediaPipe unavailable: {exc}"

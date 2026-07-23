@@ -38,7 +38,108 @@
     position: absolute; inset: 0; pointer-events: none; z-index: 60;
     background: repeating-linear-gradient(0deg, rgba(0,0,0,.22) 0px, rgba(0,0,0,.22) 1px, transparent 1px, transparent 4px);
   }
-  body[data-scanlines="off"] #scanlines { display: none; }
+  /* Scanlines are now one composable EFFECT among several (see the effects
+     Set in the script). data-scanlines is kept in sync for anything that still
+     reads it, but body.fx-scanlines is the source of truth. */
+  body:not(.fx-scanlines) #scanlines { display: none; }
+
+  /* ══════════ C2 · THEME + EFFECT PACK ══════════════════════════════════════
+     Two orthogonal, purely-cosmetic axes, layered so nothing here ever blocks
+     a click or dims the transcript:
+       · THEME  (body[data-theme]) — the base skin: arc | glass | minimal |
+         maximal | deep_red. One at a time.
+       · EFFECTS (body.fx-*) — overlays stacked on top: scanlines, glitch, grid.
+         Composable. Every effect layer is pointer-events:none and sits BEHIND
+         the chat/transcript, never over it.
+     The accent-hue swatches remain a THIRD, independent axis (colour, not
+     texture) — a red glass HUD is a legal combination. */
+
+  /* -- theme: GLASS (frosted, translucent panels) -- */
+  body[data-theme="glass"] .panel,
+  body[data-theme="glass"] #configcol,
+  body[data-theme="glass"] #chatbox,
+  body[data-theme="glass"] #searchbox,
+  body[data-theme="glass"] #tabs button {
+    background: rgba(10,22,40,.30);
+    -webkit-backdrop-filter: blur(11px) saturate(1.25);
+    backdrop-filter: blur(11px) saturate(1.25);
+    border-color: rgba(120,190,255,.28);
+  }
+  body[data-theme="glass"] .panel { box-shadow: inset 0 1px 0 rgba(180,220,255,.10); }
+
+  /* -- theme: MINIMAL (flat, glow-stripped, calm) -- */
+  body[data-theme="minimal"] #grid-bg { display: none; }
+  body[data-theme="minimal"] .panel,
+  body[data-theme="minimal"] #configcol,
+  body[data-theme="minimal"] #chatbox { background: rgba(8,16,28,.35); border-color: rgba(90,140,190,.14); }
+  /* kill only the AMBIENT glows (shadows), never the text colour/opacity — the
+     transcript stays exactly as legible, just without bloom. */
+  body[data-theme="minimal"] .panel,
+  body[data-theme="minimal"] #brand .name,
+  body[data-theme="minimal"] #clock,
+  body[data-theme="minimal"] #env-temp,
+  body[data-theme="minimal"] .fill { text-shadow: none !important; box-shadow: none !important; }
+
+  /* -- theme: MAXIMAL (bloom, breathing backdrop) -- */
+  @keyframes medo-breathe {
+    0%,100% { background-position: 50% 44%; filter: saturate(1.05); }
+    50%     { background-position: 52% 48%; filter: saturate(1.22); }
+  }
+  body[data-theme="maximal"] #root {
+    background-size: 130% 130%;
+    animation: medo-breathe 14s ease-in-out infinite;
+  }
+  body[data-theme="maximal"] .panel {
+    box-shadow: 0 0 26px rgba(56,168,255,.10), inset 0 0 22px rgba(56,168,255,.06);
+    border-color: rgba(56,168,255,.30);
+  }
+  body[data-theme="maximal"] #brand .name { text-shadow: 0 0 28px rgba(56,168,255,1), 0 0 8px #fff; }
+
+  /* -- theme: DEEP RED (Lion mode's identity — see skills/lion.py) --
+     A single blend layer recolours the whole scene toward red WITHOUT editing
+     the hundreds of hardcoded blues: mix-blend-mode 'color' keeps every
+     element's brightness (so text stays as readable as it was) and only
+     rotates its hue. A darker, bloodier backdrop and a vignette sell the
+     "no guardrails" mood. */
+  #theme-wash {
+    position: absolute; inset: 0; pointer-events: none; z-index: 58;
+    opacity: 0; transition: opacity .5s ease; mix-blend-mode: color; background: #ff1a1a;
+  }
+  body[data-theme="deep_red"] #theme-wash { opacity: .5; }
+  #theme-vignette {
+    position: absolute; inset: 0; pointer-events: none; z-index: 59; opacity: 0;
+    transition: opacity .5s ease;
+    background: radial-gradient(ellipse 90% 80% at 50% 50%, transparent 52%, rgba(120,0,0,.30) 100%);
+  }
+  body[data-theme="deep_red"] #theme-vignette { opacity: 1; }
+  body[data-theme="deep_red"] #root { background:
+    radial-gradient(ellipse 80% 70% at 50% 45%, #1a0708 0%, #0a0304 60%, #050101 100%); }
+  body[data-theme="deep_red"] .panel { border-color: rgba(255,90,70,.30); }
+
+  /* -- effect: GRID (thickens the ambient grid) -- */
+  body.fx-grid #grid-bg { background-size: 48px 48px; opacity: 1; }
+  body:not(.fx-grid) #grid-bg { opacity: .5; }
+
+  /* -- effect: GLITCH (occasional RGB-split jump; faint, periodic, never over
+        the chat which sits on its own screen) -- */
+  @keyframes medo-glitch {
+    0%, 96%, 100% { opacity: 0; transform: translate(0,0); }
+    97% { opacity: .55; transform: translate(-2px, 1px); }
+    98% { opacity: .35; transform: translate(3px, -1px); }
+    99% { opacity: .5;  transform: translate(-1px, 0); }
+  }
+  #fx-glitch {
+    position: absolute; inset: 0; pointer-events: none; z-index: 57; opacity: 0;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,0,60,.08) 0 2px, transparent 2px 4px),
+      repeating-linear-gradient(90deg, rgba(0,200,255,.07) 1px 3px, transparent 3px 5px);
+    mix-blend-mode: screen;
+  }
+  body.fx-glitch #fx-glitch { animation: medo-glitch 5.5s steps(1) infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    body[data-theme="maximal"] #root { animation: none; }
+    body.fx-glitch #fx-glitch { animation: none; }
+  }
 
   /* ---- top bar ---- */
   #topbar {
@@ -80,9 +181,50 @@
 
   /* ---- screens ---- */
   .screen { position: relative; z-index: 5; height: calc(100vh - 82px); box-sizing: border-box; display: none; }
-  body[data-screen="core"]   #screen-core   { display: grid; }
-  body[data-screen="comms"]  #screen-comms  { display: flex; }
-  body[data-screen="config"] #screen-config { display: flex; }
+  body[data-screen="core"]    #screen-core    { display: grid; }
+  body[data-screen="cluster"] #screen-cluster { display: grid; }
+  body[data-screen="comms"]   #screen-comms   { display: flex; }
+  body[data-screen="config"]  #screen-config  { display: flex; }
+
+  /* ---- CLUSTER (agent spheres) ---- */
+  #screen-cluster { grid-template-columns: 220px 1fr 250px; gap: 18px; padding: 20px 30px; }
+  #cluster-domains .drow {
+    display: flex; align-items: center; gap: 9px; padding: 5px 0;
+    font-size: 13px; color: #9fc4e6; cursor: default;
+  }
+  #cluster-domains .ddot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 8px currentColor; flex: none; }
+  #cluster-domains .dname { flex: 1; letter-spacing: .05em; }
+  #cluster-domains .dcount { font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #5a82ab; }
+  #cluster-stage {
+    position: relative; border: 1px solid rgba(56,168,255,.16);
+    background: rgba(6,14,26,.35); overflow: hidden; min-height: 0;
+  }
+  #cluster-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #cluster-head { position: absolute; top: 12px; left: 16px; z-index: 2; font-size: 11px; letter-spacing: .3em; color: #4a6d94; pointer-events: none; }
+  #cluster-quality { position: absolute; top: 10px; right: 14px; z-index: 2; font-family: 'Share Tech Mono', monospace; font-size: 10px; color: #4a6d94; letter-spacing: .12em; border: 1px solid rgba(56,168,255,.2); padding: 3px 8px; pointer-events: none; }
+  #cluster-legend { position: absolute; bottom: 12px; left: 16px; right: 16px; z-index: 2; text-align: center; font-family: 'Share Tech Mono', monospace; font-size: 9.5px; color: #4a6d94; letter-spacing: .08em; pointer-events: none; }
+  #cluster-empty { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 40px; color: #4a6d94; font-size: 12px; letter-spacing: .1em; }
+  #cluster-stage.empty #cluster-empty { display: flex; }
+  #cluster-stage.empty #cluster-canvas, #cluster-stage.empty #cluster-head, #cluster-stage.empty #cluster-quality, #cluster-stage.empty #cluster-legend { display: none; }
+  #cluster-tip {
+    position: absolute; z-index: 3; display: none; pointer-events: none;
+    background: rgba(6,16,30,.94); border: 1px solid rgba(140,210,255,.6);
+    padding: 6px 10px; font-size: 12px; letter-spacing: .04em; color: #eaf5ff;
+    transform: translate(-50%, -130%); white-space: nowrap;
+  }
+  #cluster-tip .ts { font-family: 'Share Tech Mono', monospace; font-size: 9px; letter-spacing: .14em; display: block; margin-top: 2px; }
+  #cluster-inspector .insp-title { font-size: 20px; font-weight: 600; color: #eaf5ff; letter-spacing: .04em; }
+  #cluster-inspector .insp-sub { font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #5a82ab; letter-spacing: .1em; margin-top: 2px; }
+  #cluster-inspector .chip { display: inline-flex; align-items: center; gap: 7px; margin-top: 14px; padding: 6px 12px; border: 1px solid rgba(56,168,255,.3); font-size: 12px; letter-spacing: .16em; font-weight: 600; color: #7fa8cf; }
+  #cluster-inspector .chip .cd { width: 8px; height: 8px; border-radius: 50%; background: #7fa8cf; }
+  #cluster-inspector .chip.active { color: #7dffb0; border-color: rgba(80,255,160,.5); background: rgba(30,80,50,.35); }
+  #cluster-inspector .chip.active .cd { background: #7dffb0; box-shadow: 0 0 9px #7dffb0; }
+  #cluster-inspector .chip.error { color: #ff8a6b; border-color: rgba(255,90,70,.5); background: rgba(80,30,20,.35); }
+  #cluster-inspector .chip.error .cd { background: #ff8a6b; box-shadow: 0 0 9px #ff8a6b; }
+  #insp-kv { margin-top: 16px; }
+  #insp-kv .kv { display: flex; justify-content: space-between; font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #7fa8cf; padding: 8px 0; border-bottom: 1px solid rgba(56,168,255,.1); }
+  #insp-kv .kv .v { color: #9fd4ff; }
+  #insp-empty { color: #4a6d94; font-size: 12px; letter-spacing: .06em; }
 
   /* ---- CORE ---- */
   #screen-core { grid-template-columns: 300px 1fr 300px; gap: 24px; padding: 24px 36px; }
@@ -236,6 +378,28 @@
   #lion-row.armed .desc { color: #d98a5c; }
   #cfg-lion.on { background: rgba(255,138,76,.22); border-color: rgba(255,138,76,.7); }
   #cfg-lion.on .knob { background: #ff9d5c; box-shadow: 0 0 10px rgba(255,138,76,.85); }
+  /* LION indicator in the top bar — deep red, since that's the profile's skin. */
+  #lion-indicator {
+    display: none; font-family: 'Share Tech Mono', monospace; font-size: 11px;
+    letter-spacing: .22em; color: #ff6b5a; border: 1px solid rgba(255,90,70,.55);
+    padding: 3px 9px; text-shadow: 0 0 10px rgba(255,80,60,.7);
+    animation: medo-pulse 2.4s ease-in-out infinite;
+  }
+  body[data-lion="on"] #lion-indicator { display: inline-block; }
+  /* Advanced-skills group (surfaced with lion). */
+  #lion-skills { display: none; margin-top: 10px; flex-direction: column; gap: 6px; }
+  body[data-lion="on"] #lion-skills { display: flex; }
+  #lion-skills .grp-title {
+    font-family: 'Share Tech Mono', monospace; font-size: 10px; letter-spacing: .18em;
+    color: #ff8a6b; margin-bottom: 2px;
+  }
+  #lion-skills .ls {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-family: 'Share Tech Mono', monospace; font-size: 11px; color: #d8b0a0;
+    border-left: 2px solid rgba(255,90,70,.4); padding: 3px 0 3px 9px;
+  }
+  #lion-skills .ls .k { color: #ffb59c; letter-spacing: .04em; }
+  #lion-skills .ls .d { color: #8a6a5f; font-size: 10px; }
   select.cfg {
     background: rgba(4,10,20,.6); border: 1px solid rgba(56,168,255,.25); color: #c9e6ff;
     font-family: 'Share Tech Mono', monospace; font-size: 12px; padding: 9px 12px; outline: none;
@@ -387,6 +551,11 @@
 <body data-screen="core" data-state="idle" data-scanlines="on">
 <div id="root">
   <div id="grid-bg"></div>
+  <!-- C2 effect/theme overlay layers — all pointer-events:none, all behind the
+       chat. Order by z-index: wash(58) < vignette(59) < glitch(57) < scanlines(60). -->
+  <div id="theme-wash"></div>
+  <div id="theme-vignette"></div>
+  <div id="fx-glitch"></div>
   <div id="scanlines"></div>
   <div id="dot-tip"></div>
   <!-- interpreter-mode live caption (hidden until a translation arrives) -->
@@ -397,9 +566,12 @@
     <div id="brand">
       <span class="name" id="brand-name">MEDO</span>
       <span class="mono" id="link-status">v2.0 · CONNECTING…</span>
+      <!-- Defensive-security profile indicator; shown only while lion is on. -->
+      <span id="lion-indicator" title="Defensive-security profile · safety gate unchanged">◆ LION</span>
     </div>
     <div id="tabs">
       <button id="tab-core" class="active" data-i18n="core">CORE</button>
+      <button id="tab-cluster">CLUSTER</button>
       <button id="tab-comms">COMMS</button>
       <button id="tab-config" data-i18n="config">CONFIG</button>
     </div>
@@ -516,6 +688,38 @@
     </div>
   </div>
 
+  <!-- ══ CLUSTER (agent spheres) ══ -->
+  <div class="screen" id="screen-cluster">
+    <div class="col">
+      <div class="panel" id="cluster-domains-panel">
+        <h2>DOMAINS</h2>
+        <div id="cluster-domains"></div>
+      </div>
+    </div>
+    <div id="cluster-stage">
+      <div id="cluster-head">AGENT CLUSTER</div>
+      <div id="cluster-quality">QUALITY · —</div>
+      <canvas id="cluster-canvas"></canvas>
+      <div id="cluster-tip"></div>
+      <div id="cluster-legend">HOVER A STAR → INSPECTOR · A SPHERE FLARES WHEN A MODULE FIRES · ◌ CONTROLS PC</div>
+      <div id="cluster-empty" class="mono">NO AGENT GRAPH · START MEDO WITH --hud SO THE REGISTRY IS AVAILABLE</div>
+    </div>
+    <div class="col">
+      <div class="panel" id="cluster-inspector">
+        <h2>INSPECTOR</h2>
+        <div id="insp-body">
+          <div id="insp-empty" class="mono">Hover a sphere or a star.</div>
+          <div id="insp-card" style="display:none">
+            <div class="insp-title" id="insp-title">—</div>
+            <div class="insp-sub" id="insp-sub"></div>
+            <div class="chip" id="insp-chip"><span class="cd"></span><span id="insp-state">IDLE</span></div>
+            <div id="insp-kv"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ══ COMMS ══ -->
   <div class="screen" id="screen-comms">
     <div id="chatbox">
@@ -562,9 +766,19 @@
         <div class="info"><span class="name" data-i18n="interpreter">Interpreter mode</span><span class="desc">LIVE EN↔MK TRANSLATION — MEDO SPEAKS EACH LINE BACK IN THE OTHER LANGUAGE</span></div>
         <button class="toggle" id="cfg-interpreter"><span class="knob"></span></button>
       </div>
-      <div class="setting" id="lion-row">
-        <div class="info"><span class="name" data-i18n="lion">MEDO Lion mode</span><span class="desc" id="lion-desc">NO CONFIRMATIONS · IGNORES THE PC SWITCH · WHITELIST &amp; BLOCKED SITES STILL APPLY · RESETS ON RESTART</span></div>
-        <button class="toggle" id="cfg-lion"><span class="knob"></span></button>
+      <div class="setting col-layout" id="lion-row" style="align-items:stretch">
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <div class="info" style="flex:1"><span class="name" data-i18n="lion">MEDO Lion mode</span><span class="desc" id="lion-desc">DEFENSIVE-SECURITY PROFILE · DEEP-RED SKIN · SURFACES READ-ONLY LOCAL AUDIT SKILLS · SAFETY GATE UNCHANGED · RESETS ON RESTART</span></div>
+          <button class="toggle" id="cfg-lion"><span class="knob"></span></button>
+        </div>
+        <div id="lion-skills">
+          <span class="grp-title">ADVANCED · DEFENSIVE-SECURITY (READ-ONLY · THIS MACHINE)</span>
+          <div class="ls"><span class="k">Security check</span><span class="d">LISTENING PORTS + OWNERS</span></div>
+          <div class="ls"><span class="k">Explain process</span><span class="d">WHAT A PID/NAME IS</span></div>
+          <div class="ls"><span class="k">Firewall audit</span><span class="d">READ PROFILE + ADVICE</span></div>
+          <div class="ls"><span class="k">Update &amp; hygiene check</span><span class="d">AVAILABLE UPDATES + CHECKLIST</span></div>
+          <div class="ls"><span class="k">Explain permissions</span><span class="d">A FILE'S ACCESS, ADVISORY</span></div>
+        </div>
       </div>
       <div class="setting" style="align-items:flex-start">
         <div class="info" style="flex:1">
@@ -578,9 +792,23 @@
         <div class="info"><span class="name" data-i18n="camera_feed">Camera feed</span><span class="desc">SHOW THE OPTICAL FEED PANEL ON CORE</span></div>
         <button class="toggle on" id="cfg-cam"><span class="knob"></span></button>
       </div>
-      <div class="setting">
-        <div class="info"><span class="name" data-i18n="scanlines">Scanlines</span><span class="desc">CRT OVERLAY ON THE INTERFACE</span></div>
-        <button class="toggle on" id="cfg-scan"><span class="knob"></span></button>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">Interface theme</span><span class="desc">BASE SKIN · GLASS · MINIMAL · MAXIMAL · DEEP RED (LION)</span></div>
+        <div class="seg" id="theme-seg">
+          <button data-theme="arc" class="active">ARC</button>
+          <button data-theme="glass">GLASS</button>
+          <button data-theme="minimal">MINIMAL</button>
+          <button data-theme="maximal">MAXIMAL</button>
+          <button data-theme="deep_red">DEEP RED</button>
+        </div>
+      </div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">Effects</span><span class="desc">OVERLAYS · STACK FREELY · NEVER COVER THE TRANSCRIPT</span></div>
+        <div class="seg" id="fx-seg">
+          <button data-fx="scanlines" class="active">SCANLINES</button>
+          <button data-fx="glitch">GLITCH</button>
+          <button data-fx="grid">GRID</button>
+        </div>
       </div>
       <div class="setting">
         <div class="info"><span class="name" id="ui-lang-label">Interface language</span><span class="desc">LANGUAGE OF THIS SCREEN - SEPARATE FROM THE LANGUAGE YOU SPEAK TO MEDO</span></div>
@@ -707,14 +935,18 @@
   tick(); setInterval(tick, 1000);
 
   /* ---- tabs ---- */
-  const screens = { core: 'tab-core', comms: 'tab-comms', config: 'tab-config' };
+  const screens = { core: 'tab-core', cluster: 'tab-cluster', comms: 'tab-comms', config: 'tab-config' };
+  let clusterOnShow = () => {};        // assigned by initCluster below
+  let clusterFlare = () => {};         // ditto — lights the sphere a skill fired from
   function go(screen) {
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'comms') { scrollChat(); $('draft').focus(); }
     if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadLinkDevices(); }
+    clusterOnShow(screen === 'cluster');   // start/stop the animation loop
   }
   $('tab-core').onclick = () => go('core');
+  $('tab-cluster').onclick = () => go('cluster');
   $('tab-comms').onclick = () => go('comms');
   $('tab-config').onclick = () => go('config');
   async function interruptSpeech() {
@@ -896,6 +1128,7 @@
       addMsg('ai', d.speech, `${(CFG.name || 'MEDO').toUpperCase()} · ${d.path} · ${Math.round(d.latency_ms)} MS`);
       addRouting(d.skill, d.path, d.latency_ms);
       log(`${d.path} · ${d.skill || 'reply'} · ${Math.round(d.latency_ms)} MS`);
+      if (d.skill) clusterFlare(d.skill, d.speech || '');   // light the sphere that fired
       if ((d.skill === 'pointer_control') && d.speech) setPointerUI(/\bon\b/i.test(d.speech) && !/off/i.test(d.speech.slice(0, 20)));
     }
     else if (d.type === 'caption') { showCaption(d); }
@@ -1239,20 +1472,28 @@
     sel.onchange = () => { applyLanguage(sel.value); log('UI LANGUAGE -> ' + sel.value.toUpperCase()); };
   })();
 
-  /* ---- MEDO LION MODE: no confirmations, PC switch ignored ---- */
+  /* ---- MEDO LION MODE: the defensive-security profile ----
+     Reskins deep red, shows the LION indicator, and surfaces read-only local
+     audit skills. It changes NOTHING about safety — no confirmation to arm,
+     because it lowers no guardrail. */
   let lionOn = false;
   function setLionUI(on) {
+    const was = lionOn;
     lionOn = !!on;
     $('cfg-lion').classList.toggle('on', lionOn);
     $('lion-row').classList.toggle('armed', lionOn);
+    // data-lion drives the top-bar LION indicator and the advanced-skills list.
+    document.body.dataset.lion = lionOn ? 'on' : 'off';
+    // Lion mode wears the deep-red skin (its identity — see skills/lion.py).
+    // Applied without overwriting the user's saved choice, so disarming
+    // restores whatever theme they were on.
+    if (lionOn && was !== true) applySkin('deep_red', { fromUser: false });
+    else if (!lionOn && was === true) applySkin(userTheme, { fromUser: false });
   }
   $('cfg-lion').onclick = async () => {
-    // Confirm on the way IN only. Turning it off is always allowed instantly —
-    // you should never have to argue with a UI to restore a safety gate.
-    if (!lionOn && !confirm(
-      'LION MODE\n\nMEDO will stop asking before destructive actions and will '
-      + 'ignore the PC CONTROL switch.\n\nThe file whitelist and blocked sites '
-      + 'still apply. It resets when MEDO restarts.\n\nArm it?')) return;
+    // No confirm dialog: lion mode lowers no guardrail (safety, whitelist and
+    // the PC switch are all unchanged), so gating it would only teach the
+    // habit of clicking through security prompts. It just enters the profile.
     try {
       const r = await (await fetch(`${API}/control/lion`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1315,17 +1556,72 @@
     } catch { }
   })();
 
-  let scan = localStorage.getItem('medo_scanlines') !== 'off';
-  function applyScan() {
-    document.body.dataset.scanlines = scan ? 'on' : 'off';
-    $('cfg-scan').classList.toggle('on', scan);
+  /* ---- C2: theme (base skin) + composable effects (overlays) ----------------
+     One theme at a time on body[data-theme]; any number of effects as body
+     .fx-* classes. Both persist in localStorage and are seeded from the
+     server config (CFG.ui) on a first visit. Purely cosmetic — none of this
+     touches a skill, a route or a safety gate. */
+  const UICFG = (CFG.ui || {});
+  const THEME_IDS = ['arc', 'glass', 'minimal', 'maximal', 'deep_red'];
+  const FX_IDS = ['scanlines', 'glitch', 'grid'];
+
+  // effects: a Set, mirrored to body.fx-* classes AND (for scanlines) the
+  // legacy data-scanlines attribute so nothing that still reads it breaks.
+  let effects = new Set();
+  (function seedEffects() {
+    let stored = null;
+    try { stored = JSON.parse(localStorage.getItem('medo_effects') || 'null'); } catch { }
+    const src = Array.isArray(stored) ? stored : (UICFG.effects || ['scanlines']);
+    for (const id of src) if (FX_IDS.includes(id)) effects.add(id);
+  })();
+  function applyEffects() {
+    for (const id of FX_IDS) document.body.classList.toggle('fx-' + id, effects.has(id));
+    document.body.dataset.scanlines = effects.has('scanlines') ? 'on' : 'off';
+    // reflect state on the CONFIG segmented control + the CORE subsystem chip
+    for (const b of document.querySelectorAll('#fx-seg button'))
+      b.classList.toggle('active', effects.has(b.dataset.fx));
     const d = $('dev-scan');
-    d.classList.toggle('on', scan);
-    d.querySelector('.state').textContent = scan ? 'ON' : 'OFF';
-    localStorage.setItem('medo_scanlines', scan ? 'on' : 'off');
+    if (d) { d.classList.toggle('on', effects.has('scanlines'));
+             d.querySelector('.state').textContent = effects.has('scanlines') ? 'ON' : 'OFF'; }
+    try { localStorage.setItem('medo_effects', JSON.stringify([...effects])); } catch { }
   }
-  $('dev-scan').onclick = $('cfg-scan').onclick = () => { scan = !scan; applyScan(); };
-  applyScan();
+  function toggleEffect(id) {
+    if (!FX_IDS.includes(id)) return;
+    effects.has(id) ? effects.delete(id) : effects.add(id);
+    applyEffects();
+    log(`EFFECT ${id.toUpperCase()} ${effects.has(id) ? 'ON' : 'OFF'}`);
+  }
+  for (const b of document.querySelectorAll('#fx-seg button'))
+    b.onclick = () => toggleEffect(b.dataset.fx);
+  // the CORE "SCANLINES" subsystem chip stays a shortcut to that one effect
+  if ($('dev-scan')) $('dev-scan').onclick = () => toggleEffect('scanlines');
+  applyEffects();
+
+  // theme: one base skin. Named applySkin (NOT applyTheme) on purpose — the
+  // accent-swatch code below owns applyTheme(t), a different, hue-only axis.
+  // Lion mode borrows deep_red (see setLionUI); a hand-picked theme is
+  // remembered so turning Lion off restores it.
+  let userTheme = 'arc';
+  function markTheme(id) {
+    for (const b of document.querySelectorAll('#theme-seg button'))
+      b.classList.toggle('active', b.dataset.theme === id);
+  }
+  function applySkin(id, { fromUser = true } = {}) {
+    if (!THEME_IDS.includes(id)) id = 'arc';
+    document.body.dataset.theme = id;
+    markTheme(id);
+    if (fromUser) { userTheme = id; try { localStorage.setItem('medo_theme_skin', id); } catch { } }
+    log(`THEME ${id.toUpperCase().replace('_', ' ')}`);
+  }
+  for (const b of document.querySelectorAll('#theme-seg button'))
+    b.onclick = () => applySkin(b.dataset.theme);
+  (function restoreThemeSkin() {
+    let saved = 'arc';
+    try { saved = localStorage.getItem('medo_theme_skin') || UICFG.theme || 'arc'; } catch { saved = UICFG.theme || 'arc'; }
+    userTheme = THEME_IDS.includes(saved) ? saved : 'arc';
+    applySkin(userTheme, { fromUser: false });
+  })();
+
   $('dev-voice').onclick = () => { wakeOrTalk(); };
 
   /* ---- appearance: accent color themes ----
@@ -2022,6 +2318,194 @@
         if (!r.ok) log(`OPEN FAILED · ${h.label} (${r.status})`);
       } catch { log('OPEN FAILED · API OFFLINE'); }
     });
+  })();
+
+  /* ---- CLUSTER: agent spheres + skill-stars, from the live registry ----------
+     Data comes from CFG.agents (built server-side by core/agents.py from the
+     skill registry), so it stays truthful as skills are added. Canvas render:
+     the Council sphere is the architect at centre, capability domains ring it;
+     each star orbits gently. Hover a star for the inspector; a sphere flares
+     when one of its skills fires (routed SSE -> clusterFlare). Quality low drops
+     the glow/orbit motion for weak GPUs. */
+  (function initCluster() {
+    const graph = (CFG.agents && Array.isArray(CFG.agents.spheres)) ? CFG.agents
+                : { spheres: [], skillDomain: {} };
+    const stage = $('cluster-stage'), cv = $('cluster-canvas'), tip = $('cluster-tip');
+    const quality = ((CFG.ui && CFG.ui.spheres && CFG.ui.spheres.quality) || 'high');
+    $('cluster-quality').textContent = 'QUALITY · ' + quality.toUpperCase();
+    if (!graph.spheres.length) { stage.classList.add('empty'); return; }
+    const ctx = cv.getContext('2d');
+    const HUE = { vision:190, experts:32, web:150, knowledge:265, memory:300,
+      system:210, apps:95, agenda:50, environment:170, security:0, modes:18,
+      plugins:330, other:220 };
+    const hueOf = k => (k in HUE) ? HUE[k] : 210;
+
+    // per-domain runtime state (flare = recently fired)
+    const state = {};
+    for (const s of graph.spheres) state[s.key] = { flare: 0, status: 'idle' };
+
+    // deterministic layout in a virtual space, scaled to the canvas each frame
+    const ring = graph.spheres.filter(s => s.key !== 'experts');
+    const hasCouncil = graph.spheres.some(s => s.key === 'experts');
+    function layout(W, H) {
+      const cx = W / 2, cy = H / 2, rx = W * 0.34, ry = H * 0.34;
+      const place = {};
+      if (hasCouncil) place['experts'] = { x: cx, y: cy, r: Math.min(W, H) * 0.11 };
+      ring.forEach((s, i) => {
+        const a = -Math.PI / 2 + i * (2 * Math.PI / ring.length);
+        place[s.key] = { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a),
+          r: Math.min(W, H) * (0.05 + Math.min(0.03, s.stars.length * 0.004)) };
+      });
+      return place;
+    }
+
+    // star orbit params (deterministic by index; no Math.random needed)
+    function starLayout(sphere, cxy, t) {
+      const out = [];
+      sphere.stars.forEach((st, k) => {
+        const orbit = (k % 3 === 0) ? 0.34 : 0.66;
+        const speed = (quality === 'low') ? 0 : (0.15 + (k % 4) * 0.05);
+        const ang = k * 2.39996 + t * speed;
+        out.push({ star: st,
+          x: cxy.x + cxy.r * orbit * Math.cos(ang),
+          y: cxy.y + cxy.r * orbit * Math.sin(ang) * 0.82 });
+      });
+      return out;
+    }
+
+    let hovered = null;            // {sphere, star, x, y}
+    let hotspots = [];             // rebuilt each frame for hit-testing
+    let raf = 0, running = false, t0 = 0;
+
+    function fit() {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const w = stage.clientWidth, h = stage.clientHeight;
+      cv.width = Math.max(1, Math.round(w * dpr));
+      cv.height = Math.max(1, Math.round(h * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { W: w, H: h };
+    }
+
+    function drawSphere(s, p, t) {
+      const hue = hueOf(s.key), st = state[s.key];
+      const lit = st.flare > 0;
+      const err = st.status === 'error';
+      const base = err ? 0 : hue;
+      // halo
+      if (quality !== 'low') {
+        const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 1.7);
+        halo.addColorStop(0, `hsla(${base},90%,60%,${lit ? .22 : .10})`);
+        halo.addColorStop(1, 'hsla(0,0%,0%,0)');
+        ctx.fillStyle = halo; ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r * 1.7, 0, 7); ctx.fill();
+      }
+      // body
+      const g = ctx.createRadialGradient(p.x - p.r*.3, p.y - p.r*.35, p.r*.1, p.x, p.y, p.r);
+      g.addColorStop(0, `hsla(${base},95%,80%,.95)`);
+      g.addColorStop(.4, `hsla(${base},90%,58%,.5)`);
+      g.addColorStop(1, `hsla(${base},85%,30%,0)`);
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+      // rim
+      ctx.strokeStyle = `hsla(${base},95%,72%,${lit ? .95 : .5})`;
+      ctx.lineWidth = lit ? 2 : 1; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.stroke();
+      if (lit) { ctx.strokeStyle = `hsla(${base},95%,72%,${st.flare*.5})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1.1 + (1-st.flare)*.5), 0, 7); ctx.stroke(); }
+      // stars
+      for (const sp of starLayout(s, p, t)) {
+        const isHover = hovered && hovered.sphere === s && hovered.star === sp.star;
+        ctx.fillStyle = isHover ? '#fff' : `hsla(${base},95%,75%,.9)`;
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, isHover ? 4.5 : 3, 0, 7); ctx.fill();
+        if (sp.star.controlsPc) { ctx.strokeStyle = `hsla(${base},95%,75%,.7)`;
+          ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(sp.x, sp.y, 6, 0, 7); ctx.stroke(); }
+        hotspots.push({ sphere: s, star: sp.star, x: sp.x, y: sp.y, r: 9 });
+      }
+      // label
+      ctx.fillStyle = `hsla(${base},95%,72%,.95)`;
+      ctx.font = '600 13px Rajdhani, sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(s.label.toUpperCase(), p.x, p.y + p.r + 18);
+      ctx.fillStyle = '#5a82ab'; ctx.font = "9px 'Share Tech Mono', monospace";
+      ctx.fillText(s.stars.length + ' MODULES', p.x, p.y + p.r + 32);
+    }
+
+    function render(now) {
+      const { W, H } = fit();
+      const t = (now - t0) / 1000;
+      ctx.clearRect(0, 0, W, H);
+      const place = layout(W, H);
+      hotspots = [];
+      // filaments council -> ring
+      if (hasCouncil) {
+        const e = place['experts'];
+        ctx.strokeStyle = 'rgba(120,190,255,.10)'; ctx.lineWidth = 1.2;
+        for (const s of ring) { const p = place[s.key];
+          ctx.beginPath(); ctx.moveTo(e.x, e.y);
+          ctx.quadraticCurveTo((e.x+p.x)/2, (e.y+p.y)/2 - 30, p.x, p.y); ctx.stroke(); }
+      }
+      for (const s of ring) drawSphere(s, place[s.key], t);
+      if (hasCouncil) drawSphere(graph.spheres.find(s => s.key==='experts'), place['experts'], t);
+      // decay flares
+      for (const k in state) if (state[k].flare > 0)
+        state[k].flare = Math.max(0, state[k].flare - 0.012);
+      if (running) raf = requestAnimationFrame(render);
+    }
+
+    // hit-testing / inspector
+    function pick(mx, my) {
+      let best = null, bd = 1e9;
+      for (const h of hotspots) {
+        const d = (h.x-mx)**2 + (h.y-my)**2;
+        if (d < h.r*h.r && d < bd) { bd = d; best = h; }
+      }
+      return best;
+    }
+    function showInspector(h) {
+      $('insp-empty').style.display = 'none';
+      $('insp-card').style.display = 'block';
+      const st = state[h.sphere.key];
+      $('insp-title').textContent = h.star.label;
+      $('insp-sub').textContent = h.sphere.label.toUpperCase() +
+        (h.star.skill ? ' · ' + h.star.skill : ' · agent');
+      const chip = $('insp-chip'); chip.className = 'chip' + (st.flare>0 ? ' active' : (st.status==='error'?' error':''));
+      $('insp-state').textContent = st.flare>0 ? 'ACTIVE' : (st.status==='error'?'ERROR':'IDLE');
+      $('insp-kv').innerHTML =
+        `<div class="kv"><span>DOMAIN</span><span class="v">${h.sphere.label.toUpperCase()}</span></div>` +
+        (h.star.skill ? `<div class="kv"><span>SKILL ID</span><span class="v">${h.star.skill}</span></div>` : '') +
+        `<div class="kv"><span>CONTROLS PC</span><span class="v">${h.star.controlsPc?'YES':'NO'}</span></div>`;
+    }
+    cv.addEventListener('mousemove', e => {
+      const r = cv.getBoundingClientRect();
+      const h = pick(e.clientX - r.left, e.clientY - r.top);
+      hovered = h;
+      if (h) { showInspector(h);
+        tip.style.display = 'block'; tip.style.left = (e.clientX - r.left) + 'px';
+        tip.style.top = (e.clientY - r.top) + 'px';
+        const st = state[h.sphere.key];
+        tip.innerHTML = h.star.label + `<span class="ts">${st.flare>0?'ACTIVE':'IDLE'} · ${h.sphere.label.toUpperCase()}</span>`;
+      } else { tip.style.display = 'none'; }
+    });
+    cv.addEventListener('mouseleave', () => { hovered = null; tip.style.display = 'none'; });
+
+    // left panel: domain legend
+    (function fillDomains() {
+      const box = $('cluster-domains');
+      box.innerHTML = graph.spheres.map(s =>
+        `<div class="drow"><span class="ddot" style="background:hsl(${hueOf(s.key)} 90% 62%);color:hsl(${hueOf(s.key)} 90% 62%)"></span>` +
+        `<span class="dname">${s.label}</span><span class="dcount">${s.stars.length}</span></div>`).join('');
+      $('cluster-head').textContent =
+        `AGENT CLUSTER · ${graph.spheres.length} SPHERES · ${Object.keys(graph.skillDomain||{}).length} MODULES`;
+    })();
+
+    // public hooks
+    clusterFlare = (skill) => {
+      const dom = (graph.skillDomain || {})[skill];
+      if (dom && state[dom]) { state[dom].flare = 1; state[dom].status = 'idle'; }
+    };
+    clusterOnShow = (on) => {
+      running = on;
+      if (on) { t0 = t0 || performance.now(); raf = requestAnimationFrame(render); }
+      else if (raf) { cancelAnimationFrame(raf); raf = 0; }
+    };
+    window.addEventListener('resize', () => { if (running) { /* fit() runs next frame */ } });
   })();
 
   setState('idle');

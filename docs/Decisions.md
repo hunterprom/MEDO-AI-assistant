@@ -131,3 +131,188 @@ The tree is *probed*, not walked: `ControlFromPoint` at the cursor plus two
 rings of eight points. Walking a window's full element tree is far too slow to
 sit inside a click, and the probe answers the only question that matters —
 what is reachable at these pixels.
+## Web fetch: only the user's own links are followed without asking
+
+`web_fetch` reads a page out loud, which means MEDO now pulls text from an
+address someone else controls and hands it to the model that decides what to do
+next. That is the classic prompt-injection surface, so the rule is about
+*provenance*, not content: **a fetched page and an imported document are
+UNTRUSTED INPUT, and a URL found inside one is an instruction from a third
+party, not a request from the user.** "Also see medo.example/next-steps" sitting
+in a PDF is a stranger telling the assistant where to go next; obeying it
+silently would make every document the user opens a potential remote control.
+
+**Decision: the trust boundary is where the URL came from, not what it points
+at.** `SkillRequest.context` carries `url_source` — `"user"`, `"document"`, or
+`"tool"` — set by whatever *put* the link in front of MEDO.
+
+* A **fast-path regex match is trusted by definition**: the pattern matched the
+  user's own utterance, so they said the host out loud themselves. There is no
+  intermediary to be manipulated.
+* The **LLM tool path is not**. By then the URL has passed through a model that
+  may have read it out of a document, a previous page, or a tool result, and
+  the model cannot reliably tell us which. So a missing or unknown `url_source`
+  is treated as untrusted there, and the skill returns `needs_confirmation`
+  naming the host ("That link came from a document, not from you. Fetch
+  example.com?") — the same spoken yes/no gate the destructive skills use.
+* `url_source` is deliberately **not** a tool parameter. If the model could
+  declare it, an injected page would simply instruct the model to claim the
+  link came from the user, and the check would be theatre. Provenance is
+  reported by the code that owns the source, never by the component the
+  attacker is talking to.
+
+The confirmation is worth the friction because the failure it prevents is
+silent: the user hears a summary and never learns that MEDO also visited a URL
+of the attacker's choosing, with the user's IP and network position.
+
+**Decision: non-http(s) schemes are refused outright, and NOT offered as a
+confirmation.** `file:///`, `javascript:` and `data:` are not web pages —
+there is nothing to read, only a local file to exfiltrate or a payload to
+smuggle past the checks above. A confirmation is for a request that is
+legitimate but consequential; asking "shall I open file:///etc/passwd?" would
+frame an always-wrong action as a user preference, and the only outcomes are a
+mistaken yes or a question that should never have been asked. The skill says it
+reads http and https only and stops there.
+
+---
+
+## Import: pictures become documents, not a second retrieval path
+
+`import_file` takes one file the user names out loud and makes it answerable
+later. Documents were easy — they go through the same
+chunk → embed → store pipeline `reindex()` already uses, via a new
+`DocumentIndex.index_file()`, and `search_documents` finds them with no new
+code. Pictures were the real question: an image has no text to chunk, so RAG
+has nothing to work with.
+
+**Decision: the vision model's description IS the document.** On import, the
+picture is described once, and that description — plus the original path — is
+written beside the image as a Markdown sidecar and indexed like any other file.
+"What was in that diagram I imported" is then an ordinary documents query.
+
+The rejected alternative was a separate image store with its own lookup ("find
+the picture that…"). It would have meant a second retrieval path, a second
+ranking implementation, and a user-visible seam: asking about a diagram would
+work differently from asking about a PDF, for no reason the user could see. The
+cost of the chosen design is that the description is written once, at import,
+so a question the description didn't anticipate can't be answered from the
+index — which is why the describe prompt asks for part numbers, labels and
+layout rather than a one-line caption.
+
+**Decision: the whitelist is checked on the SOURCE, and imports are copied,
+never executed.** Importing is the one operation that reads a file MEDO was not
+previously pointed at, so it is exactly where `PathWhitelist` has to apply. The
+copy keeps its original suffix and is only ever read, so nothing in this path
+can turn a document into a program.
+
+---
+
+## Trigger phrases and forced language are config, not code
+
+Two things a user should never need Python for: what words they say, and which
+language they say them in.
+
+**Decision: `skills.triggers` appends to the same `patterns` list the built-ins
+use.** A configured phrase becomes one more compiled pattern on that skill
+instance — there is no parallel matching path, and nothing downstream (router,
+registry, tests) can tell a config phrase from a code one. Phrases are matched
+**literally**: they are escaped before compiling, so a user typing `what's up?`
+gets what they typed instead of a regex error, and a config file cannot inject
+a catastrophically backtracking pattern into the hot path. Phrases under three
+characters are rejected because `"go"` would shadow every skill registered
+after its owner. A custom phrase can only *add wording* — it cannot create a
+skill, change what one does, or lift a confirmation gate.
+
+**Decision: `stt.language_mode` folds into `stt.language` rather than becoming
+a second field.** `language` already meant "None detects, a code forces", but
+that was invisible to anyone reading the file. `language_mode` is the spelling
+that says "auto" out loud; a validator resolves it into `language`, which stays
+the only field the transcriber reads. Forcing a language also fixes the reply
+language and the voice for free, because `transcribe_with_language` returns the
+forced code and that is what picks both. A code MEDO has no voice for falls
+back to auto-detect with a warning — forcing a decode nobody can be answered in
+is worse than guessing.
+
+---
+
+## Naming a specialist has to resolve before the fast path claims the turn
+
+Two bugs with one shape. `ask_specialist`'s patterns must capture a *free-form*
+name — you address an expert by title, not by a fixed keyword — so
+`"what does this page say about batteries"` captured "this page" as the expert.
+The fast path stopped there and answered "I don't have that specialist",
+and `web_fetch`, registered later, never saw the request. Separately, the
+Macedonian pattern (`прашај го …`) had always matched and always resolved to
+nobody, because `find_specialist` only knew English keys and titles — so every
+Macedonian specialist request dead-ended in the same reply.
+
+**Decision: resolution happens at match time.** `AskSpecialistSkill.match()`
+returns `None` when the captured name is not a council member, so the router
+carries on to the skills after it. A greedy pattern that can capture anything
+must prove the capture is real before it claims the turn — the same fix
+`OpenDiscoveredAppSkill` needed for `"open <anything>"`.
+
+**Decision: native titles are data (`Specialist.aliases`), and the definite
+article is stripped per word.** Macedonian glues the article onto the noun and,
+in a phrase, onto the *adjective* — "машински инженер" is spoken
+"машинскиот инженер". Stripping `от/та/то/те/ов/ва` from each word of 5+
+characters keeps the alias table to base forms instead of every inflection,
+and leaves short function words ("за", "на") alone. Config-defined specialists
+take `aliases` too.
+
+---
+
+## Lion mode is a defensive-security PROFILE, not a bypass
+
+Lion mode began as a "stop asking me" switch: on the router it skipped the
+confirmation gate and overrode the PC-control switch. That was replaced.
+
+**Decision: Lion mode changes PRESENTATION and which skills are SURFACED, and
+changes nothing about safety.** Turning it on reskins the HUD deep red, shows a
+LION indicator, and surfaces a group of read-only, local-machine, advisory
+security skills (a listening-port audit, a firewall audit, a process explainer,
+a file-permission explainer, an update/hygiene check). The confirmation gate,
+the path whitelist, and the PC-control switch behave **identically** whether it
+is on or off — asserted directly in the router tests, which now run the same
+destructive request with the profile on and off and require the same gated
+outcome. The flag moved from `safety.lion_mode` to `mode.lion` precisely
+because it is no longer a safety control.
+
+**Why "surface more, restrict nothing less" is the right design for a portfolio
+piece.** Defensive security — auditing your own machine, explaining what's
+listening, advising on hardening — is a real, hireable specialty, and it
+demonstrates well: it is concrete, useful, and safe to show. An "unrestricted
+mode" demonstrates the opposite. It is a liability: a single mis-heard word
+reaching a system with every guard down is exactly the failure a reviewer would
+(rightly) flag, and it teaches the user to click through the prompts that exist
+to protect them. So the profile adds capability (more skills, a distinct look)
+without ever subtracting a safeguard.
+
+**Decision: the defensive skills are read-only, local-only, and refuse offense
+in character.** Every skill inspects and advises; none kills a process, opens a
+port, or changes a permission — those remain normal actuation that goes through
+the normal confirmation gate, so the profile adds no fast path around it. A
+"kill this process" request is declined by the explainer (it's an action, not a
+description). The hard limits — this machine only; no scanning/probing other
+hosts; no malware, exploits, credential-cracking, or bypass techniques; no
+disabling MEDO's own guards — live both in the skills' guard code
+(`is_offensive`) and in the system prompt handed to the model on every
+advice-generating call (`LION_SYSTEM`), so the framing survives even when an LLM
+writes the prose. Asked for any of the above, MEDO refuses and says lion mode is
+defensive-only.
+
+---
+
+## HUD theme + effects are cosmetic layers that never touch behaviour
+
+The C2 theme pack (glass, minimal, maximal, deep-red skins; scanlines/glitch/
+grid effects) is CSS-only. **Decision: an effect layer is always
+`pointer-events:none` and always sits behind the transcript**, so no theme can
+block a click or dim the chat text — the one hard constraint on decoration. The
+deep-red skin recolours the whole scene with a single `mix-blend-mode:color`
+layer, which rotates hue while preserving luminance, so text stays exactly as
+legible as it was rather than being re-typeset in a new palette. Theme (base
+skin), effects (overlays), and the existing accent-hue swatches are three
+independent axes that compose freely. Deep red is also Lion mode's identity:
+arming Lion applies it without overwriting the user's hand-picked theme, and
+disarming restores it.

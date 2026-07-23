@@ -91,6 +91,26 @@ class AskSpecialistSkill(_CouncilBase):
                    re.IGNORECASE),
     ]
 
+    def match(self, text: str):
+        """Only claim the utterance when the name captured IS a specialist.
+
+        The patterns have to capture a free-form name — you address an expert
+        by title, not by a fixed keyword — which made them greedy: "what does
+        this page say about batteries" captured "this page" as the expert, and
+        the fast path stopped there to answer "I don't have that specialist"
+        instead of letting web_fetch read the page.
+
+        So resolution happens at match time, not execute time. A name the
+        council doesn't have is not a match at all, and the router carries on
+        to the skills registered after this one.
+        """
+        found = super().match(text)
+        if found is None:
+            return None
+        gd = found.groupdict()
+        who = (gd.get("who") or gd.get("who2") or gd.get("who3") or "").strip()
+        return found if find_specialist(who, self._council) is not None else None
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)

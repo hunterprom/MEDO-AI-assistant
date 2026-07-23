@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -93,6 +93,12 @@ class ConversationConfig(BaseModel):
     # How long the mic stays open for a follow-up before falling back to
     # standby on silence.
     followup_window_s: float = 8.0
+    # After you interrupt MEDO (say "medo" over its reply), should it keep
+    # listening for a follow-up without the wake word? Off by default: cutting
+    # MEDO off usually means "stop", not "here comes another command", and the
+    # old behaviour left MEDO recording the silence/noise after an interrupt.
+    # Turn on to chain "medo — actually, do X" in one breath.
+    listen_after_barge: bool = False
     # --- dictation (skills/dictate.py + voice/loop.py) ----------------------
     #: Where dictated text lands when no file is named.
     dictation_dir: str = "~/Documents"
@@ -222,6 +228,12 @@ class VisionConfig(BaseModel):
     camera_index: int = 0
     stream_port: int = 8731                 # MJPEG stream for the HUD to embed
     flip: bool = True                       # mirror the selfie view
+    # Draw the coloured hand skeleton (MediaPipe landmarks) onto the streamed
+    # feed? OFF by default: the overlay is drawn on the SAME frame the vision
+    # model looks at, so leaving it on makes "what do you see" describe coloured
+    # lines on your hands. Gesture tracking still runs either way — this only
+    # controls whether the overlay is visible.
+    show_hand_tracking: bool = False
     max_fps: int = 15                       # throttle inference on CPU
     min_detection_confidence: float = 0.6
     min_tracking_confidence: float = 0.5
@@ -250,6 +262,39 @@ class VisionConfig(BaseModel):
     )
 
 
+class SpheresConfig(BaseModel):
+    """The agent cluster-sphere view (a HUD screen) — see ui/web/index.html.
+
+    Purely visual: a sphere per capability domain, a star per registered skill,
+    built at page load from the live skill registry (:mod:`core.agents`).
+    """
+
+    enabled: bool = True
+    #: ``high`` draws glow, orbit trails and dust; ``low`` drops them for a
+    #: flat, cheap render on weak GPUs. The HUD also auto-drops to low if it
+    #: measures a slow first frame, so this is the ceiling, not a promise.
+    quality: Literal["low", "high"] = "high"
+
+
+class UIConfig(BaseModel):
+    """HUD look: theme + composable effect layers. Purely cosmetic — none of
+    this changes what a skill does or relaxes a safety gate.
+
+    ``theme`` sets the base skin; ``effects`` are overlays stacked on top of
+    it. They compose where it makes sense (scanlines over glass, say), and the
+    HUD refuses combinations that would hurt the transcript — an effect layer
+    never captures pointer events and never sits over the chat text.
+    """
+
+    #: Base skin. ``deep_red`` is Lion mode's identity (see skills/lion.py).
+    theme: Literal["arc", "glass", "minimal", "maximal", "deep_red"] = "arc"
+    #: Overlays: any of ``scanlines``, ``glitch``, ``glass``, ``grid``. The
+    #: browser also persists the user's own pick in localStorage, so this only
+    #: seeds a first visit.
+    effects: list[str] = Field(default_factory=lambda: ["scanlines"])
+    spheres: SpheresConfig = Field(default_factory=SpheresConfig)
+
+
 class HudConfig(BaseModel):
     """M.E.D.O. web HUD (arc-reactor front end) — see ui/hud.py."""
 
@@ -270,6 +315,19 @@ class STTConfig(BaseModel):
     compute_type: str = "auto"
     # null/None = per-utterance auto-detect (enables Macedonian + English).
     language: str | None = "en"
+    #: How the spoken language is chosen. "auto" detects per utterance; any
+    #: code from core/languages.py forces it — Whisper skips detection, decodes
+    #: as that language, and replies come back in it.
+    #:
+    #: This is the SAME lever as ``language`` above, not a second one: the
+    #: validator below folds it into ``language``, which is the only field the
+    #: transcriber reads. ``language_mode`` is just the spelling that says out
+    #: loud that "auto" is a legal value.
+    #:
+    #: Force it when auto-detect keeps guessing wrong — one-word commands carry
+    #: very little signal, and languages with close neighbours (mk/bg/sr,
+    #: es/pt, hi/ur) are where detection actually fails.
+    language_mode: str = "auto"
     # With auto-detect on, clamp detection to these languages: Whisper often
     # mistakes spoken Macedonian for Bulgarian/Serbian, which garbles the
     # decode. Outside-the-set detections are re-transcribed forced to the
@@ -292,6 +350,35 @@ class STTConfig(BaseModel):
         "take a note, set a timer, take a screenshot, weather, the news, shut down."
     )
 
+    @model_validator(mode="after")
+    def _apply_language_mode(self) -> STTConfig:
+        """Fold ``language_mode`` into ``language`` — one lever, one field.
+
+        Whichever of the two the user set, the transcriber sees the result in
+        ``language`` and nothing downstream has to know both names exist. An
+        unsupported code falls back to auto-detect with a warning rather than
+        forcing Whisper into a language MEDO has no voice for.
+        """
+        from core import languages
+
+        mode = (self.language_mode or "auto").strip().lower()
+        if mode in ("", "auto"):
+            # Only auto-detect if the older field didn't already force one;
+            # "auto" is the default of a field the user may never have touched.
+            if "language_mode" in self.model_fields_set:
+                self.language = None
+            self.language_mode = "auto"
+            return self
+        if languages.get(mode) is None:
+            logging.getLogger(__name__).warning(
+                "stt.language_mode=%r is not a language MEDO speaks — using "
+                "auto-detect. Supported: %s", mode, ", ".join(languages.codes()))
+            self.language_mode, self.language = "auto", None
+            return self
+        self.language_mode = mode
+        self.language = mode
+        return self
+
 
 class TTSConfig(BaseModel):
     engine: str = "piper"
@@ -307,6 +394,19 @@ class WakeWordConfig(BaseModel):
     engine: str = "openwakeword"
     phrase: str = "hey_jarvis"
     threshold: float = 0.5
+    #: Consecutive ~80 ms frames the phrase must stay above ``threshold`` before
+    #: MEDO wakes. 1 = the old single-frame trigger, which is twitchy: a clap, a
+    #: door, or a stray word spikes the score for one frame and wakes it. A real
+    #: "hey medo" SUSTAINS across several frames, so requiring 2–3 is the main
+    #: defence against random-noise false wakes — no model retraining needed.
+    #: Raise it if MEDO still wakes to noise; lower it (toward 1) if a genuine
+    #: "hey medo" is being missed.
+    trigger_frames: int = 3
+    #: openWakeWord's built-in speech gate (0 = off). Raise toward ~0.5 so only
+    #: sounds that are actually SPEECH can wake MEDO — music, bangs and keyboard
+    #: clatter are ignored outright. Needs openWakeWord's VAD model available;
+    #: if it can't load, MEDO logs a warning and runs without it.
+    vad_threshold: float = 0.0
 
 
 class AudioConfig(BaseModel):
@@ -326,6 +426,16 @@ class AudioConfig(BaseModel):
     max_utterance_s: float = 30.0
 
     # --- barge-in (voice/loop.py) --------------------------------------------
+    #: What may interrupt MEDO mid-reply:
+    #:   "wake"  — ONLY the wake word ("medo"), or the HUD/watch interrupt
+    #:             button. A random word or background noise will not cut it
+    #:             off. This is the default.
+    #:   "voice" — also any sustained speech/noise over the reply (the older,
+    #:             twitchier behaviour). Restore this if you want to talk over
+    #:             MEDO without saying its name.
+    #:   "off"   — only the explicit HUD/watch interrupt button; the mic never
+    #:             interrupts playback.
+    barge_mode: Literal["wake", "voice", "off"] = "wake"
     #: Wake-word score that interrupts a reply. Lower than the idle threshold —
     #: you're speaking over MEDO's own voice, so the model scores lower.
     barge_wake_threshold: float = 0.25
@@ -339,6 +449,27 @@ class AudioConfig(BaseModel):
     barge_hold_frames: int = 3
 
 
+class ModeConfig(BaseModel):
+    """Expert PROFILES — presentation + which skills are surfaced. A profile
+    is not a safety switch: none of these relax the confirmation gate, the
+    path whitelist, or the PC-control switch. See docs/Decisions.md.
+    """
+
+    # MEDO LION MODE — the defensive-security profile. Off by default; a
+    # runtime toggle that resets on restart (a mode for a task, not a setting).
+    # When on it reskins the HUD deep red, shows a LION indicator, and SURFACES
+    # a group of read-only, local-machine, advisory security skills (port
+    # audit, firewall audit, process/permission explainers, update check).
+    #
+    # It is DEFENSIVE-ONLY and changes nothing about safety: MEDO still asks
+    # before every destructive action, still refuses paths outside the
+    # whitelist, and still honours the PC-control switch. It will not scan or
+    # touch any other machine, and it refuses to produce exploits, malware,
+    # credential-cracking, or ways around its own guards. An "unrestricted
+    # mode" is a liability; "surface more, restrict nothing less" is the design.
+    lion: bool = False
+
+
 class SafetyConfig(BaseModel):
     confirm_destructive: bool = True
     whitelist_dirs: list[str] = Field(default_factory=list)
@@ -347,14 +478,6 @@ class SafetyConfig(BaseModel):
     # (PC CONTROL) and persisted per-machine in secrets.local.yaml. Sensing
     # (vision, weather, questions) is never affected.
     pc_control_enabled: bool = True
-    # MEDO LION MODE. Off by default, and it should stay off unless you mean
-    # it: while on, MEDO stops asking before destructive actions and ignores
-    # the PC-control switch entirely. It does NOT widen the file whitelist or
-    # the browser blocklist — those bound WHERE MEDO can act, and a "don't ask
-    # me" switch is not a reason to let a mis-heard word reach your system
-    # drive. Always resets to false on restart: it is a mode you turn on for a
-    # task, not a setting you leave behind.
-    lion_mode: bool = False
 
     def resolved_whitelist(self) -> list[Path]:
         """Whitelist directories as absolute, expanded paths."""
@@ -423,6 +546,27 @@ class NewsConfig(BaseModel):
     feeds_mk: list[str] = Field(default_factory=list)
 
 
+class WebFetchConfig(BaseModel):
+    """Reading a page out loud — skills/webfetch.py.
+
+    Every field here is a *bound*, not a preference: this skill pulls bytes
+    from an address someone else controls, so the timeout, the byte cap and
+    the redirect cap are what stop a hostile or broken page from hanging the
+    assistant. Raising them widens that exposure.
+    """
+
+    enabled: bool = True
+    timeout_s: float = 15.0
+    #: Hard cap on the body. Enforced WHILE streaming (the read is aborted),
+    #: never after — the point is to not have the bytes.
+    max_bytes: int = 2_000_000
+    #: Enough for http -> https -> www; a longer chain is a tracker or a loop.
+    max_redirects: int = 3
+    #: Sent as-is. Plain and honest: some sites 403 an unknown client, and
+    #: pretending to be a browser is both a lie and a fragile one.
+    user_agent: str = "Mozilla/5.0 (compatible; MEDO/2.0; local voice assistant)"
+
+
 class VisionLLMConfig(BaseModel):
     """Local vision model for 'what do you see' / 'read my screen'."""
 
@@ -437,6 +581,10 @@ class MemoryConfig(BaseModel):
     # Local Ollama embedding model for semantic fact recall ("dentist" finds
     # "my dentist is Dr. ..."). Empty string disables -> newest-N as before.
     embed_model: str = "nomic-embed-text"
+    # Where "import this file" copies documents and pictures. Under Documents
+    # by default so it sits inside the whitelist AND inside the document
+    # index's roots — imports stay searchable after a plain reindex.
+    import_dir: str = "~/Documents/MEDO/Imports"
 
 
 class MCPServerConfig(BaseModel):
@@ -506,13 +654,16 @@ class Settings(BaseSettings):
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     council: CouncilConfig = Field(default_factory=CouncilConfig)
     hud: HudConfig = Field(default_factory=HudConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     wakeword: WakeWordConfig = Field(default_factory=WakeWordConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    mode: ModeConfig = Field(default_factory=ModeConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
+    web_fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
     vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

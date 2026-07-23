@@ -29,7 +29,44 @@ APPS = [
     FoundApp("Visual Studio", Path("C:/Start/VS.lnk"), "Start Menu"),
     FoundApp("Google Chrome", Path("C:/Start/Chrome.lnk"), "Start Menu"),
     FoundApp("Bambu Studio", Path("C:/Start/Bambu.lnk"), "Start Menu"),
+    FoundApp("Autodesk Fusion", Path("C:/Start/Fusion.lnk"), "Start Menu"),
 ]
+
+
+def test_distinctive_token_finds_a_renamed_app():
+    # "open Fusion 360" must still find "Autodesk Fusion" (Autodesk dropped the
+    # "360") — the failure the user hit.
+    assert find_app("fusion 360", APPS).name == "Autodesk Fusion"
+    assert find_app("autodesk fusion", APPS).name == "Autodesk Fusion"
+
+
+def test_distinctive_token_does_not_match_filler():
+    # "how much space do I have in my PC" once captured "in my PC" as an app —
+    # short filler words must never resolve to anything.
+    for junk in ("in my pc", "in my computer", "some space", "any room"):
+        assert find_app(junk, APPS) is None
+
+
+def test_locate_declines_a_disk_space_question():
+    # It must not claim "how much space do I have in my PC" (a disk question).
+    assert LocateAppSkill().match("how much space do I have in my PC") is None
+    assert LocateAppSkill().match("how much room is left") is None
+    # but a genuine "do I have X" is still claimed
+    assert LocateAppSkill().match("do I have obsidian") is not None
+
+
+def test_disk_space_question_routes_to_system_info():
+    from core.config import load_settings
+    from core.docindex import DocumentIndex
+    from main import Announcer, build_registry
+
+    reg = build_registry(load_settings(), Announcer(),
+                         doc_index=DocumentIndex(":memory:", None, []))
+    for q in ("how much space do I have in my PC",
+              "how much disk space do I have",
+              "how much free space"):
+        hit = reg.find_match(q)
+        assert hit is not None and hit[0].name == "system_info", q
 
 
 # --- matching ------------------------------------------------------------------
