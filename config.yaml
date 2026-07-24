@@ -292,12 +292,16 @@ wakeword:                           # M1
   #      see docs/Wake Word Training.md for the full runbook.
   #   3) drop hey_medo.onnx in models/wakeword/ and set phrase to it below.
   phrase: "models/wakeword/hey_medo.onnx"   # custom model, fires on BOTH "medo"
-                                    # and "hey medo" (retrained 2026-07-24;
-                                    # held-out recall 0.995, FP 0.019). Now
-                                    # DISCRIMINATIVE: ordinary speech ("hello",
-                                    # "what time is it") scores ~0, where the old
-                                    # 2026-07-20 model (recall 0.76) fired on
-                                    # nearly everything and leaned on stt_confirm.
+                                    # and "hey medo". Retrained 2026-07-24 on the
+                                    # OWNER'S REAL captured voice (scripts/
+                                    # capture_wake_samples.py) folded into the
+                                    # synthetic set: on real mic clips it fires
+                                    # on 95% of genuine "medo" (the synthetic-only
+                                    # model caught 0% of natural, quiet "medo")
+                                    # and false-fires on ~7% of ordinary speech
+                                    # (all rejected by stt_confirm). To retune to
+                                    # a new voice/room, recapture + retrain with
+                                    # scripts/train_wakeword_deep.py --real-dir.
   # Lower = easier to trigger (0.5 is openWakeWord's default; 0.4 helps a
   # non-native "hey jarvis"). Watch your live score with:
   #   .venv\Scripts\python -m voice.wakeword

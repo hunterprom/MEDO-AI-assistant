@@ -300,6 +300,20 @@ def stage_features(args) -> None:
     print(f"[features] negatives: hard_base={len(hard_base)} (x{aug})  "
           f"div_base={len(div_base)} (x{div_aug})", flush=True)
     neg_audio = expand(hard_base, aug, False) + expand(div_base, div_aug, False)
+
+    # Real captured audio (the user's actual voice/mic/room) — the true target
+    # distribution TTS can't reproduce. Over-represent real positives so the
+    # head anchors on how "medo" REALLY sounds; add real negatives so it learns
+    # to reject the user's ordinary speech, not just synthetic speech.
+    if args.real_dir:
+        rd = Path(args.real_dir)
+        rp = [_read_wav(f) for f in sorted(glob.glob(str(rd / "pos" / "*.wav")))]
+        rn = [_read_wav(f) for f in sorted(glob.glob(str(rd / "neg" / "*.wav")))]
+        print(f"[features] REAL clips: pos={len(rp)} (x{aug * 3})  neg={len(rn)} (x{max(2, aug // 2)})",
+              flush=True)
+        pos_audio += expand(rp, aug * 3, True)
+        neg_audio += expand(rn, max(2, aug // 2), False)
+
     # noise/silence negatives straight from the bank + explicit silence
     neg_audio += [_fit(n, rng, jitter=False) for n in noise_bank]
     for _ in range(20 if not args.smoke else 4):
@@ -496,6 +510,8 @@ def main() -> None:
     # features
     ap.add_argument("--aug", type=int, default=8, help="augmentations per base clip")
     ap.add_argument("--pool", type=int, default=400, help="noise-bank / mining pool size")
+    ap.add_argument("--real-dir", default=None, dest="real_dir",
+                    help="dir with pos/ and neg/ WAVs captured from the real mic")
     # train
     ap.add_argument("--steps", type=int, default=6000)
     ap.add_argument("--mine-rounds", type=int, default=3, dest="mine_rounds")

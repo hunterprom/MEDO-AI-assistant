@@ -51,3 +51,6 @@ logs/
 
 # wake-word model backups (old versions live in git history)
 *.onnx.bak-*
+
+# real captured wake-word audio = the user's own voice; keep it local
+models/wakeword/real/
