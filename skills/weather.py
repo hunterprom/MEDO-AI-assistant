@@ -44,6 +44,18 @@ _WMO_MK = {
 #: leading "во/за" is stripped by the pattern rather than the geocoder.
 _CITY = r"[\w .'-]+"
 
+#: The greedy _CITY swallows a trailing time word ("weather for tomorrow" ->
+#: city "tomorrow" -> geocode fails -> the default-city forecast is never
+#: reached). Strip it; `when` is derived from the raw text separately.
+_TRAILING_TIME = re.compile(
+    r"\s*\b(?:tomorrow|today|tonight|now|right\s+now|later|this\s+(?:week|weekend|"
+    r"morning|afternoon|evening)|next\s+week|утре|денес|вечер\w*|сега)\b\s*$",
+    re.IGNORECASE)
+
+
+def _strip_time_words(city: str) -> str:
+    return _TRAILING_TIME.sub("", city).strip()
+
 
 class WeatherSkill(Skill):
     name = "weather"
@@ -105,9 +117,10 @@ class WeatherSkill(Skill):
 
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
-        city = (request.args.get("city") or gd.get("city") or gd.get("city2")
-                or gd.get("city3") or gd.get("city4") or gd.get("city5")
-                or "").strip(" ?.!")
+        city = _strip_time_words(
+            (request.args.get("city") or gd.get("city") or gd.get("city2")
+             or gd.get("city3") or gd.get("city4") or gd.get("city5")
+             or "").strip(" ?.!"))
         when = (request.args.get("when") or "").lower()
         if "tomorrow" in request.text.lower() or "утре" in request.text.lower():
             when = "tomorrow"

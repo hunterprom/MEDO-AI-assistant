@@ -28,6 +28,17 @@ _DURATION_RE = re.compile(
     r"(\d+)\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)", re.IGNORECASE
 )
 
+#: A TRAILING delay phrase inside a reminder label — "call mom IN 5 minutes" ->
+#: "call mom". Requires a number (digit or word) followed by a time unit, so a
+#: task's own "in"/"for" ("fill IN the form", "wait FOR the tone") is untouched.
+_TRAILING_DELAY = re.compile(
+    r"\s+(?:in|after|within|for)\s+"
+    r"(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"fifteen|twenty|thirty|forty|fifty|sixty|half|quarter|couple|few)\b"
+    r"[\w\s-]*?\b(?:second|sec|minute|min|hour|hr|day|week)s?\b.*$"
+    r"|\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?\b.*$",
+    re.IGNORECASE)
+
 # Whisper (especially large-v3-turbo) transcribes numbers as WORDS — "set a
 # timer for one minute" — which the digit-only regex above never matched, so
 # every spoken timer got "How long should the timer be?". Normalize word
@@ -136,13 +147,17 @@ class TimerSkill(Skill):
 
     def _extract_label(self, text: str) -> str:
         m = re.search(r"\bto\s+(.*)", text, re.IGNORECASE)
-        if m:
-            label = m.group(1).strip().strip(".!?")
-            # "set a timer TO 5 minutes" is a duration, not a label.
-            if parse_duration(label) > 0:
-                return ""
-            return label
-        return ""
+        if not m:
+            return ""
+        label = m.group(1).strip().strip(".!?")
+        # Strip a TRAILING delay phrase so the label survives the most common
+        # wording "remind me to X in N minutes" — which used to lose X entirely.
+        trimmed = _TRAILING_DELAY.sub("", label).strip().strip(",")
+        if trimmed and parse_duration(trimmed) == 0:
+            return trimmed
+        # Nothing meaningful left, or the whole thing was a duration
+        # ("set a timer TO 5 minutes") — no label.
+        return "" if parse_duration(label) > 0 else label
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         text = request.text

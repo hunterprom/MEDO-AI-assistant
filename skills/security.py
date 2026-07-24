@@ -113,9 +113,35 @@ def _names_remote_target(text: str) -> bool:
     return False
 
 
+#: Defensive verbs — the request LOOKS FOR / removes a threat rather than making
+#: one. ("scan my pc for malware", "check this machine for keyloggers".)
+_DEFENSIVE_VERB = re.compile(
+    r"\b(?:scan|check|audit|detect|find|search|look|review|inspect|remove|clean|"
+    r"protect|harden|secure|defend|провери|скенира\w*|заштит\w*)\b", re.IGNORECASE)
+#: Offensive actions — PRODUCING, installing, or USING the offensive thing. These
+#: stay refused even when the target is this machine (local scope can't launder
+#: "write a keylogger" into an allowed request).
+_OFFENSIVE_ACTION = re.compile(
+    r"\b(?:write|create|build|make|generate|develop|code|install|deploy|plant|"
+    r"run|use|launch|execute|craft|напиши|создад\w*|направи|инсталира\w*)\b",
+    re.IGNORECASE)
+
+
 def is_offensive(text: str) -> bool:
-    """True when the request is out of bounds for a defensive-only profile."""
-    return bool(_OFFENSIVE.search(text)) or _names_remote_target(text)
+    """True when the request is out of bounds for a defensive-only profile.
+
+    An offensive KEYWORD (malware, keylogger, rootkit…) is allowed only when it
+    is clearly the SUBJECT of a defensive, local audit — "scan MY computer FOR
+    malware" — and NOT paired with a verb that would produce, install, or run
+    it. Scanning a remote host is always out of bounds.
+    """
+    if _names_remote_target(text):
+        return True
+    if _OFFENSIVE.search(text):
+        defensive_local = (_LOCAL_SCOPE.search(text) and _DEFENSIVE_VERB.search(text)
+                           and not _OFFENSIVE_ACTION.search(text))
+        return not defensive_local
+    return False
 
 
 # --- common ports, so a port audit actually explains itself ------------------

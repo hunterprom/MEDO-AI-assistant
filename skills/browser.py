@@ -383,13 +383,16 @@ class BrowserControlSkill(Skill):
     _TYPE = r"type|enter|write|fill\s+in"
     _CLICK_MK = r"кликни(?:\s+на)?"        # not "притисни" — that's a key press
     _TYPE_MK = r"напиши|внеси|искуцај"
+    #: An optional polite/modal wrapper — "can you click…", "please type…" —
+    #: which the model narrates ("I can't click for you") instead of doing.
+    _POLITE = r"(?:(?:can|could|would|will)\s+you\s+|please\s+)?"
 
     #: Order matters inside a skill too — ``match()`` returns the first hit, so
     #: the specific forms are listed before the catch-all click.
     patterns = [
         # "type medo into the search box" — needs a field, otherwise this is a
         # plain type-into-the-focused-window and TypeTextSkill should have it.
-        re.compile(rf"^\s*(?:{_TYPE})\s+(?P<text>.+?)\s+(?:in|into)\s+"
+        re.compile(rf"^\s*{_POLITE}(?:{_TYPE})\s+(?P<text>.+?)\s+(?:in|into)\s+"
                    r"(?:the\s+)?(?P<field>.+?)(?:\s+(?:box|field|bar))?\s*$",
                    re.IGNORECASE),
         re.compile(r"\bscroll\s+(?P<dir>up|down)(?:\s+(?P<times>\d+))?\b", re.IGNORECASE),
@@ -402,7 +405,7 @@ class BrowserControlSkill(Skill):
         # "close the browser" is NOT here: that phrase already means "kill the
         # browser app" via AppsSkill. This closes MEDO's own window.
         re.compile(r"(?P<close>\bclose\s+(?:the\s+)?(?:tab|page)\b)", re.IGNORECASE),
-        re.compile(rf"^\s*(?:{_CLICK})\s+(?:the\s+|on\s+the\s+)?(?P<click>.+?)"
+        re.compile(rf"^\s*{_POLITE}(?:{_CLICK})\s+(?:the\s+|on\s+the\s+)?(?P<click>.+?)"
                    r"(?:\s+(?:button|link|tab))?\s*$", re.IGNORECASE),
         # --- Macedonian ---
         re.compile(rf"^\s*(?:{_TYPE_MK})\s+(?P<text>.+?)\s+(?:во|на)\s+"

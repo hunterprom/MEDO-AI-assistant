@@ -171,7 +171,12 @@ class BenchSkill(Skill):
         re.compile(r"\bidentify\s+this\s+(?:part|component|chip)\b", re.IGNORECASE),
         re.compile(r"\bшто\s+е\s+ова\b", re.IGNORECASE),
         re.compile(r"\blog\s+this\s+part\b", re.IGNORECASE),
-        re.compile(r"\bdo\s+i\s+have\s+any\s+(?P<query>.+)", re.IGNORECASE),
+        # "do I have any 10k resistors" -> bench inventory. But NOT app-install
+        # questions ("do I have any games installed") — those aren't bench parts
+        # and LocateAppSkill declines an "any"-led name, so without this guard
+        # they fell through to the bench and searched electronics for "games".
+        re.compile(r"\bdo\s+i\s+have\s+any\s+(?!.*\b(?:installed|apps?|programs?|"
+                   r"browsers?|antivirus)\b)(?P<query>.+)", re.IGNORECASE),
     ]
 
     def __init__(self, settings: Settings, inventory: BenchInventory,

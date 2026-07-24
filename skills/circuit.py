@@ -91,14 +91,19 @@ class CircuitSkill(Skill):
     )
 
     patterns = [
-        re.compile(r"\bhow\s+(?:do|would)\s+i\s+(?:wire|connect|hook\s+up)\s+(?P<q>.+)$",
-                   re.IGNORECASE),
-        re.compile(r"\b(?:wire|wiring|connect)\s+(?:up\s+)?(?P<q2>.+?)\s+"
-                   r"(?:to|with|and)\s+(?P<q2b>.+)$", re.IGNORECASE),
+        re.compile(r"\bhow\s+(?:do|would|can|could|should)\s+i\s+"
+                   r"(?:wire|connect|hook\s+up)\s+(?P<q>.+)$", re.IGNORECASE),
+        # "connect X to Y" is overloaded — decline the everyday networking sense
+        # ("connect my phone to the wifi") so it isn't answered as a circuit.
+        re.compile(r"\b(?:wire|wiring|connect)\s+(?:up\s+)?"
+                   r"(?!.*\b(?:wi-?fi|internet|network|bluetooth|phone|laptop|"
+                   r"printer|projector|monitor|tv|account|server|vpn|router)\b)"
+                   r"(?P<q2>.+?)\s+(?:to|with|and)\s+(?P<q2b>.+)$", re.IGNORECASE),
         re.compile(r"\bhelp\s+me\s+(?:wire|build)\s+(?P<q3>.+)$", re.IGNORECASE),
         re.compile(r"\b(?:circuit|schematic|wiring)\s+for\s+(?P<q4>.+)$", re.IGNORECASE),
-        # MK: "како да поврзам ардуино со диода"
-        re.compile(r"\bкако\s+да\s+(?:го\s+|ја\s+)?(?:поврзам|врзам|споjам)\s+(?P<qm>.+)$",
+        # MK: "како да поврзам ардуино со диода" (спојам with CYRILLIC ј U+0458,
+        # not a Latin j — the old spelling never matched real Cyrillic input).
+        re.compile(r"\bкако\s+да\s+(?:го\s+|ја\s+)?(?:поврзам|врзам|спојам)\s+(?P<qm>.+)$",
                    re.IGNORECASE),
         re.compile(r"\bшема\s+за\s+(?P<qm2>.+)$", re.IGNORECASE),
     ]

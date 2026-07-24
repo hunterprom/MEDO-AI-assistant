@@ -33,7 +33,12 @@ class DateTimeSkill(Skill):
     patterns = [
         re.compile(r"\bwhat(?:'?s| is)?\s+the\s+time\b", re.IGNORECASE),
         re.compile(r"\bwhat\s+time\s+is\s+it\b", re.IGNORECASE),
-        re.compile(r"\b(?:current\s+)?time\b", re.IGNORECASE),
+        # NOT a bare `\btime\b` — that hijacked "what time does the store close",
+        # "how much time do I have", etc. The direct clock queries are the two
+        # patterns above; these cover the rest without swallowing every "time".
+        re.compile(r"\bcurrent\s+time\b|\btime\s+right\s+now\b", re.IGNORECASE),
+        re.compile(r"\b(?:tell|give)\s+me\s+the\s+time\b", re.IGNORECASE),
+        re.compile(r"\bdo\s+you\s+have\s+the\s+time\b", re.IGNORECASE),
         re.compile(r"\bwhat(?:'?s| is)?\s+(?:today'?s\s+)?(?:the\s+)?date\b", re.IGNORECASE),
         re.compile(r"\bwhat\s+day\s+is\s+it\b", re.IGNORECASE),
         re.compile(r"\btoday'?s\s+date\b", re.IGNORECASE),

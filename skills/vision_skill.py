@@ -201,7 +201,12 @@ class SeeCameraSkill(Skill):
                    re.IGNORECASE),
         re.compile(r"\bdescribe\s+(?:what\s+you\s+see|the\s+(?:camera|room|view))\b", re.IGNORECASE),
         re.compile(r"\blook\s+(?:at\s+(?:me|this)|around)\b", re.IGNORECASE),
-        re.compile(r"\bcan\s+you\s+see\s+(?:me|anything|this)\b", re.IGNORECASE),
+        # Modal expansion (mirrors see_screen): "could/would/will you see me",
+        # "do you see anything", "tell me what you see" reached the LLM before.
+        re.compile(r"\b(?:can|could|would|will|do)\s+(?:you|yuo|u)\s+see\s+"
+                   r"(?:me|anything|this|us)\b", re.IGNORECASE),
+        re.compile(r"\btell\s+me\s+what\s+(?:you|yuo|u)\s+see\b(?!.*\bscreen\b)",
+                   re.IGNORECASE),
         # Camera-oriented phrasings (never 'screen' — that's the see_screen skill).
         re.compile(r"\b(?:see|look\s+at|check|use|through)\s+(?:the\s+|your\s+|my\s+)?"
                    r"(?:camera|webcam)\b", re.IGNORECASE),

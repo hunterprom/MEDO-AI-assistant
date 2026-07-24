@@ -50,6 +50,16 @@ TEXT_SUFFIXES = {
 #: pattern can never capture a path fragment and walk out of the whitelist.
 _NAME = r"[\w][\w .()-]*"
 
+#: A trailing "file"/"document" noun the greedy name group swallows from the
+#: natural "the config FILE" phrasing — "config file" won't substring-match
+#: "config.yaml". Strip it (but "makefile" has no space, so it's untouched).
+_TRAILING_FILE = re.compile(r"\s+(?:file|files|document|doc)\s*$", re.IGNORECASE)
+
+
+def _drop_file_noun(name: str) -> str:
+    """'the config file' -> 'config'; never reduces the name to nothing."""
+    return _TRAILING_FILE.sub("", name).strip() or name
+
 
 def is_text_file(path: Path) -> bool:
     """True when this file is safe to rewrite as text.
@@ -155,7 +165,7 @@ class FileEditSkill(Skill):
 
     def _resolve(self, name: str) -> tuple[Path | None, str | None]:
         """Spoken name -> a writable text file, or (None, spoken reason)."""
-        name = name.strip().strip(" .,:;\"'")
+        name = _drop_file_noun(name.strip().strip(" .,:;\"'"))
         if not name:
             return None, "which file"
         if not self._whitelist.roots:
@@ -485,7 +495,8 @@ class OpenInEditorSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
-        name = (request.args.get("file") or gd.get("file") or "").strip(" .,:;\"'")
+        name = _drop_file_noun(
+            (request.args.get("file") or gd.get("file") or "").strip(" .,:;\"'"))
         if not name:
             return SkillResult("Која датотека?" if speak_mk else "Which file?",
                                success=False)

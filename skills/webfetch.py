@@ -326,6 +326,9 @@ class WebFetchSkill(Skill):
         re.compile(r"\bwhat\s+does\s+(?:this|that|the)\s+(?:web\s*)?"
                    r"(?:page|article|link|site)\s+say\b"
                    r"(?:\s+about\s+(?P<q2>.+))?", re.IGNORECASE),
+        # Direct synonym: "what is this page about" / "what's this article about".
+        re.compile(r"\bwhat(?:'?s| is)\s+(?:this|that|the)\s+(?:web\s*)?"
+                   r"(?:page|article|link|site)\s+about\b", re.IGNORECASE),
         # MK: "прочитај ја страницата", "прочитај https://…", "сумирај ја статијата"
         re.compile(rf"\b(?:{_MK_READ}){mk.CLITICS}\s+(?P<url_mk>{_URL})", re.IGNORECASE),
         re.compile(rf"\b(?:{_MK_READ}){mk.CLITICS}\s+(?:{_MK_PAGE})\b", re.IGNORECASE),

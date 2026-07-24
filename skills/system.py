@@ -143,7 +143,12 @@ class VolumeSkill(Skill):
 
     patterns = [
         re.compile(r"\b(?:set\s+)?volume\s+(?:to\s+)?(?P<level>\d{1,3})\b", re.IGNORECASE),
-        re.compile(r"\b(?:turn\s+(?:it\s+)?(?P<updown>up|down)|volume\s+(?P<ud2>up|down))\b", re.IGNORECASE),
+        # "turn up/down" is generic — decline it when the object is the SCREEN,
+        # so "turn down the brightness" reaches BrightnessSkill instead of
+        # silently changing the volume.
+        re.compile(r"\b(?:turn\s+(?:it\s+)?(?P<updown>up|down)"
+                   r"(?!\s+(?:the\s+|my\s+)?(?:screen|display|brightness|monitor))"
+                   r"|volume\s+(?P<ud2>up|down))\b", re.IGNORECASE),
         re.compile(r"\b(?P<louder>louder|quieter)\b", re.IGNORECASE),
         re.compile(r"\b(?P<mute>mute|unmute)\b", re.IGNORECASE),
         # Everyday volume phrasings.
@@ -187,6 +192,26 @@ class VolumeSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         text = request.text.lower()
         m = request.match
+        # LLM tool path carries the intent in args {action, level}, with
+        # match=None — the fast-path text logic below can't see it, so a tool
+        # call to "set"/"mute"/"up"/"down" would otherwise fall through to the
+        # query branch and just READ the volume. Honour args first.
+        args = request.args or {}
+        action = str(args.get("action") or "").strip().lower()
+        alvl = args.get("level")
+        if alvl is not None and str(alvl).strip() != "":
+            try:
+                return SkillResult(self._set_absolute(int(alvl)))
+            except (TypeError, ValueError):
+                pass
+        if action in ("mute", "unmute"):
+            return SkillResult(self._set_muted(action == "mute"))
+        if action in ("up", "louder"):
+            return SkillResult(self._step(True))
+        if action in ("down", "quieter"):
+            return SkillResult(self._step(False))
+        if action == "set":                 # set with no level -> ask
+            return SkillResult("What volume — 0 to 100 percent?", success=False)
         if m and m.groupdict().get("level"):
             return SkillResult(self._set_absolute(int(m.group("level"))))
         if any(p in text for p in ("max volume", "maximum volume", "full volume",

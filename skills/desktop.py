@@ -108,7 +108,11 @@ class TypeTextSkill(Skill):
     description = "Type text into the currently focused window."
 
     patterns = [
-        re.compile(r"^\s*(?:medo[,!\s]+)?type\s+(?:out\s+)?(?P<body>.+?)\s*$", re.IGNORECASE),
+        # Allow a polite/modal wrapper — "can you type…", "please type…" — which
+        # the model otherwise narrates instead of actually typing. Still anchored
+        # so a stray "type" mid-sentence can't hijack the turn.
+        re.compile(r"^\s*(?:medo[,!\s]+)?(?:(?:can|could|would|will)\s+you\s+|please\s+)?"
+                   r"type\s+(?:out\s+)?(?P<body>.+?)\s*$", re.IGNORECASE),
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
@@ -167,7 +171,8 @@ class PressKeysSkill(Skill):
     description = "Press a key or keyboard shortcut (e.g. control s, alt tab, f5)."
 
     patterns = [
-        re.compile(r"^\s*(?:medo[,!\s]+)?(?:press|hit)\s+(?P<keys>.+?)\s*$", re.IGNORECASE),
+        re.compile(r"^\s*(?:medo[,!\s]+)?(?:(?:can|could|would|will)\s+you\s+|please\s+)?"
+                   r"(?:press|hit)\s+(?P<keys>.+?)\s*$", re.IGNORECASE),
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
@@ -350,6 +355,18 @@ class BrightnessSkill(Skill):
     patterns = [
         re.compile(r"\b(?:set\s+)?brightness\s+(?:to\s+)?(?P<level>\d{1,3})\b", re.IGNORECASE),
         re.compile(r"\b(?:screen\s+|display\s+)?brightness\s+(?P<ud>up|down)\b", re.IGNORECASE),
+        # Everyday phrasings — the `down`/`up` group names carry the direction,
+        # mapped to ud in execute(). ("dim the screen", "lower the brightness",
+        # "make the screen brighter", "turn down the brightness".)
+        re.compile(r"\b(?P<down>dim|darken|lower|reduce|decrease|drop)\s+(?:the\s+|my\s+)?"
+                   r"(?:screen|display|brightness|backlight)\b", re.IGNORECASE),
+        re.compile(r"\b(?P<up>brighten|raise|increase|boost|bump)\s+(?:the\s+|my\s+)?"
+                   r"(?:screen|display|brightness|backlight)\b", re.IGNORECASE),
+        re.compile(r"\bturn\s+(?:the\s+|my\s+)?(?P<updown>up|down)\s+"
+                   r"(?:the\s+|my\s+)?(?:screen\s+)?brightness\b", re.IGNORECASE),
+        re.compile(r"\bturn\s+(?:the\s+|my\s+)?brightness\s+(?P<updown2>up|down)\b", re.IGNORECASE),
+        re.compile(r"\bmake\s+(?:the\s+|my\s+)?(?:screen|display|it)\s+"
+                   r"(?:(?P<brighter>brighter)|(?P<dimmer>dimmer|darker))\b", re.IGNORECASE),
     ]
 
     _UNSUPPORTED = (
@@ -383,7 +400,12 @@ class BrightnessSkill(Skill):
         if request.match:
             gd = request.match.groupdict()
             level = level if level is not None else gd.get("level")
-            ud = gd.get("ud")
+            ud = gd.get("ud") or gd.get("updown") or gd.get("updown2")
+            if ud is None:                          # verb-implied direction
+                if gd.get("up") or gd.get("brighter"):
+                    ud = "up"
+                elif gd.get("down") or gd.get("dimmer"):
+                    ud = "down"
         if level is None and ud:
             current = await self._current()
             if current is None:
