@@ -41,8 +41,13 @@ class BriefingSkill(Skill):
         "active reminders, and upcoming plans."
     )
     patterns = [
-        re.compile(r"\b(?:morning|daily)\s+briefing\b", re.IGNORECASE),
+        # "brief" and "briefing" are both natural ("morning brief", "morning
+        # briefing", "daily brief"). Requiring the full word "briefing" here is
+        # what sent a plain "morning brief" to the LLM path, where the brain
+        # hallucinated calendar/mail "connectors" MEDO doesn't have.
+        re.compile(r"\b(?:morning|daily)\s+brief(?:ing)?\b", re.IGNORECASE),
         re.compile(r"\bbrief\s+me\b", re.IGNORECASE),
+        re.compile(r"\bbriefing\b", re.IGNORECASE),          # standalone
         re.compile(r"добро\s+утро", re.IGNORECASE),  # "добро утро медо" included
     ]
 

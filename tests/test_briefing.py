@@ -132,3 +132,17 @@ def test_fast_path_patterns_cover_the_spec_triggers():
                    "brief me", "добро утро медо"):
         assert s.match(phrase) is not None, phrase
     assert s.match("what's the weather") is None
+
+
+def test_short_brief_phrasings_route_to_the_skill_not_the_llm():
+    # "morning brief" (no -ing) took the LLM path, where the Claude-backed brain
+    # invented calendar/mail "connectors" MEDO doesn't have. These must all be
+    # caught on the fast path so news comes from RSS, not an ungated web search.
+    s = _skill()
+    for phrase in ("Morning brief", "morning brief", "daily brief",
+                   "what's my morning brief", "give me the briefing"):
+        assert s.match(phrase) is not None, phrase
+    # ...without swallowing ordinary uses of the word "brief".
+    for phrase in ("be brief please", "a brief summary of the meeting",
+                   "keep it brief"):
+        assert s.match(phrase) is None, phrase
