@@ -37,10 +37,17 @@ def test_vision_patterns_catch_can_you_see_phrasings():
     scr = SeeScreenSkill(_settings_with_dead_ports())
     assert cam.match("can you see me?") is not None
     for phrase in ("can you see my screen", "look at my screen",
-                   "what am I looking at?"):
+                   "what am I looking at?",
+                   # modal + possessive variants that reached the LLM:
+                   # "could you see YOUR screen" tripped none of the old patterns.
+                   "could you see your screen", "could you look at your screen",
+                   "would you check the screen", "can you view my screen"):
         assert scr.match(phrase) is not None, phrase
     # The generic pronoun question is NOT stolen (see_bench owns "што е ова").
     assert scr.match("what is this") is None
+    # ...and a "see" that isn't about the screen must not be hijacked.
+    for phrase in ("could you see a movie", "can you see the appeal", "see you later"):
+        assert scr.match(phrase) is None, phrase
 
 
 def test_camera_and_screen_queries_route_to_the_right_skill():

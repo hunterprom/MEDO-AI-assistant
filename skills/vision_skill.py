@@ -248,11 +248,13 @@ class SeeScreenSkill(Skill):
         # "what do you see on the screen" — a see-query that names the screen.
         re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b(?=.*\bscreen\b)",
                    re.IGNORECASE),
-        # "can you see my screen" / "look at my screen" / "what am I looking
-        # at" went to the LLM, which would claim it can't see screens instead
-        # of calling this tool — catch the common phrasings deterministically.
-        re.compile(r"\bcan\s+you\s+see\s+(?:my|the)\s+screen\b", re.IGNORECASE),
-        re.compile(r"\blook\s+at\s+(?:my|the)\s+screen\b", re.IGNORECASE),
+        # "can/could/would you see/view/look at my/the/your screen" — these went
+        # to the LLM, which claims it can't see screens instead of calling this
+        # tool. Cover the modal (can/could/would) AND the possessive (my/the/
+        # your): "could you see YOUR screen" tripped none of the old ones.
+        re.compile(r"\b(?:can|could|would|will)\s+you\s+(?:see|view|check|look\s+at)"
+                   r"\s+(?:my|the|your)\s+screen\b", re.IGNORECASE),
+        re.compile(r"\b(?:look\s+at|check)\s+(?:my|the|your)\s+screen\b", re.IGNORECASE),
         re.compile(r"\bwhat\s+am\s+i\s+looking\s+at\b", re.IGNORECASE),
         # MK: "што гледаш на екранот", "што има на мојот екран". One optional
         # word before "екран" absorbs the possessive, which Whisper spells
