@@ -103,6 +103,33 @@ def _use_os_trust_store() -> None:
             "truststore unavailable (%s); using certifi bundle", exc)
 
 
+def _start_overlay(settings: Settings):
+    """Spawn the desktop presence sphere (``ui/overlay.py``) as its own process.
+
+    A separate process on purpose: Tk wants to own a real main loop, and a UI
+    crash must never take the assistant down with it. It talks to MEDO only over
+    HTTP (the HUD's /events for state, the companion API for click-to-talk), so
+    it degrades to a dim sphere when those aren't up. Returns the handle, or
+    None when disabled/unavailable, so the caller can stop it on shutdown.
+    """
+    if not settings.ui.overlay.enabled:
+        return None
+    import subprocess
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "ui.overlay"],
+            cwd=str(PROJECT_ROOT),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logging.getLogger("main").info("desktop sphere started (pid %s)", proc.pid)
+        return proc
+    except Exception as exc:          # no display, no Tk, whatever — never fatal
+        logging.getLogger("main").warning("desktop sphere didn't start: %s", exc)
+        return None
+
+
 class Announcer:
     """Delivers async messages (e.g. a timer firing) to whatever output is live.
 
@@ -794,6 +821,9 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             f"[underline]http://localhost:{settings.hud.port}[/underline] in a browser."
         )
 
+    # The corner presence sphere — visible while you work in other apps.
+    overlay_proc = _start_overlay(settings)
+
     try:
         if voice:
             # Voice pipeline (voice/loop.py); the companion API (if started)
@@ -825,6 +855,8 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             ui.banner("text mode — /help for commands", router.model)
             await run_repl(router, sm, llm, ui, log)
     finally:
+        if overlay_proc is not None:
+            overlay_proc.terminate()          # the sphere follows MEDO down
         if remote is not None:
             await remote.stop()
         if hud_server is not None:

@@ -227,6 +227,27 @@ hud:                                # M.E.D.O. web HUD arc-reactor UI (--hud)
   host: "127.0.0.1"
   port: 8730
 
+ui:                                 # HUD look + the desktop presence sphere
+  overlay:                          # ui/overlay.py — always-on-top corner sphere
+    # A small CORE sphere pinned to a screen corner so MEDO stays VISIBLE while
+    # you work in other apps: it shows state (idle / listening / thinking /
+    # speaking) and bubbles up what you said and what it answered.
+    #   click        -> start listening now (same as saying the wake word;
+    #                   while it's speaking, a click interrupts instead)
+    #   double-click -> open the full HUD
+    #   right-click  -> menu · drag -> move it
+    # It adds NO listening of its own — the wake word already runs with the mic
+    # open whatever is on screen. This is the presence, not a second ear.
+    # Needs the HUD running for live state (--hud) and the companion API
+    # (--serve) for click-to-talk; without them it sits dim and retries.
+    enabled: true
+    size: 132                       # sphere diameter in px
+    corner: "bottom-right"          # bottom-right | bottom-left | top-right | top-left
+    margin: 18                      # gap from the screen edge
+    # CPU dial: the sphere is composed in Python (~9 ms/frame), so 12 fps is
+    # roughly 10% of ONE core. Drop to 8 for a near-free widget.
+    fps: 12
+
 # --- Subsystems below are configured now but wired in later milestones ---
 
 languages:                          # constrained two-language mode

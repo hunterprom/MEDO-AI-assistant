@@ -277,6 +277,29 @@ class SpheresConfig(BaseModel):
     quality: Literal["low", "medium", "high"] = "high"
 
 
+class OverlayConfig(BaseModel):
+    """The desktop presence sphere — a small always-on-top CORE sphere pinned to
+    a screen corner (``ui/overlay.py``), so MEDO stays visible while you work in
+    other apps.
+
+    It adds no listening of its own: the wake word already runs with the mic
+    open whatever is on screen. This is the *presence* — you can see it heard
+    you, watch it think and answer, click it to talk without the wake word, and
+    double-click to open the full HUD. Runs as its own process so a UI crash can
+    never take the assistant down.
+    """
+
+    enabled: bool = True
+    size: int = 132                     # sphere diameter in px
+    corner: Literal["bottom-right", "bottom-left",
+                    "top-right", "top-left"] = "bottom-right"
+    margin: int = 18                    # gap from the screen edge
+    #: Frames/s (clamped 4..30). The sphere is composed in Python, so this is
+    #: the CPU dial: ~9 ms a frame here, i.e. roughly 10% of ONE core at 12.
+    #: Drop it to 8 for a near-free widget; the rotation is slow either way.
+    fps: int = 12
+
+
 class UIConfig(BaseModel):
     """HUD look: theme + composable effect layers. Purely cosmetic — none of
     this changes what a skill does or relaxes a safety gate.
@@ -294,6 +317,8 @@ class UIConfig(BaseModel):
     #: seeds a first visit.
     effects: list[str] = Field(default_factory=lambda: ["scanlines"])
     spheres: SpheresConfig = Field(default_factory=SpheresConfig)
+    #: The corner presence sphere (see OverlayConfig).
+    overlay: OverlayConfig = Field(default_factory=OverlayConfig)
 
 
 class HudConfig(BaseModel):
