@@ -91,22 +91,30 @@ class AppsSkill(Skill):
         return key if key in self._apps else None
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        m = request.match
-        if m is None:
-            return SkillResult("I didn't catch which app.", success=False)
-        gd = m.groupdict()
         speak_mk = mk.is_cyrillic(request.text)
-        if gd.get("mk_close"):
-            action = "close"
-        elif gd.get("mk_open"):
-            action = "open"
+        args = request.args or {}
+        m = request.match
+        # The LLM tool path passes structured args with match=None; the fast
+        # path passes a regex match. Read args first so tool calls actuate too.
+        if args.get("app"):
+            app_name = str(args["app"])
+            action = str(args.get("action") or "open").lower()
+        elif m is not None:
+            gd = m.groupdict()
+            if gd.get("mk_close"):
+                action = "close"
+            elif gd.get("mk_open"):
+                action = "open"
+            else:
+                action = m.group("action").lower()
+            app_name = m.group("app")
         else:
-            action = m.group("action").lower()
-        key = self._resolve_key(m.group("app"))
+            return SkillResult("I didn't catch which app.", success=False)
+        key = self._resolve_key(app_name)
         if key is None:
             return SkillResult(
-                f"Немам конфигурирано {m.group('app')}." if speak_mk
-                else f"I don't have {m.group('app')} configured.", success=False)
+                f"Немам конфигурирано {app_name}." if speak_mk
+                else f"I don't have {app_name} configured.", success=False)
 
         if action in ("open", "launch", "start", "run"):
             command = pick_for_os(self._apps[key])

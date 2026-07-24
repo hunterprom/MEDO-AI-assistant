@@ -71,6 +71,17 @@ class NewsSkill(Skill):
                 "Нема конфигурирани извори за вести." if speak_mk
                 else "No news feeds are configured.", success=False)
 
+        # The LLM tool path may pass a `count`; honour it (clamped) instead of
+        # the fixed default. `count` is integer-typed so coerce_args leaves it
+        # alone — parse defensively in case the model still emits a string.
+        want = self._max
+        raw_count = request.args.get("count")
+        if raw_count is not None:
+            try:
+                want = max(1, min(int(raw_count), 20))
+            except (TypeError, ValueError):
+                want = self._max
+
         headlines: list[str] = []
         reached_any = False
         try:
@@ -83,7 +94,7 @@ class NewsSkill(Skill):
                         continue  # skip a single dead feed
                     reached_any = True
                     parsed = feedparser.parse(resp.content)
-                    for entry in parsed.entries[: self._max]:
+                    for entry in parsed.entries[:want]:
                         title = entry.get("title", "").strip()
                         if title:
                             headlines.append(title)
@@ -97,7 +108,7 @@ class NewsSkill(Skill):
                 "Не најдов наслови во моментов." if speak_mk
                 else "I couldn't find any headlines just now.", success=False)
 
-        top = headlines[: self._max]
+        top = headlines[:want]
         spoken = ". ".join(f"{i}. {h}" for i, h in enumerate(top, 1))
         return SkillResult(
             f"Еве ги главните вести. {spoken}." if speak_mk

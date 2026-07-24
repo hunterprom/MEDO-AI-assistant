@@ -133,24 +133,32 @@ class WeatherSkill(Skill):
                 })
                 resp.raise_for_status()
                 data = resp.json()
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ValueError):
+            # ValueError covers a non-JSON 200 — a captive-portal / proxy login
+            # page slips past raise_for_status, and resp.json() then raises
+            # JSONDecodeError (a ValueError). Degrade to the offline message.
             return SkillResult(_OFFLINE_MK if speak_mk else _OFFLINE, success=False)
 
         codes = _WMO_MK if speak_mk else _WMO
         unclear = "нејасно" if speak_mk else "unclear"
-        if when == "tomorrow":
-            daily = data["daily"]
-            cond = codes.get(daily["weather_code"][1], unclear)
-            hi, lo = round(daily["temperature_2m_max"][1]), round(daily["temperature_2m_min"][1])
-            return SkillResult(
-                f"Утре во {place}: {cond}, помеѓу {lo} и {hi} степени."
-                if speak_mk else
-                f"Tomorrow in {place}: {cond}, between {lo} and {hi} degrees.",
-                data={"place": place, "when": "tomorrow"},
-            )
-        cur = data["current"]
-        cond = codes.get(cur["weather_code"], unclear)
-        temp = round(cur["temperature_2m"])
+        try:
+            if when == "tomorrow":
+                daily = data["daily"]
+                cond = codes.get(daily["weather_code"][1], unclear)
+                hi, lo = round(daily["temperature_2m_max"][1]), round(daily["temperature_2m_min"][1])
+                return SkillResult(
+                    f"Утре во {place}: {cond}, помеѓу {lo} и {hi} степени."
+                    if speak_mk else
+                    f"Tomorrow in {place}: {cond}, between {lo} and {hi} degrees.",
+                    data={"place": place, "when": "tomorrow"},
+                )
+            cur = data["current"]
+            cond = codes.get(cur["weather_code"], unclear)
+            temp = round(cur["temperature_2m"])
+        except (KeyError, IndexError, TypeError):
+            # A 200 whose JSON is missing the fields we need (API shape change,
+            # error object) — treat as unavailable rather than crash the turn.
+            return SkillResult(_OFFLINE_MK if speak_mk else _OFFLINE, success=False)
         return SkillResult(
             f"Во {place} е {temp} степени и {cond}." if speak_mk
             else f"It's {temp} degrees and {cond} in {place}.",

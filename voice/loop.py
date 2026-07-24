@@ -62,6 +62,10 @@ from voice.wakeword import display_phrase as _wake_display
 logger = logging.getLogger("voice")
 console = Console()
 
+#: Hard ceiling on the edge-tts network synth before falling back to local
+#: Piper — a hung Microsoft socket must not freeze the turn indefinitely.
+_EDGE_TTS_TIMEOUT_S = 20.0
+
 
 class VoiceLoop:
     """Owns one voice session; see the module docstring for the phase map."""
@@ -113,6 +117,13 @@ class VoiceLoop:
         # Set by the interruptible player when the user barges in mid-reply;
         # the turn loop reads it to skip the wake word and listen immediately.
         self._barged_in = False
+        # Serializes speech: the turn pipeline and the timer/reminder announcer
+        # both reach _speak on the same event loop, and each drives the SINGLE
+        # global sounddevice stream and the SHARED (non-thread-safe) openWakeWord
+        # model inside _play_interruptible. Without this, a timer firing while
+        # MEDO is speaking runs two player threads at once — corrupting the wake
+        # model's ring buffers and truncating one of the two replies.
+        self._speak_lock = asyncio.Lock()
         # Wake-word diagnosis (off unless wakeword.debug_capture): records every
         # activation's score + audio so a threshold can be set from real data.
         from core.config import PROJECT_ROOT
@@ -367,6 +378,12 @@ class VoiceLoop:
         """
         if self._tts is None and self._edge is None:  # no voice — reply shown only
             return 0.0
+        # One speaker at a time: a timer announcement must not drive the global
+        # audio stream / wake model concurrently with a turn's reply.
+        async with self._speak_lock:
+            return await self._synthesize_and_play(text, language)
+
+    async def _synthesize_and_play(self, text: str, language: str | None) -> float:
         from core import languages
 
         t0 = time.perf_counter()
@@ -382,7 +399,14 @@ class VoiceLoop:
         use_edge = self._edge is not None and languages.get(spoken_lang) is not None             and spoken_lang != "en"     # English stays on the local Piper voice
         if use_edge:
             try:
-                wav, sr = await self._edge.synthesize(text, spoken_lang)
+                # Bound the network synth: a Microsoft endpoint that accepts the
+                # socket but never streams audio would otherwise hang the turn
+                # forever (the Piper fallback only fires on an EXCEPTION, and a
+                # silent hang isn't one). wait_for turns the hang into a
+                # TimeoutError, which the except below routes to Piper.
+                wav, sr = await asyncio.wait_for(
+                    self._edge.synthesize(text, spoken_lang),
+                    timeout=_EDGE_TTS_TIMEOUT_S)
             except Exception:
                 logger.warning("edge-tts failed; falling back to Piper", exc_info=True)
                 wav = None
@@ -426,6 +450,13 @@ class VoiceLoop:
             try:
                 mic.open()
             except Exception as exc:
+                # open() may have constructed the PortAudio stream before
+                # start() raised — close it so a repeated device-fallback loop
+                # doesn't leak a stream on every pass.
+                try:
+                    mic.close()
+                except Exception:
+                    pass
                 if device is None:
                     raise  # even the system default is broken — that's fatal
                 logger.warning("mic %r failed (%s) — falling back to system default",
@@ -631,7 +662,15 @@ class VoiceLoop:
             await speaker_task
 
         tts_ms = None
-        if streamed["count"] == 0:  # nothing streamed: speak the reply whole
+        # Speak result.speech UNLESS it was already voiced by the streamer.
+        # It was voiced only when sentences actually drained (count > 0) AND the
+        # router says this speech is the streamed reply. A tool answer (or a
+        # confirmation prompt) leaves streamed_reply False, so it is spoken here
+        # even if a filler preamble streamed first — otherwise the real answer
+        # was silently dropped. A short reply with no sentence terminator never
+        # drains (count == 0), so it is still spoken whole.
+        already_voiced = streamed["count"] > 0 and result.streamed_reply
+        if not already_voiced and result.speech:
             await self._sm.transition(AssistantState.SPEAKING)
             tts_ms = await self._speak(result.speech)
         self._log.record(TurnTimings(

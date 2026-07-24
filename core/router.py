@@ -111,6 +111,12 @@ class RouteResult:
     skill_name: str | None = None
     latency_ms: float = 0.0
     data: dict[str, Any] = field(default_factory=dict)
+    #: True only when ``speech`` is the model's own reply that was already
+    #: emitted sentence-by-sentence via ``on_delta`` (so the voice loop must
+    #: NOT speak it again). Tool answers and confirmation prompts leave this
+    #: False — their text never went through the streamer, so the loop must
+    #: voice them even when a filler preamble WAS streamed first.
+    streamed_reply: bool = False
 
 
 class Router:
@@ -414,12 +420,21 @@ class Router:
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
                     reply = (message.get("content") or "").strip()
+                    retried = False
                     if reply and _looks_like_tool_json(reply):
                         # Small model leaked a botched tool call as text; a plain
                         # retry (no tools) gets a clean spoken answer.
                         retry = await llm.chat(model, messages)
                         reply = (retry.get("content") or "").strip()
-                    return RouteResult(path=RoutePath.LLM, speech=reply or EMPTY_REPLY)
+                        retried = True
+                    # This reply IS what streamed through on_delta (unless we
+                    # had to retry off-stream) — flag it so the loop doesn't
+                    # re-speak it. A retried reply never streamed, so leave it
+                    # False and let the loop voice it.
+                    return RouteResult(
+                        path=RoutePath.LLM, speech=reply or EMPTY_REPLY,
+                        streamed_reply=(on_delta is not None and not retried
+                                        and bool(reply)))
 
                 messages.append(message)  # the assistant turn that requested tools
                 pending = await self._run_tool_calls(tool_calls, text, context, messages)
