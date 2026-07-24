@@ -291,17 +291,23 @@ wakeword:                           # M1
   #   2) train it (~1 h on a free Colab GPU) — the script prints the steps;
   #      see docs/Wake Word Training.md for the full runbook.
   #   3) drop hey_medo.onnx in models/wakeword/ and set phrase to it below.
-  phrase: "models/wakeword/hey_medo.onnx"   # custom "hey MEDO" model (trained
-                                    # locally 2026-07-20; acc 0.85, recall 0.76,
-                                    # 0.09 FP/hr). Was "hey_jarvis" (built-in).
+  phrase: "models/wakeword/hey_medo.onnx"   # custom model, fires on BOTH "medo"
+                                    # and "hey medo" (retrained 2026-07-24;
+                                    # held-out recall 0.995, FP 0.019). Now
+                                    # DISCRIMINATIVE: ordinary speech ("hello",
+                                    # "what time is it") scores ~0, where the old
+                                    # 2026-07-20 model (recall 0.76) fired on
+                                    # nearly everything and leaned on stt_confirm.
   # Lower = easier to trigger (0.5 is openWakeWord's default; 0.4 helps a
   # non-native "hey jarvis"). Watch your live score with:
   #   .venv\Scripts\python -m voice.wakeword
   # If the mic level stays ~0 there, it's the input device, not the threshold.
-  # 0.5 for the custom hey_medo model: it scores 0.99+ on real "hey medo" and
-  # <0.2 on near-misses, so 0.5 separates cleanly. Nudge down if your voice/mic
-  # under-triggers, up if it false-fires.
-  threshold: 0.5
+  # 0.4 for the retrained hey_medo model: it scores ~1.0 on "medo"/"hey medo"
+  # and ~0 on ordinary speech, so the gap is wide — 0.4 gives your real (quieter
+  # than TTS) voice extra head-room to trigger without letting normal talk in.
+  # Watch your live score with `.venv\Scripts\python -m voice.wakeword`; nudge
+  # up toward 0.5 if it ever false-fires, down toward 0.3 if it under-triggers.
+  threshold: 0.4
   # WAKING ON RANDOM SOUNDS? This is the main fix, no retraining needed. MEDO
   # only wakes when the score stays above `threshold` for this many consecutive
   # ~80 ms frames. A clap or a stray word spikes for ONE frame; a real

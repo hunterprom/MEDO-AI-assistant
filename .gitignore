@@ -48,3 +48,6 @@ vision.log
 vision.err.log
 # Wake-word debug captures — recordings of your own voice/room. Never commit.
 logs/
+
+# wake-word model backups (old versions live in git history)
+*.onnx.bak-*

@@ -40,8 +40,14 @@ logger = logging.getLogger("train_wakeword")
 SAMPLE_RATE = 16000  # openWakeWord trains on 16 kHz mono
 
 #: Phrase spellings — MEDO isn't an English word, so give the TTS voices a few
-#: pronunciations to cover how it's actually said.
-DEFAULT_SPELLINGS = ["hey medo", "hey meh doh", "hey may doh", "hey meadow"]
+#: pronunciations to cover how it's actually said. BOTH the bare "medo" and the
+#: "hey medo" form, since people use either (training on only "hey medo" — and
+#: worse, listing bare "medo" as a NEGATIVE — is what made a spoken "medo" get
+#: ignored). "meadow" is dropped: it's a real word we don't want to wake on.
+DEFAULT_SPELLINGS = [
+    "medo", "hey medo", "meh doh", "hey meh doh",
+    "may doh", "hey may doh", "medoh", "hey medoh",
+]
 
 #: A spread of edge-tts English voices (accents + genders) for diversity.
 EDGE_VOICES = [
@@ -145,7 +151,7 @@ def _training_hint(samples: Path) -> None:
         "  https://github.com/dscripka/openWakeWord "
         "-> notebooks/automatic_model_training.ipynb\n"
         f"  * upload the positives from: {samples}\n"
-        "  * set the target phrase to 'hey medo'\n"
+        "  * target phrase 'medo' (the set now includes bare + 'hey medo')\n"
         "  * export hey_medo.onnx, drop it in models/wakeword/, then set\n"
         "    wakeword.phrase: \"models/wakeword/hey_medo.onnx\" in config.yaml\n"
         "  * re-tune wakeword.threshold with:  python -m voice.wakeword\n"

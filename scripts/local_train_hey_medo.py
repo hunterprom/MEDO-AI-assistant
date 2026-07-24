@@ -71,9 +71,12 @@ def _gen_negatives(rng) -> list[np.ndarray]:
     """Local negatives: near-miss TTS phrases + noise + silence (no network reqd
     for the noise part; TTS is best-effort)."""
     clips: list[np.ndarray] = []
-    # near-miss + common phrases via Piper (offline) — the strongest negatives
-    phrases = ["hey medic", "hey model", "hey meadow so", "medo", "hey there",
-               "hey computer", "okay medo", "play media", "the metro", "hey",
+    # near-miss + common phrases via Piper (offline) — the strongest negatives.
+    # NOTE: bare "medo" / "okay medo" are NOT here — listing them taught the old
+    # model to REJECT a spoken "medo". "medo" is a wake word now, not a negative.
+    # (For a stronger both-forms model see scripts/train_wakeword_deep.py.)
+    phrases = ["hey medic", "hey model", "hey meadow so", "hey there",
+               "hey computer", "play media", "the metro", "hey", "meadow",
                "hello", "what time is it", "hey mister", "hey buddy", "hey now"]
     try:
         from core.config import load_settings
