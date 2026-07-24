@@ -31,7 +31,10 @@ mcp>=1.0             # Model Context Protocol client — connect any app's MCP s
 
 # --- M3: web skills ---
 ddgs>=6.0            # DuckDuckGo web search (no key)
-edge-tts>=6.1        # Macedonian neural voice (free MS voices; Cyrillic replies)
+edge-tts>=6.1        # neural voices for EVERY non-English active language (free
+                     # MS voices: Slavic, Japanese, Chinese, Korean…). Needs the
+                     # OS trust store (truststore, injected in main.py) on TLS-
+                     # intercepting networks, else it falls back to English Piper.
 pypdf>=4.0           # text extraction for the documents RAG index
 feedparser>=6.0      # news via RSS
 

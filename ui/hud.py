@@ -87,6 +87,9 @@ class HudServer:
             # Interface language default; the picker persists its own choice
             # in localStorage, so this only seeds a browser that has none.
             "uiLanguage": self._settings.hud.language,
+            # Constrained two-language mode: what MEDO can support + the <=2 live
+            # right now, so the CONFIG-screen picker can render (S4).
+            "languages": self._language_config(),
             # Look: base theme + composable effect layers + cluster-view
             # quality. Cosmetic only; the browser persists its own choice.
             "ui": {
@@ -134,6 +137,24 @@ class HudServer:
             logger.warning("could not build the capabilities feed", exc_info=True)
             feed = {"agents": [], "skillIndex": {}}
         return web.json_response(feed)
+
+    def _language_config(self) -> dict:
+        """Available/active languages for the CONFIG-screen picker (S4).
+
+        ``available`` carries each language's native name (what the picker shows)
+        and whether it has a neural voice, so the UI can flag a voice-less pick.
+        """
+        from core import languages as langs
+
+        lc = self._settings.languages
+        available = []
+        for code in lc.available:
+            lang = langs.get(code)
+            if lang is not None:
+                available.append({"code": lang.code, "native": lang.native,
+                                  "english": lang.english, "hasVoice": bool(lang.voice)})
+        return {"available": available, "active": list(lc.active),
+                "primary": lc.primary, "detection": lc.detection}
 
     def _agent_graph(self) -> dict:
         """The cluster-view graph, or an empty one when there's no registry.

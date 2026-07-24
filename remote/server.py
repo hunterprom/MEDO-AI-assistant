@@ -202,6 +202,7 @@ class RemoteServer:
         app.router.add_post("/interrupt", self._handle_interrupt)
         app.router.add_get("/audio/devices", self._handle_audio_devices)
         app.router.add_post("/audio/input", self._handle_set_audio_input)
+        app.router.add_post("/control/languages", self._handle_set_languages)
         app.router.add_get("/search/files", self._handle_search_files)
         app.router.add_get("/search/web", self._handle_search_web)
         app.router.add_get("/docs/stats", self._handle_docs_stats)
@@ -650,6 +651,42 @@ class RemoteServer:
             save_audio_input(device)
         logger.info("audio input device set to %r via companion API", device)
         return web.json_response({"ok": True, "device": device})
+
+    async def _handle_set_languages(self, request: web.Request) -> web.Response:
+        """Set the active languages / primary / detection (S4).
+
+        Validated by LanguagesConfig — more than 2 active, an unknown code, or a
+        primary outside the active set all return 400 with the reason. The change
+        reloads the STT model, so it takes effect on the next restart (the picker
+        surfaces ``restart_required``).
+        """
+        try:
+            payload = await _json_dict(request)
+        except ValueError:
+            return _error(400, "body must be JSON like "
+                               "{\"active\": [\"en\", \"mk\"], \"primary\": \"en\"}")
+        active = payload.get("active")
+        if not isinstance(active, list) or not active:
+            return _error(400, "'active' must be a non-empty list of language codes")
+
+        from core.config import LanguagesConfig, save_languages
+
+        try:
+            if self._persist_secrets:
+                cfg = save_languages(active, payload.get("primary"),
+                                     payload.get("detection"))
+            else:  # tests: validate without touching the overrides file
+                cfg = LanguagesConfig(active=active, primary=payload.get("primary"),
+                                      detection=payload.get("detection") or "auto_pair")
+        except Exception as exc:
+            msg = ("; ".join(e["msg"] for e in exc.errors())
+                   if hasattr(exc, "errors") else str(exc))
+            return _error(400, (msg or "invalid language selection")[:200])
+        logger.info("active languages set to %s via companion API (restart to apply)",
+                    cfg.active)
+        return web.json_response({"ok": True, "active": list(cfg.active),
+                                  "primary": cfg.primary, "detection": cfg.detection,
+                                  "restart_required": True})
 
     async def _handle_dirs(self, request: web.Request) -> web.Response:
         """Folder shortcuts for the HUD sphere dots (labels + resolved paths).

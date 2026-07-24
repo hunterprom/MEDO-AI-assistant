@@ -391,6 +391,137 @@ class STTConfig(BaseModel):
         return self
 
 
+def _default_available_languages() -> list[str]:
+    from core import languages
+    return languages.codes()
+
+
+class LanguagesConfig(BaseModel):
+    """The two-language product rule: MEDO runs with AT MOST 2 ACTIVE languages
+    at a time (default English + Macedonian), and per-utterance detection is
+    constrained to that pair.
+
+    Why the cap is an ACCURACY feature, not just a preference: open-ended
+    language ID across ~90 languages mis-detects constantly (spoken Macedonian
+    heard as Bulgarian/Serbian, Spanish as Portuguese). Restricting the decoder
+    to two known candidates is the single biggest lever on bilingual STT
+    reliability — detection never guesses across all languages.
+
+    This is the ONE source of truth for "which languages are live". Every
+    language-dependent consumer (STT clamp, confirm-word banks, persona/filler
+    phrases, TTS voice) reads it through ``Settings.active_languages()`` /
+    ``primary_language()`` / ``detection_mode()`` — no ``"en"``/``"mk"`` literal
+    survives elsewhere. The legacy ``stt.allowed_languages`` / ``spoken_languages``
+    / ``language_mode`` fields are back-compat inputs only (see
+    ``Settings._reconcile_languages``); this block wins whenever it is present.
+    """
+
+    #: Everything MEDO CAN support — i.e. has both STT support and a voice.
+    #: A subset of the registry in core/languages.py; codes not in the registry
+    #: are dropped with a warning (MEDO has no way to hear or speak them).
+    available: list[str] = Field(default_factory=_default_available_languages)
+    #: The AT MOST 2 languages live right now. Default English + Macedonian.
+    active: list[str] = Field(default_factory=lambda: ["en", "mk"])
+    #: The fallback language — the voice used when another active language has
+    #: none, and the language the system prompt is written in. ``None`` resolves
+    #: to the first active language; when set it MUST be one of ``active``.
+    primary: str | None = None
+    #: ``auto_pair`` = per-utterance detect BETWEEN the two active languages.
+    #: ``fixed`` = always transcribe as ``primary`` (fastest + most accurate
+    #: when you only ever speak one of the two).
+    detection: Literal["auto_pair", "fixed"] = "auto_pair"
+
+    @model_validator(mode="after")
+    def _validate(self) -> LanguagesConfig:
+        from core import languages as langs
+
+        log = logging.getLogger(__name__)
+
+        def _norm(seq: list[str]) -> list[str]:
+            out: list[str] = []
+            for c in seq:
+                c = str(c).strip().lower()
+                if c and c not in out:
+                    out.append(c)
+            return out
+
+        # available: drop anything the registry can't hear/speak.
+        available: list[str] = []
+        for c in (_norm(self.available) or langs.codes()):
+            if langs.get(c) is None:
+                log.warning("languages.available: %r is not a language MEDO "
+                            "supports — ignoring it", c)
+            else:
+                available.append(c)
+        available = available or langs.codes()
+
+        # active: 1 or 2 entries, each supported. HARD errors on the rest.
+        active = _norm(self.active)
+        if not active:
+            raise ValueError("languages.active must list at least one language "
+                             "(default is [\"en\", \"mk\"])")
+        if len(active) > 2:
+            raise ValueError(
+                f"MEDO runs at most 2 active languages at a time; got "
+                f"{len(active)}: {active}. Trim languages.active to two.")
+        missing = [c for c in active if c not in available]
+        if missing:
+            raise ValueError(
+                f"languages.active {missing} not in languages.available "
+                f"{available} — add them to available or remove them.")
+
+        # primary: None -> first active; when set it must be active.
+        primary = (str(self.primary).strip().lower() if self.primary else "") or None
+        if primary is None:
+            primary = active[0]
+        elif primary not in active:
+            raise ValueError(
+                f"languages.primary {primary!r} must be one of the active "
+                f"languages {active}.")
+
+        # warn (never fail) when an active language has no voice — TTS will fall
+        # back to the primary voice (wired in S3).
+        for c in active:
+            lang = langs.get(c)
+            if lang is not None and not lang.voice:
+                log.warning("languages.active: %r has no TTS voice; it will be "
+                            "spoken with the %r (primary) voice", c, primary)
+
+        self.available, self.active, self.primary = available, active, primary
+        return self
+
+    @classmethod
+    def from_legacy(cls, stt: STTConfig) -> LanguagesConfig:
+        """Synthesize the active pair from the old ``stt.*`` fields, used only
+        when a config has no ``languages:`` block (older installs).
+
+        A single forced ``stt.language_mode`` becomes ``fixed`` on that language;
+        otherwise the active pair is the first two supported languages from
+        ``spoken_languages`` (then ``allowed_languages``), defaulting to en+mk.
+        """
+        from core import languages as langs
+
+        forced = str(getattr(stt, "language_mode", "auto") or "auto").strip().lower()
+        if forced not in ("", "auto") and langs.get(forced) is not None:
+            return cls(available=langs.codes(), active=[forced],
+                       primary=forced, detection="fixed")
+        pool = (list(getattr(stt, "spoken_languages", []) or [])
+                or list(getattr(stt, "allowed_languages", []) or [])
+                or ["en", "mk"])
+        seen: set[str] = set()
+        active: list[str] = []
+        for c in pool:
+            c = str(c).strip().lower()
+            if c and c not in seen and langs.get(c) is not None:
+                seen.add(c)
+                active.append(c)
+                if len(active) == 2:
+                    break
+        active = active or ["en", "mk"]
+        return cls(available=langs.codes(), active=active,
+                   primary=active[0], detection="auto_pair")
+
+
 class TTSConfig(BaseModel):
     engine: str = "piper"
     voice_model: str = ""
@@ -684,6 +815,7 @@ class Settings(BaseSettings):
     hud: HudConfig = Field(default_factory=HudConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     stt: STTConfig = Field(default_factory=STTConfig)
+    languages: LanguagesConfig = Field(default_factory=LanguagesConfig)
     tts: TTSConfig = Field(default_factory=TTSConfig)
     wakeword: WakeWordConfig = Field(default_factory=WakeWordConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
@@ -700,6 +832,32 @@ class Settings(BaseSettings):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
     skills: dict = Field(default_factory=dict)
+
+    # --- the one language accessor every consumer uses -----------------------
+    #
+    # Nothing outside config reads a hardcoded "en"/"mk" any more: STT, the
+    # confirmation gate, persona/filler phrases and TTS all go through these.
+
+    def active_languages(self) -> list[str]:
+        """The <=2 languages live right now (e.g. ``["en", "mk"]``)."""
+        return list(self.languages.active)
+
+    def primary_language(self) -> str:
+        """The fallback language code (always one of ``active_languages()``)."""
+        return self.languages.primary or self.languages.active[0]
+
+    def detection_mode(self) -> str:
+        """``"auto_pair"`` (detect between the pair) or ``"fixed"`` (primary)."""
+        return self.languages.detection
+
+    @model_validator(mode="after")
+    def _reconcile_languages(self) -> Settings:
+        """Back-compat: when a config has no ``languages:`` block, synthesize one
+        from the legacy ``stt.*`` fields so older installs behave unchanged. An
+        explicit ``languages:`` block always wins."""
+        if "languages" not in self.model_fields_set:
+            self.languages = LanguagesConfig.from_legacy(self.stt)
+        return self
 
     @classmethod
     def settings_customise_sources(
@@ -796,6 +954,25 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
     control = data.get("control", {}) or {}
     if "pc" in control:  # the HUD's PC CONTROL switch, remembered per machine
         settings.safety.pc_control_enabled = bool(control["pc"])
+    langs = data.get("languages", {}) or {}
+    if langs.get("active"):  # the HUD language picker, remembered per machine
+        try:
+            settings.languages = LanguagesConfig(
+                available=settings.languages.available,
+                active=langs["active"],
+                primary=langs.get("primary"),
+                detection=langs.get("detection") or settings.languages.detection,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "ignoring invalid saved languages %r", langs)
+    # MCP server secrets (GitHub PAT, Google/Brave keys…): kept in the git-
+    # ignored overrides file under `mcp_env:` and injected into the environment
+    # so spawned MCP servers inherit them — never written to config.yaml.
+    mcp_env = data.get("mcp_env", {}) or {}
+    for key, value in mcp_env.items():
+        if value not in (None, "") and key not in os.environ:
+            os.environ[str(key)] = str(value)
     return settings
 
 
@@ -861,3 +1038,25 @@ def save_audio_input(device: int | str | None, path: Path = SECRETS_PATH) -> Non
         _write_local(data, path)
     except Exception:
         logging.getLogger(__name__).exception("could not persist audio input device")
+
+
+def save_languages(active: list[str], primary: str | None = None,
+                   detection: str | None = None,
+                   path: Path = SECRETS_PATH) -> LanguagesConfig:
+    """Validate + persist the chosen active languages to the overrides file.
+
+    Validation happens through :class:`LanguagesConfig` (so >2 active, an
+    unknown code, or a bad primary RAISE before anything is written) — the
+    caller (companion API) surfaces the error to the picker. Returns the
+    validated config. The change needs a restart to reload the STT model.
+    """
+    cfg = LanguagesConfig(active=active, primary=primary,
+                          detection=(detection or "auto_pair"))
+    try:
+        data = _read_local(path)
+        data["languages"] = {"active": list(cfg.active), "primary": cfg.primary,
+                             "detection": cfg.detection}
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist languages")
+    return cfg

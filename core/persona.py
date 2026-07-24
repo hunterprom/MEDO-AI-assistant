@@ -105,9 +105,16 @@ class Persona:
     """Loaded persona; ``rng`` is injectable so tests are deterministic."""
 
     def __init__(self, config: PersonalityConfig,
-                 rng: random.Random | None = None) -> None:
+                 rng: random.Random | None = None,
+                 active: list[str] | None = None,
+                 primary: str = "en") -> None:
         self._cfg = config
         self._rng = rng or random.Random()
+        # Constrained two-language mode (S3): only quip in an ACTIVE language;
+        # a language with no quip bank degrades to primary. None = no constraint
+        # (legacy behaviour, used by callers that don't pass the language set).
+        self._active = [c.strip().lower() for c in active] if active else None
+        self._primary = (primary or "en").strip().lower()
 
     # -- LLM path -------------------------------------------------------------
 
@@ -117,7 +124,8 @@ class Persona:
 
     # -- fast path ------------------------------------------------------------
 
-    def decorate(self, speech: str, *, skill_name: str, user_text: str) -> str:
+    def decorate(self, speech: str, *, skill_name: str, user_text: str,
+                 language: str | None = None) -> str:
         """Return ``speech``, occasionally with one appended quip.
 
         The router calls this ONLY for successful, non-confirmation fast-path
@@ -132,8 +140,23 @@ class Persona:
             return speech
         if self._rng.random() >= min(cfg.wit_level, 1.0):
             return speech
-        lang = cfg.quips_language
-        if lang == "match":
-            lang = "mk" if _CYRILLIC.search(user_text) else "en"
-        options = QUIPS[category].get(lang) or QUIPS[category]["en"]
+        banks = QUIPS[category]
+        lang = self._quip_language(language, user_text, banks)
+        options = banks.get(lang) or banks.get(self._primary) or next(iter(banks.values()))
         return f"{speech} {self._rng.choice(options)}"
+
+    def _quip_language(self, detected: str | None, user_text: str,
+                       banks: dict[str, list[str]]) -> str:
+        """Which language to quip in: the utterance's language, constrained to
+        the active set (a non-active or bank-less language degrades to primary)."""
+        cfg = self._cfg
+        if cfg.quips_language != "match":
+            return cfg.quips_language
+        # Prefer the STT-detected code; fall back to a script guess for Cyrillic.
+        lang = (str(detected).strip().lower()[:2] if detected else
+                ("mk" if _CYRILLIC.search(user_text) else self._primary))
+        if self._active is not None and lang not in self._active:
+            lang = self._primary          # never quip in a non-active language
+        if lang not in banks:
+            lang = self._primary if self._primary in banks else next(iter(banks))
+        return lang

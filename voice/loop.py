@@ -145,7 +145,7 @@ class VoiceLoop:
         # cp1252 encoding and takes ALL of voice mode down with it.
         console.print("[dim]loading voice models...[/dim]")
         self._wakeword = WakeWord(self._settings.wakeword)
-        self._stt = Transcriber(self._settings.stt)
+        self._stt = Transcriber(self._settings.stt, self._settings.languages)
         # A missing/broken Piper voice shouldn't sink the whole session —
         # degrade to showing replies without speaking them (the HUD renders them).
         try:
@@ -156,12 +156,20 @@ class VoiceLoop:
                 f"[yellow]TTS voice unavailable ({exc}); replies will be shown, "
                 f"not spoken. Run run.bat to fetch the Piper voice.[/yellow]"
             )
-        # Macedonian neural voice (edge-tts, online) for Cyrillic replies; Piper
-        # remains the offline voice and the fallback when the network is down.
+        # Neural voices (edge-tts, online) for non-Piper languages; Piper remains
+        # the offline English voice and the fallback when the network is down.
+        # The edge fallback voice is the PRIMARY active language's voice (S3),
+        # not a hardcoded Macedonian one — the per-utterance voice still follows
+        # the detected language via EdgeTTS.voice_for.
         self._edge = None
         if self._settings.tts.multilingual:
+            from core import languages as _languages
+
+            _primary = self._settings.primary_language()
+            _fallback_voice = (_languages.voice_for(_primary)
+                               or self._settings.tts.mk_voice)
             try:
-                self._edge = EdgeTTS(self._settings.tts.mk_voice)
+                self._edge = EdgeTTS(_fallback_voice)
             except Exception as exc:
                 console.print(f"[dim]Macedonian voice unavailable ({exc}); "
                               f"Cyrillic replies will use the English voice.[/dim]")
@@ -413,6 +421,18 @@ class VoiceLoop:
         if wav is None or getattr(wav, "size", 0) == 0:
             if self._tts is None:
                 return 0.0
+            # Piper here is ENGLISH-ONLY: reading Slavic/CJK text with it is the
+            # exact "speaks it in English (gibberish)" bug. If edge-tts was the
+            # right voice but failed, DON'T gibberish it through Piper — show the
+            # reply, skip the audio, and say why. (With the OS trust store in
+            # place edge-tts works, so this path is a rare safety net.)
+            if use_edge:
+                logger.warning("no neural voice for %r right now (edge-tts "
+                               "unreachable; Piper is English-only) — reply shown, "
+                               "not spoken", spoken_lang)
+                console.print(f"[dim](couldn't voice the {spoken_lang} reply — "
+                              f"edge-tts unreachable)[/dim]")
+                return (time.perf_counter() - t0) * 1000
             wav, sr = await asyncio.to_thread(self._tts.synthesize, text)
         tts_ms = (time.perf_counter() - t0) * 1000
         if await asyncio.to_thread(self._play_interruptible, wav, sr):

@@ -22,7 +22,7 @@ import unicodedata
 
 import numpy as np
 
-from core.config import STTConfig
+from core.config import LanguagesConfig, STTConfig
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +170,27 @@ def pick_forced_language(detected: str | None, allowed: list[str]) -> str | None
     return next((lang for lang in allowed if lang != "en"), allowed[0])
 
 
+def choose_language(all_probs: list[tuple[str, float]],
+                    active: list[str], primary: str) -> str:
+    """The highest-probability ACTIVE language; ``primary`` if none of the
+    active languages appear in ``all_probs``. Never returns a non-active one.
+
+    This is the core of constrained two-language detection: rather than accept
+    faster-whisper's argmax over ~90 languages (where spoken Macedonian is
+    routinely heard as Bulgarian), we take the argmax over ONLY the active pair
+    — a third language is never in the running. Pure; unit-tested without audio.
+    """
+    scores: dict[str, float] = {}
+    for code, p in all_probs or []:
+        c = str(code).strip().lower()
+        if c and c not in scores:
+            scores[c] = float(p)
+    ranked = sorted(active, key=lambda c: scores.get(c, -1.0), reverse=True)
+    if ranked and scores.get(ranked[0], -1.0) >= 0.0:
+        return ranked[0]
+    return primary
+
+
 def build_hotwords(initial_prompt: str) -> str:
     """Extract a hotwords string from an ``initial_prompt``-style sentence.
 
@@ -264,13 +285,25 @@ def _resolve_device(device: str, compute_type: str) -> tuple[str, str]:
 class Transcriber:
     """Wraps a loaded Whisper model; call :meth:`transcribe` per utterance."""
 
-    def __init__(self, config: STTConfig) -> None:
+    def __init__(self, config: STTConfig,
+                 languages: LanguagesConfig | None = None) -> None:
         import inspect
 
         from faster_whisper import WhisperModel
 
         self._config = config
         self._language = None if config.language in ("", "auto") else config.language
+        # Constrained two-language mode (S2). When a LanguagesConfig is supplied
+        # it is AUTHORITATIVE: detection is restricted to `active` and the legacy
+        # allowed_languages/`self._language` force is bypassed. None => keep the
+        # legacy clamp path below (back-compat for callers that pass only stt).
+        self._langs = languages
+        if languages is not None:
+            self._active = [c.strip().lower() for c in languages.active]
+            self._primary = (languages.primary or self._active[0]).strip().lower()
+            self._detection = languages.detection
+        else:
+            self._active, self._primary, self._detection = None, None, None
         # Bilingual clamp for auto-detect (see pick_forced_language).
         allowed = [
             lang.strip().lower()
@@ -386,10 +419,62 @@ class Transcriber:
         ]
         return segments_data, getattr(info, "language", None)
 
+    def _finish(self, segments_data, language: str | None) -> tuple[str, str | None]:
+        """Filter (or join) the decoded segments and return (text, language)."""
+        if getattr(self._config, "filter_hallucinations", True):
+            return filter_transcript(segments_data), language
+        text = " ".join(t.strip() for t, _, _ in segments_data).strip()
+        return text, language
+
     def _transcribe(self, audio: np.ndarray) -> tuple[str, str | None]:
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
         audio = self._normalize(audio)
+        if self._langs is not None:
+            return self._transcribe_constrained(audio)
+        return self._transcribe_legacy(audio)
+
+    def _transcribe_constrained(self, audio: np.ndarray) -> tuple[str, str | None]:
+        """Detection restricted to the <=2 active languages (S2).
+
+        ``fixed`` (or a single active language) forces ``primary`` with no
+        detection at all. ``auto_pair`` scores ONLY the active languages via
+        ``detect_language`` and forces the winner — a third language is never
+        chosen. If ``detect_language`` is unavailable, a snap fallback
+        auto-detects and snaps any out-of-pair result to ``primary``.
+        """
+        active, primary, detection = self._active, self._primary, self._detection
+        if detection == "fixed" or len(active) <= 1:
+            forced = active[0] if len(active) == 1 else primary
+            segments_data, _ = self._decode(audio, forced)
+            return self._finish(segments_data, forced)
+
+        # auto_pair — native restrict via per-language probabilities.
+        try:
+            _, _, all_probs = self._model.detect_language(audio)
+        except Exception as exc:                      # older wheels / odd audio
+            logger.warning("detect_language unavailable (%s) — snap fallback", exc)
+            return self._snap_fallback(audio, active, primary)
+        chosen = choose_language(all_probs, active, primary)
+        logger.info("stt: detection constrained to %s -> chose %r", active, chosen)
+        segments_data, _ = self._decode(audio, chosen)
+        return self._finish(segments_data, chosen)
+
+    def _snap_fallback(self, audio: np.ndarray, active: list[str],
+                       primary: str) -> tuple[str, str | None]:
+        """Auto-detect, then snap anything outside the active pair to primary."""
+        segments_data, detected = self._decode(audio, None)
+        if detected in active:
+            return self._finish(segments_data, detected)
+        logger.info("stt: detected %r outside active %s -> snap to %r",
+                    detected, active, primary)
+        segments_data, _ = self._decode(audio, primary)
+        return self._finish(segments_data, primary)
+
+    def _transcribe_legacy(self, audio: np.ndarray) -> tuple[str, str | None]:
+        """Pre-S2 path: force ``stt.language`` if set, else auto-detect and clamp
+        to ``allowed_languages`` via pick_forced_language. Used when no
+        LanguagesConfig is supplied (back-compat)."""
         segments_data, detected = self._decode(audio, self._language)
         language = self._language or detected
         # Auto-detect landed outside the allowed set (e.g. Macedonian heard as
@@ -404,7 +489,4 @@ class Transcriber:
                 )
                 segments_data, _ = self._decode(audio, forced)
                 language = forced
-        if getattr(self._config, "filter_hallucinations", True):
-            return filter_transcript(segments_data), language
-        text = " ".join(t.strip() for t, _, _ in segments_data).strip()
-        return text, language
+        return self._finish(segments_data, language)

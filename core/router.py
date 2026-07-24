@@ -170,11 +170,18 @@ class Router:
                 return embed_texts(texts, embed_model, embed_host)
 
         self.facts = FactsStore(settings.memory.db_path, embedder)
+        # Load the yes/no confirmation banks for the ACTIVE languages (S3): the
+        # gate matches only the languages MEDO is currently listening for.
+        from core.safety import configure_confirm_words
+
+        configure_confirm_words(settings.active_languages(), settings.primary_language())
         #: Personality layer (M7): occasionally decorates fast-path replies.
         #: Tests may replace it (or inject a seeded rng) for determinism.
         from core.persona import Persona
 
-        self._persona = Persona(settings.personality)
+        self._persona = Persona(settings.personality,
+                                active=settings.active_languages(),
+                                primary=settings.primary_language())
 
     @property
     def llm(self) -> OllamaClient:
@@ -274,7 +281,8 @@ class Router:
             # Personality (M7) decorates only successful, non-gated outcomes —
             # errors, safety prompts, and destructive actions stay literal.
             outcome.speech = self._persona.decorate(
-                outcome.speech, skill_name=skill.name, user_text=request.text
+                outcome.speech, skill_name=skill.name, user_text=request.text,
+                language=request.context.get("language"),
             )
         return RouteResult(
             path=RoutePath.FAST,

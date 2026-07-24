@@ -1,0 +1,27 @@
+# Macedonian yes/no words for the spoken-confirmation gate (core/safety.py).
+# Cyrillic entries plus the Latin transliterations Whisper sometimes produces
+# for spoken Macedonian. Matched against the WHOLE normalized reply.
+affirmative:
+  - да
+  - може
+  - секако
+  - ајде
+  - важи
+  - потврди
+  - потврдувам
+  - да те молам
+  # Latin transliterations (Whisper occasionally latinizes Macedonian)
+  - da
+  - moze
+  - ajde
+  - vazi
+negative:
+  - не
+  - откажи
+  - стоп
+  - прекини
+  - немој
+  - заборави
+  - не сакам
+  - ne
+  - otkazi

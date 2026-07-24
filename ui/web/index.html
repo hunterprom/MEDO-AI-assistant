@@ -433,6 +433,14 @@
   }
   .seg button + button { border-left: 1px solid rgba(56,168,255,.3); }
   .seg button.active { background: rgba(56,168,255,.22); color: #fff; }
+  /* spoken-languages picker (constrained two-language mode) */
+  .lang-chips button.novoice-flag { opacity: .7; }
+  .lang-chips button .novoice { font-family: 'Share Tech Mono', monospace; font-size: 9px; opacity: .7; margin-left: 6px; letter-spacing: .04em; }
+  .lang-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 10px; }
+  .lang-lbl { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: #5a82ab; letter-spacing: .1em; display: flex; align-items: center; gap: 7px; }
+  .lang-save { background: rgba(56,168,255,.15); border: 1px solid rgba(56,168,255,.4); color: #eaf5ff; font-family: 'Rajdhani', sans-serif; font-weight: 600; font-size: 11px; letter-spacing: .14em; padding: 7px 14px; cursor: pointer; }
+  .lang-save:hover { background: rgba(56,168,255,.28); }
+  #lang-status { margin-left: auto; }
   #online-fields { display: none; flex-direction: column; gap: 10px; }
   #online-fields.show { display: flex; }
   .field { display: flex; flex-direction: column; gap: 5px; }
@@ -750,6 +758,24 @@
         <div class="info"><span class="name" data-i18n="microphone">Microphone</span><span class="desc">INPUT DEVICE THE WAKE WORD LISTENS ON</span></div>
         <select class="cfg" id="cfg-mic"><option>loading…</option></select>
       </div>
+      <div class="setting col-layout" id="lang-row">
+        <div class="info">
+          <span class="name" data-i18n="spoken_languages">Spoken languages</span>
+          <span class="desc">THE TWO LANGUAGES MEDO LISTENS FOR · DETECTION IS CONSTRAINED TO THESE FOR ACCURACY · PICK UP TO 2 · CHANGING RELOADS SPEECH-TO-TEXT, SO IT NEEDS A RESTART</span>
+        </div>
+        <div class="seg lang-chips" id="lang-chips"></div>
+        <div class="lang-foot">
+          <label class="lang-lbl">PRIMARY <select class="cfg" id="lang-primary"></select></label>
+          <label class="lang-lbl">DETECTION
+            <select class="cfg" id="lang-detection">
+              <option value="auto_pair">AUTO · BETWEEN THE PAIR</option>
+              <option value="fixed">FIXED · PRIMARY ONLY</option>
+            </select>
+          </label>
+          <button class="lang-save" id="lang-save">SAVE · RESTART TO APPLY</button>
+          <span class="desc" id="lang-status"></span>
+        </div>
+      </div>
       <div class="setting">
         <div class="info"><span class="name" data-i18n="pointer_mode">Pointer mode</span><span class="desc">GESTURE MOUSE — MOVE · PINCH-DRAG · SCROLL · ZOOM · RIGHT-CLICK · VOLUME · HELD FIST EXITS</span></div>
         <button class="toggle" id="cfg-pointer"><span class="knob"></span></button>
@@ -900,6 +926,15 @@
   const CFG = (typeof __MEDO_CONFIG__ !== 'undefined') ? __MEDO_CONFIG__ : {
     apiPort: 8765, streamPort: 8766,
     dirs: [],
+    languages: {
+      available: [
+        { code: 'en', native: 'English', english: 'English', hasVoice: true },
+        { code: 'mk', native: 'Македонски', english: 'Macedonian', hasVoice: true },
+        { code: 'es', native: 'Español', english: 'Spanish', hasVoice: true },
+        { code: 'de', native: 'Deutsch', english: 'German', hasVoice: true },
+      ],
+      active: ['en', 'mk'], primary: 'en', detection: 'auto_pair',
+    },
     ui: { spheres: { quality: 'high' } },
     agents: { skillDomain: {}, spheres: [
       { key: 'experts',   label: 'Council',   stars: [
@@ -1416,82 +1451,82 @@
      shorthand where a loose translation reads worse than the original. */
   const I18N = {
     en: { core:'CORE', config:'CONFIG', send:'SEND', ask:'TYPE A COMMAND OR QUESTION…', search:'SEARCH SYSTEMS, FILES, WEB…',
-          voice_activation:'Voice activation', microphone:'Microphone', pointer_mode:'Pointer mode', pc_control:'PC control',
+          voice_activation:'Voice activation', microphone:'Microphone', spoken_languages:'Spoken languages', pointer_mode:'Pointer mode', pc_control:'PC control',
           continuous:'Continuous conversation', interpreter:'Interpreter mode', lion:'MEDO Lion mode', council:'Specialist council',
           camera_feed:'Camera feed', scanlines:'Scanlines', appearance:'Appearance', brain:'Brain',
           facts:'Remembered facts', documents:'Documents index', file_map:'File map', devices:'Device fleet', ui_language:'Interface language' },
     mk: { core:'ЈАДРО', config:'ПОСТАВКИ', send:'ПРАТИ', ask:'НАПИШИ КОМАНДА ИЛИ ПРАШАЊЕ…', search:'БАРАЈ СИСТЕМИ, ДАТОТЕКИ, ВЕБ…',
-          voice_activation:'Гласовна активација', microphone:'Микрофон', pointer_mode:'Режим на покажувач', pc_control:'Контрола на компјутерот',
+          voice_activation:'Гласовна активација', microphone:'Микрофон', spoken_languages:'Јазици за зборување', pointer_mode:'Режим на покажувач', pc_control:'Контрола на компјутерот',
           continuous:'Континуиран разговор', interpreter:'Режим на преведувач', lion:'МЕДО лав режим', council:'Совет на специјалисти',
           camera_feed:'Слика од камера', scanlines:'Скен-линии', appearance:'Изглед', brain:'Мозок',
           facts:'Запаметени факти', documents:'Индекс на документи', file_map:'Мапа на датотеки', devices:'Флота уреди', ui_language:'Јазик на интерфејсот' },
     de: { core:'KERN', config:'EINSTELLUNGEN', send:'SENDEN', ask:'BEFEHL ODER FRAGE EINGEBEN…', search:'SYSTEME, DATEIEN, WEB DURCHSUCHEN…',
-          voice_activation:'Sprachaktivierung', microphone:'Mikrofon', pointer_mode:'Zeigermodus', pc_control:'PC-Steuerung',
+          voice_activation:'Sprachaktivierung', microphone:'Mikrofon', spoken_languages:'Gesprochene Sprachen', pointer_mode:'Zeigermodus', pc_control:'PC-Steuerung',
           continuous:'Fortlaufendes Gespräch', interpreter:'Dolmetschermodus', lion:'MEDO Löwenmodus', council:'Fachrat',
           camera_feed:'Kamerabild', scanlines:'Scanlinien', appearance:'Erscheinungsbild', brain:'Gehirn',
           facts:'Gespeicherte Fakten', documents:'Dokumentenindex', file_map:'Dateikarte', devices:'Geräteflotte', ui_language:'Oberflächensprache' },
     fr: { core:'CŒUR', config:'CONFIG', send:'ENVOYER', ask:'TAPEZ UNE COMMANDE OU UNE QUESTION…', search:'RECHERCHER SYSTÈMES, FICHIERS, WEB…',
-          voice_activation:'Activation vocale', microphone:'Microphone', pointer_mode:'Mode pointeur', pc_control:'Contrôle du PC',
+          voice_activation:'Activation vocale', microphone:'Microphone', spoken_languages:'Langues parlées', pointer_mode:'Mode pointeur', pc_control:'Contrôle du PC',
           continuous:'Conversation continue', interpreter:'Mode interprète', lion:'MEDO mode lion', council:'Conseil de spécialistes',
           camera_feed:'Flux caméra', scanlines:'Lignes de balayage', appearance:'Apparence', brain:'Cerveau',
           facts:'Faits mémorisés', documents:'Index des documents', file_map:'Carte des fichiers', devices:'Parc d’appareils', ui_language:'Langue de l’interface' },
     es: { core:'NÚCLEO', config:'AJUSTES', send:'ENVIAR', ask:'ESCRIBE UN COMANDO O PREGUNTA…', search:'BUSCAR SISTEMAS, ARCHIVOS, WEB…',
-          voice_activation:'Activación por voz', microphone:'Micrófono', pointer_mode:'Modo puntero', pc_control:'Control del PC',
+          voice_activation:'Activación por voz', microphone:'Micrófono', spoken_languages:'Idiomas hablados', pointer_mode:'Modo puntero', pc_control:'Control del PC',
           continuous:'Conversación continua', interpreter:'Modo intérprete', lion:'MEDO modo león', council:'Consejo de especialistas',
           camera_feed:'Señal de cámara', scanlines:'Líneas de barrido', appearance:'Apariencia', brain:'Cerebro',
           facts:'Datos recordados', documents:'Índice de documentos', file_map:'Mapa de archivos', devices:'Flota de dispositivos', ui_language:'Idioma de la interfaz' },
     it: { core:'NUCLEO', config:'IMPOSTAZIONI', send:'INVIA', ask:'SCRIVI UN COMANDO O UNA DOMANDA…', search:'CERCA SISTEMI, FILE, WEB…',
-          voice_activation:'Attivazione vocale', microphone:'Microfono', pointer_mode:'Modalità puntatore', pc_control:'Controllo del PC',
+          voice_activation:'Attivazione vocale', microphone:'Microfono', spoken_languages:'Lingue parlate', pointer_mode:'Modalità puntatore', pc_control:'Controllo del PC',
           continuous:'Conversazione continua', interpreter:'Modalità interprete', lion:'MEDO modalità leone', council:'Consiglio di specialisti',
           camera_feed:'Flusso della camera', scanlines:'Linee di scansione', appearance:'Aspetto', brain:'Cervello',
           facts:'Fatti memorizzati', documents:'Indice dei documenti', file_map:'Mappa dei file', devices:'Flotta di dispositivi', ui_language:'Lingua dell’interfaccia' },
     pt: { core:'NÚCLEO', config:'DEFINIÇÕES', send:'ENVIAR', ask:'ESCREVE UM COMANDO OU PERGUNTA…', search:'PROCURAR SISTEMAS, FICHEIROS, WEB…',
-          voice_activation:'Ativação por voz', microphone:'Microfone', pointer_mode:'Modo ponteiro', pc_control:'Controlo do PC',
+          voice_activation:'Ativação por voz', microphone:'Microfone', spoken_languages:'Idiomas falados', pointer_mode:'Modo ponteiro', pc_control:'Controlo do PC',
           continuous:'Conversa contínua', interpreter:'Modo intérprete', lion:'MEDO modo leão', council:'Conselho de especialistas',
           camera_feed:'Sinal da câmara', scanlines:'Linhas de varrimento', appearance:'Aparência', brain:'Cérebro',
           facts:'Factos memorizados', documents:'Índice de documentos', file_map:'Mapa de ficheiros', devices:'Frota de dispositivos', ui_language:'Idioma da interface' },
     nl: { core:'KERN', config:'INSTELLINGEN', send:'VERSTUUR', ask:'TYP EEN OPDRACHT OF VRAAG…', search:'ZOEK SYSTEMEN, BESTANDEN, WEB…',
-          voice_activation:'Spraakactivering', microphone:'Microfoon', pointer_mode:'Aanwijzermodus', pc_control:'PC-bediening',
+          voice_activation:'Spraakactivering', microphone:'Microfoon', spoken_languages:'Gesproken talen', pointer_mode:'Aanwijzermodus', pc_control:'PC-bediening',
           continuous:'Doorlopend gesprek', interpreter:'Tolkmodus', lion:'MEDO leeuwmodus', council:'Specialistenraad',
           camera_feed:'Camerabeeld', scanlines:'Scanlijnen', appearance:'Weergave', brain:'Brein',
           facts:'Onthouden feiten', documents:'Documentenindex', file_map:'Bestandskaart', devices:'Apparatenvloot', ui_language:'Interfacetaal' },
     pl: { core:'RDZEŃ', config:'USTAWIENIA', send:'WYŚLIJ', ask:'WPISZ POLECENIE LUB PYTANIE…', search:'SZUKAJ SYSTEMÓW, PLIKÓW, SIECI…',
-          voice_activation:'Aktywacja głosowa', microphone:'Mikrofon', pointer_mode:'Tryb wskaźnika', pc_control:'Kontrola komputera',
+          voice_activation:'Aktywacja głosowa', microphone:'Mikrofon', spoken_languages:'Języki mówione', pointer_mode:'Tryb wskaźnika', pc_control:'Kontrola komputera',
           continuous:'Ciągła rozmowa', interpreter:'Tryb tłumacza', lion:'MEDO tryb lwa', council:'Rada specjalistów',
           camera_feed:'Obraz z kamery', scanlines:'Linie skanowania', appearance:'Wygląd', brain:'Mózg',
           facts:'Zapamiętane fakty', documents:'Indeks dokumentów', file_map:'Mapa plików', devices:'Flota urządzeń', ui_language:'Język interfejsu' },
     ru: { core:'ЯДРО', config:'НАСТРОЙКИ', send:'ОТПРАВИТЬ', ask:'ВВЕДИТЕ КОМАНДУ ИЛИ ВОПРОС…', search:'ПОИСК СИСТЕМ, ФАЙЛОВ, ВЕБА…',
-          voice_activation:'Голосовая активация', microphone:'Микрофон', pointer_mode:'Режим указателя', pc_control:'Управление ПК',
+          voice_activation:'Голосовая активация', microphone:'Микрофон', spoken_languages:'Разговорные языки', pointer_mode:'Режим указателя', pc_control:'Управление ПК',
           continuous:'Непрерывный разговор', interpreter:'Режим переводчика', lion:'MEDO режим льва', council:'Совет специалистов',
           camera_feed:'Изображение с камеры', scanlines:'Строки развёртки', appearance:'Оформление', brain:'Мозг',
           facts:'Запомненные факты', documents:'Индекс документов', file_map:'Карта файлов', devices:'Парк устройств', ui_language:'Язык интерфейса' },
     tr: { core:'ÇEKİRDEK', config:'AYARLAR', send:'GÖNDER', ask:'BİR KOMUT VEYA SORU YAZIN…', search:'SİSTEM, DOSYA, WEB ARA…',
-          voice_activation:'Sesle etkinleştirme', microphone:'Mikrofon', pointer_mode:'İşaretçi modu', pc_control:'PC denetimi',
+          voice_activation:'Sesle etkinleştirme', microphone:'Mikrofon', spoken_languages:'Konuşulan diller', pointer_mode:'İşaretçi modu', pc_control:'PC denetimi',
           continuous:'Sürekli konuşma', interpreter:'Çevirmen modu', lion:'MEDO aslan modu', council:'Uzman kurulu',
           camera_feed:'Kamera görüntüsü', scanlines:'Tarama çizgileri', appearance:'Görünüm', brain:'Beyin',
           facts:'Hatırlanan bilgiler', documents:'Belge dizini', file_map:'Dosya haritası', devices:'Cihaz filosu', ui_language:'Arayüz dili' },
     el: { core:'ΠΥΡΗΝΑΣ', config:'ΡΥΘΜΙΣΕΙΣ', send:'ΑΠΟΣΤΟΛΗ', ask:'ΓΡΑΨΤΕ ΕΝΤΟΛΗ Ή ΕΡΩΤΗΣΗ…', search:'ΑΝΑΖΗΤΗΣΗ ΣΥΣΤΗΜΑΤΩΝ, ΑΡΧΕΙΩΝ, ΙΣΤΟΥ…',
-          voice_activation:'Φωνητική ενεργοποίηση', microphone:'Μικρόφωνο', pointer_mode:'Λειτουργία δείκτη', pc_control:'Έλεγχος υπολογιστή',
+          voice_activation:'Φωνητική ενεργοποίηση', microphone:'Μικρόφωνο', spoken_languages:'Ομιλούμενες γλώσσες', pointer_mode:'Λειτουργία δείκτη', pc_control:'Έλεγχος υπολογιστή',
           continuous:'Συνεχής συνομιλία', interpreter:'Λειτουργία διερμηνέα', lion:'MEDO λειτουργία λέοντα', council:'Συμβούλιο ειδικών',
           camera_feed:'Ροή κάμερας', scanlines:'Γραμμές σάρωσης', appearance:'Εμφάνιση', brain:'Εγκέφαλος',
           facts:'Αποθηκευμένα στοιχεία', documents:'Ευρετήριο εγγράφων', file_map:'Χάρτης αρχείων', devices:'Στόλος συσκευών', ui_language:'Γλώσσα διεπαφής' },
     zh: { core:'核心', config:'设置', send:'发送', ask:'输入命令或问题…', search:'搜索系统、文件、网页…',
-          voice_activation:'语音唤醒', microphone:'麦克风', pointer_mode:'指针模式', pc_control:'电脑控制',
+          voice_activation:'语音唤醒', microphone:'麦克风', spoken_languages:'口语语言', pointer_mode:'指针模式', pc_control:'电脑控制',
           continuous:'连续对话', interpreter:'口译模式', lion:'MEDO 狮子模式', council:'专家委员会',
           camera_feed:'摄像头画面', scanlines:'扫描线', appearance:'外观', brain:'大脑',
           facts:'已记住的信息', documents:'文档索引', file_map:'文件地图', devices:'设备群', ui_language:'界面语言' },
     ja: { core:'コア', config:'設定', send:'送信', ask:'コマンドか質問を入力…', search:'システム・ファイル・ウェブを検索…',
-          voice_activation:'音声起動', microphone:'マイク', pointer_mode:'ポインタモード', pc_control:'PC操作',
+          voice_activation:'音声起動', microphone:'マイク', spoken_languages:'話す言語', pointer_mode:'ポインタモード', pc_control:'PC操作',
           continuous:'連続会話', interpreter:'通訳モード', lion:'MEDO ライオンモード', council:'専門家会議',
           camera_feed:'カメラ映像', scanlines:'走査線', appearance:'外観', brain:'頭脳',
           facts:'記憶した事実', documents:'ドキュメント索引', file_map:'ファイルマップ', devices:'デバイス群', ui_language:'表示言語' },
     ko: { core:'코어', config:'설정', send:'보내기', ask:'명령이나 질문을 입력하세요…', search:'시스템·파일·웹 검색…',
-          voice_activation:'음성 활성화', microphone:'마이크', pointer_mode:'포인터 모드', pc_control:'PC 제어',
+          voice_activation:'음성 활성화', microphone:'마이크', spoken_languages:'사용 언어', pointer_mode:'포인터 모드', pc_control:'PC 제어',
           continuous:'연속 대화', interpreter:'통역 모드', lion:'MEDO 라이온 모드', council:'전문가 위원회',
           camera_feed:'카메라 화면', scanlines:'스캔라인', appearance:'외관', brain:'두뇌',
           facts:'기억된 정보', documents:'문서 색인', file_map:'파일 지도', devices:'기기 목록', ui_language:'인터페이스 언어' },
     hi: { core:'कोर', config:'सेटिंग्स', send:'भेजें', ask:'कमांड या सवाल लिखें…', search:'सिस्टम, फ़ाइलें, वेब खोजें…',
-          voice_activation:'आवाज़ सक्रियण', microphone:'माइक्रोफ़ोन', pointer_mode:'पॉइंटर मोड', pc_control:'पीसी नियंत्रण',
+          voice_activation:'आवाज़ सक्रियण', microphone:'माइक्रोफ़ोन', spoken_languages:'बोली जाने वाली भाषाएँ', pointer_mode:'पॉइंटर मोड', pc_control:'पीसी नियंत्रण',
           continuous:'निरंतर बातचीत', interpreter:'दुभाषिया मोड', lion:'MEDO लायन मोड', council:'विशेषज्ञ परिषद',
           camera_feed:'कैमरा फ़ीड', scanlines:'स्कैनलाइन', appearance:'रूप', brain:'मस्तिष्क',
           facts:'याद रखे तथ्य', documents:'दस्तावेज़ सूची', file_map:'फ़ाइल मानचित्र', devices:'उपकरण बेड़ा', ui_language:'इंटरफ़ेस भाषा' },
@@ -2032,6 +2067,69 @@
     } catch { $('link-desc').textContent = 'API OFFLINE'; }
   }
   $('link-refresh').onclick = loadLinkDevices;
+
+  // --- spoken-languages picker (constrained two-language mode, S4) ----------
+  const langCfg = CFG.languages || { available: [], active: [], primary: 'en', detection: 'auto_pair' };
+  const langState = {
+    active: new Set(langCfg.active || []),
+    primary: langCfg.primary || (langCfg.active || [])[0] || 'en',
+    detection: langCfg.detection || 'auto_pair',
+  };
+  function langStatus(msg, ok) {
+    const el = $('lang-status'); if (!el) return;
+    el.textContent = msg || '';
+    el.style.color = ok ? '#7dffb0' : '#ff8a6b';
+  }
+  function renderLanguages() {
+    const chips = $('lang-chips'); if (!chips) return;
+    chips.innerHTML = '';
+    for (const l of langCfg.available) {
+      const b = document.createElement('button');
+      b.className = 'lang-chip' + (langState.active.has(l.code) ? ' active' : '') + (l.hasVoice ? '' : ' novoice-flag');
+      b.textContent = l.native;                       // textContent, never innerHTML (XSS)
+      if (!l.hasVoice) {
+        const s = document.createElement('span'); s.className = 'novoice'; s.textContent = '· no voice';
+        b.appendChild(s);
+      }
+      b.onclick = () => toggleLang(l.code);
+      chips.appendChild(b);
+    }
+    const sel = $('lang-primary'); sel.innerHTML = '';
+    for (const code of langState.active) {
+      const meta = langCfg.available.find(a => a.code === code) || { native: code };
+      const o = document.createElement('option'); o.value = code; o.textContent = meta.native;
+      sel.appendChild(o);
+    }
+    if (!langState.active.has(langState.primary)) langState.primary = [...langState.active][0] || 'en';
+    sel.value = langState.primary;
+    $('lang-detection').value = langState.detection;
+  }
+  function toggleLang(code) {
+    if (langState.active.has(code)) {
+      if (langState.active.size <= 1) { langStatus('keep at least one language'); return; }
+      langState.active.delete(code);
+    } else {
+      if (langState.active.size >= 2) { langStatus('MEDO runs two languages at a time'); return; }
+      langState.active.add(code);
+    }
+    langStatus('');
+    renderLanguages();
+  }
+  if ($('lang-primary')) $('lang-primary').onchange = e => { langState.primary = e.target.value; };
+  if ($('lang-detection')) $('lang-detection').onchange = e => { langState.detection = e.target.value; };
+  if ($('lang-save')) $('lang-save').onclick = async () => {
+    langStatus('saving…');
+    try {
+      const r = await fetch(`${API}/control/languages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: [...langState.active], primary: langState.primary, detection: langState.detection }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { langStatus(d.error || 'save failed'); return; }
+      langStatus('saved · restart MEDO to apply', true);
+    } catch { langStatus('save failed — is MEDO running?'); }
+  };
+  renderLanguages();
 
   // File map rescan: GET /dirs walks THIS machine's folders server-side, then
   // the orb rebuilds its beacons in place — no reload, stale dirs from a config

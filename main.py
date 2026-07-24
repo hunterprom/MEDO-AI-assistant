@@ -80,6 +80,29 @@ for _stream in (sys.stdout, sys.stderr):
 console = Console()
 
 
+def _use_os_trust_store() -> None:
+    """Make Python's TLS verify against the OPERATING-SYSTEM trust store.
+
+    On managed/corporate networks the HTTPS connection to Microsoft's edge-tts
+    voices is TLS-intercepted by a proxy whose CA lives in the OS/browser trust
+    store but NOT in Python's bundled ``certifi`` list. Python then rejects it
+    with "unable to get local issuer certificate", edge-tts fails, and every
+    non-English reply falls back to the English Piper voice — reading Macedonian,
+    Russian, Japanese, etc. with English phonemes (gibberish). ``truststore``
+    points Python at the SAME certificates the browser trusts (the secure fix —
+    it still verifies every connection, it just uses the OS's CAs). Best-effort:
+    if the package is missing we log and carry on with certifi.
+    """
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+        logging.getLogger("main").info("TLS: verifying against the OS trust store")
+    except Exception as exc:  # never let a TLS-config nicety stop startup
+        logging.getLogger("main").debug(
+            "truststore unavailable (%s); using certifi bundle", exc)
+
+
 class Announcer:
     """Delivers async messages (e.g. a timer firing) to whatever output is live.
 
@@ -815,6 +838,9 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
 
 def main() -> None:
+    # Before anything opens a TLS connection: use the OS trust store so edge-tts
+    # (the multilingual neural voice) works behind a corporate CA / TLS proxy.
+    _use_os_trust_store()
     parser = argparse.ArgumentParser(description="MEDO v2 local voice assistant")
     parser.add_argument("--once", metavar="TEXT", help="route one request and exit")
     parser.add_argument(

@@ -316,3 +316,78 @@ skin), effects (overlays), and the existing accent-hue swatches are three
 independent axes that compose freely. Deep red is also Lion mode's identity:
 arming Lion applies it without overwriting the user's hand-picked theme, and
 disarming restores it.
+
+---
+
+## Detection is constrained to a user-chosen pair of languages (max two active)
+
+MEDO listens for at most two languages at a time (default English + Macedonian),
+chosen in `languages.active`. **Decision: per-utterance language detection is
+constrained to those two — never open-ended across the ~90 languages Whisper
+knows.** This is an accuracy feature, not a preference: open-ended language ID
+mis-detects constantly (spoken Macedonian heard as Bulgarian/Serbian, Spanish as
+Portuguese), and each mis-detection decodes with the wrong tokenizer and comes
+out garbled. Scoring only the two active languages (via faster-whisper's
+`detect_language` probabilities) removes the third language from the running, so
+the choice is strictly en-vs-mk by actual probability — with a snap fallback
+that pins any out-of-pair auto-detect to the primary language.
+
+**Decision: two is a hard cap, validated on load.** `languages.active` with
+three or more entries fails fast; `primary` must be one of the active languages;
+unknown codes are dropped. `detection: fixed` forces the primary language with no
+detection at all (fastest, most accurate for a single speaker); `auto_pair`
+detects between the two. The legacy `stt.allowed_languages` / `language_mode`
+fields survive only as back-compat inputs when no `languages:` block is present.
+
+**Decision: everything language-dependent reads the active set — nothing hardcodes
+en/mk.** The yes/no confirmation gate loads word banks per language from
+`lang/confirm_words/<code>.yaml` (adding a language is a word file, not code), for
+the active languages only; persona quips and the TTS voice follow the utterance's
+language and degrade to the primary when a bank or voice is missing. The wake word
+is a separate trained model — changing the active languages does not change the
+phrase MEDO wakes to.
+
+**Adding a language:** it needs STT support (faster-whisper handles it), a neural
+voice (an entry in `core/languages.py`), and a yes/no word file
+(`lang/confirm_words/<code>.yaml`, copied from `_template.yaml`). Add the code to
+`languages.available`, then to `languages.active` (replacing one of the two) to
+use it. The HUD CONFIG screen has a picker that enforces the two-language cap and
+persists the choice (a restart reloads the STT model).
+
+**Intertec note:** MEDO constrains language detection to a user-chosen pair, which
+raises STT reliability and keeps the bilingual UX coherent — detection never
+guesses across all languages, and every language-dependent surface (STT, yes/no
+words, persona, voice) is driven by that one two-item set rather than scattered
+per-feature assumptions.
+
+---
+
+## MCP servers: curated, disabled-by-default, secrets out of git
+
+MEDO speaks MCP (`core/mcp.py`), so any app that serves MCP becomes callable
+tools. `config.yaml`'s `mcp.servers` ships a curated set — **GitHub**,
+**Google Maps**, **Google Drive**, **sequential-thinking**, **filesystem**,
+**memory**, **Brave Search**, and a **Fusion 360** placeholder.
+
+**Decision: every server ships `enabled: false`.** Enabling one spawns an npx
+process that DOWNLOADS on first run — with the disk near full and most servers
+needing a secret, silently spawning eight on startup is wrong. The user flips on
+what they want. Only Node/npx servers are listed: this machine has npx but not
+uvx or Docker (so GitHub's newer Docker-only official server isn't used — the
+reference npx server is).
+
+**Decision: MCP secrets live in the git-ignored overrides, never in
+`config.yaml`.** `apply_local_secrets` injects a `mcp_env:` block from
+`secrets.local.yaml` into the environment before servers spawn, so a GitHub PAT
+or Google/Brave key is inherited by the child process without ever touching a
+tracked file.
+
+**Fusion 360 — the honest bit:** there is no official (Autodesk or Anthropic)
+Fusion 360 MCP server. Autodesk exposes no MCP; community bridges run an add-in
+INSIDE Fusion that serves a local endpoint an MCP server proxies. It's not a
+drop-in — the entry is a disabled `url:` placeholder pointing at where such a
+bridge would listen, with the setup left to the user (add-in + bridge). Google
+Drive similarly needs a one-time OAuth consent before it works.
+
+Verified: the pipeline connects to a real server (`sequential-thinking` loaded
+its tool) — the mechanism works; each server just needs enabling + its secret.

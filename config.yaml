@@ -229,6 +229,31 @@ hud:                                # M.E.D.O. web HUD arc-reactor UI (--hud)
 
 # --- Subsystems below are configured now but wired in later milestones ---
 
+languages:                          # constrained two-language mode
+  # MEDO runs with AT MOST 2 ACTIVE languages at a time, and per-utterance
+  # detection is constrained to that pair. This is an ACCURACY feature, not just
+  # a preference: two known candidates beat open-ended language ID (spoken
+  # Macedonian heard as Bulgarian, Spanish as Portuguese) — the single biggest
+  # lever on reliable bilingual STT. Everything language-dependent (STT clamp,
+  # yes/no words, persona/filler phrases, TTS voice) reads from `active` below.
+  #
+  # `available` = everything MEDO can support (must be in core/languages.py).
+  available: ["en", "mk", "de", "fr", "es", "it", "pt", "nl", "pl",
+              "ru", "tr", "el", "zh", "ja", "ko", "hi"]
+  # `active` = the <=2 languages live right now. Default English + Macedonian.
+  # Put any two from `available` here (e.g. ["en", "es"]); more than two is
+  # rejected on load.
+  active: ["en", "mk"]
+  # `primary` = the fallback (voice used when another active language lacks one,
+  # and the language the system prompt is written in). Must be one of `active`.
+  primary: "en"
+  # `auto_pair` detects PER UTTERANCE between the two active languages; `fixed`
+  # always transcribes as `primary` (fastest/most accurate if you only speak one).
+  detection: "auto_pair"
+  # NOTE: the WAKE WORD is a separate trained model (wakeword.phrase) — changing
+  # the active languages here does NOT change the phrase MEDO wakes to. To wake
+  # in a different language, train a new wake model (see docs/Wake Word Training).
+
 stt:                                # M1
   engine: "faster-whisper"
   # large-v3-turbo: near-large accuracy at ~medium size (~1.6 GB download on
@@ -606,7 +631,79 @@ mcp:                                # Model Context Protocol client (core/mcp.py
   enabled: true
   connect_timeout_s: 15
   call_timeout_s: 60
-  servers: {}
+  # TURNING ONE ON: 1) flip its `enabled: true`; 2) if it needs a secret, put it
+  # in the git-ignored secrets.local.yaml under `mcp_env:` (NEVER here) — MEDO
+  # injects those into the environment before spawning servers; 3) restart.
+  # Each server DOWNLOADS on first run via npx; that first download can exceed
+  # connect_timeout_s above (just restart — it's cached after, or pre-run
+  # `npx -y <package>` once). Only Node servers are listed: this machine has
+  # npx but not uvx/Docker. `npx` must be on MEDO's PATH (Node here lives in
+  # Downloads, so add it to PATH or MEDO can't spawn these). Example secrets:
+  #
+  #   # secrets.local.yaml (git-ignored, per machine):
+  #   mcp_env:
+  #     GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_…"
+  #     GOOGLE_MAPS_API_KEY: "AIza…"
+  #     BRAVE_API_KEY: "BSA…"
+  servers:
+    # GitHub — repos, issues, PRs, file + code search. Token (scopes: repo) from
+    # github.com/settings/tokens -> mcp_env.GITHUB_PERSONAL_ACCESS_TOKEN. (This
+    # is the reference npx server; GitHub's newer official server needs Docker,
+    # which isn't installed here.)
+    github:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-github"]
+
+    # Google Maps — geocode, directions, place search. Needs GOOGLE_MAPS_API_KEY.
+    google-maps:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-google-maps"]
+
+    # Google Drive — search + read your Drive files. Needs a Google OAuth app
+    # (one-time consent, then it caches a token) — see docs/Decisions.md.
+    gdrive:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-gdrive"]
+
+    # Sequential thinking — a structured step-by-step reasoning tool for the
+    # brain. No secret, actively maintained: the easiest one to try first.
+    sequential-thinking:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+
+    # Filesystem — richer file tools over ONE folder you choose (edit the path).
+    # No secret. MEDO already has file skills; use this for heavier file work.
+    filesystem:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Documents"]
+
+    # Knowledge-graph memory — persistent entities/relations the brain stores
+    # and recalls across sessions. No secret.
+    memory:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-memory"]
+
+    # Brave Search — independent web search. Needs BRAVE_API_KEY
+    # (brave.com/search/api). An alternative to MEDO's built-in search.
+    brave-search:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-brave-search"]
+
+    # Fusion 360 — there is NO official/Anthropic MCP server. Autodesk exposes
+    # no MCP; community bridges run an add-in INSIDE Fusion that serves a local
+    # endpoint an MCP server proxies. NOT a drop-in npx install. To wire it up:
+    # install a community "Fusion 360 MCP" add-in + bridge, have it serve MCP
+    # over HTTP, then set the `url` below to its endpoint and enable. Placeholder:
+    fusion360:
+      enabled: false
+      url: "http://127.0.0.1:9000/mcp"   # <- your Fusion add-in's MCP endpoint
 
 routines:                           # proactive schedule (core/routines.py)
   - name: "morning briefing"

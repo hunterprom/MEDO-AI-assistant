@@ -104,10 +104,22 @@ class EdgeTTS:
         logger.info("edge-tts ready (voice %s)", voice)
 
     def voice_for(self, language: str | None) -> str:
-        """The voice to speak a reply in, given the detected language."""
+        """The voice to speak a reply in, given the detected language.
+
+        Falls back to the construction voice (the primary active language's, set
+        by the loop) when a language has no registered voice — warning once so a
+        silent wrong-voice is visible without spamming the log every utterance.
+        """
         from core import languages
 
-        return languages.voice_for(language, self._voice)
+        voice = languages.voice_for(language, "")
+        if not voice:
+            if language and not getattr(self, "_warned_fallback", False):
+                logger.warning("no edge-tts voice for %r — using fallback voice %r",
+                               language, self._voice)
+                self._warned_fallback = True
+            return self._voice
+        return voice
 
     async def synthesize(self, text: str,
                          language: str | None = None) -> tuple[np.ndarray, int]:

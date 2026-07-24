@@ -60,11 +60,16 @@ orders of magnitude below it.
 
 ## What it does
 
-- **Voice**: openWakeWord → faster-whisper (auto-detects **Macedonian and
-  English** per utterance) → Intent Router → Piper TTS. **Barge-in**: say the
-  wake word (or tap the HUD mic) while MEDO talks to cut it off. The mic is a
-  **priority list** (`audio.input_device`) — headset first, webcam fallback —
-  hot-swapped within ~2 s and switchable live from the HUD.
+- **Voice**: openWakeWord → faster-whisper → Intent Router → Piper TTS.
+  **Two-language mode**: MEDO runs with **at most two active languages** at a
+  time (default **English + Macedonian**) and constrains per-utterance detection
+  to that pair — two known candidates are far more reliable than open-ended
+  language ID. The pair is configurable (`languages.active`, any two of the
+  supported set) with a picker on the HUD CONFIG screen; `detection: fixed`
+  forces one language when you only speak one. **Barge-in**: say the wake word
+  (or tap the HUD mic) while MEDO talks to cut it off. The mic is a **priority
+  list** (`audio.input_device`) — headset first, webcam fallback — hot-swapped
+  within ~2 s and switchable live from the HUD.
 - **Brain — five interchangeable providers**, switchable live from the HUD:
   **Ollama** (local, default `qwen3:30b` with 24 tools), **GPT / any
   OpenAI-compatible API**, the **Claude API**, and two local CLI agents —
