@@ -1,16 +1,18 @@
 # MEDO — Local AI Desktop Assistant
 
-**MEDO is a bilingual (English/Macedonian) voice + gesture assistant that runs
-entirely on my own hardware — wake word, Whisper ears, a swappable LLM brain,
-Piper voice, MediaPipe hand-tracking, and a sci-fi HUD — in one Python codebase.**
+**MEDO is a two-language (default English/Macedonian, configurable pair) voice +
+gesture assistant that runs entirely on my own hardware — a custom "medo" wake
+word trained on my own voice, Whisper ears, a swappable LLM brain, neural voices
+in either language, MediaPipe hand-tracking, a sci-fi HUD, and a desktop presence
+sphere — in one Python codebase.**
 
 > 🎥 [2-minute demo](docs/demo.md) — TODO: link
 
 <!-- TODO(Matej): record the demo in this order — it shows breadth in 2 minutes:
-     1. "hey jarvis" wake → "what time is it" (HUD CORE tab visible: FAST path,
+     1. "medo" wake → "what time is it" (HUD CORE tab visible: FAST path,
         single-digit ms latency chip)
-     2. a Macedonian question, answered in Macedonian
-     3. "read my screen" (moondream vision)
+     2. a Macedonian question, answered aloud in a Macedonian neural voice
+     3. "read my screen" (local qwen2.5-VL vision)
      4. "pointer on" → drive the cursor by hand, pinch-click, fist to exit -->
 
 | ![HUD — CORE tab](docs/img/hud-core.png) | ![Pointer mode](docs/img/pointer-mode.png) |
@@ -20,18 +22,19 @@ Piper voice, MediaPipe hand-tracking, and a sci-fi HUD — in one Python codebas
 ## Architecture at a glance
 
 ```
-mic ──► openWakeWord ──► record until silence ──► faster-whisper (auto mk/en)
+mic ──► openWakeWord ("medo") ──► record ──► faster-whisper (detect between
+                                                     the 2 ACTIVE languages)
                                                         │
-             HUD :8730 (SSE observer) ◄── EventBus ◄────┤
+     HUD :8730  +  corner sphere  ◄── EventBus ◄────────┤   (both SSE observers)
                                                         ▼
   watch app ──► companion API :8710 /ask ──────► Intent Router
   vision sidecar gestures ──► POST /ask ────────►   │
                                                     ├─ FAST: regex skill (<1 ms)
-                                                    └─ LLM: Ollama tool loop
-                                                        (strip_think, ≤4 rounds,
-                                                         confirmation gate)
+                                                    └─ LLM: tool loop (strip_think,
+                                                        ≤4 rounds, confirmation
+                                                        gate, "let me think" filler)
                                                         │
-                                              Piper TTS ──► speakers
+                             edge-tts neural voice / Piper (offline) ──► speakers
 ```
 
 Three processes, isolated on purpose: the main app (`.venv`), the MediaPipe
@@ -60,7 +63,13 @@ orders of magnitude below it.
 
 ## What it does
 
-- **Voice**: openWakeWord → faster-whisper → Intent Router → Piper TTS.
+- **Voice**: a **custom "medo" wake word** (openWakeWord, retrained on my own
+  captured voice — fires on "medo" and "hey medo") → faster-whisper → Intent
+  Router → **neural TTS**. Replies are spoken in the language they were asked
+  in, by that language's neural voice (edge-tts; the app trusts the OS
+  certificate store via `truststore`, so it works behind a TLS-intercepting
+  proxy), with local **Piper** as the offline fallback — and a non-English
+  reply is never read aloud by the English voice (that gibberish is caught).
   **Two-language mode**: MEDO runs with **at most two active languages** at a
   time (default **English + Macedonian**) and constrains per-utterance detection
   to that pair — two known candidates are far more reliable than open-ended
@@ -75,10 +84,16 @@ orders of magnitude below it.
   OpenAI-compatible API**, the **Claude API**, and two local CLI agents —
   **Claude Code** and **Codex** (their own login, no key in MEDO).
   `</think>` reasoning is stripped before anything is spoken or remembered.
+  When a CLI agent is slow (they can take 20-30 s), MEDO speaks a **"let me
+  think" filler** so the gap doesn't read as a freeze — LLM path only, in the
+  turn's language, configurable under `filler`.
 - **MCP — plug in any application**: declare servers in `config.yaml →
   mcp.servers` (stdio command or Streamable HTTP URL) and every tool they
-  expose becomes a MEDO skill automatically — filesystem, Spotify, home
-  automation, anything speaking the Model Context Protocol.
+  expose becomes a MEDO skill automatically. A curated set ships **disabled by
+  default** — GitHub, Google Maps, Google Drive, sequential-thinking,
+  filesystem, memory, Brave Search (plus a Fusion 360 placeholder). Flip one on
+  and drop its secret into the git-ignored `secrets.local.yaml` under
+  `mcp_env:` — it's injected into the environment, never written to `config.yaml`.
 - **Fast path**: ~30 regex commands run deterministically in <1 ms — time,
   timers, notes, volume, media, apps, files, screenshots, windows, typing,
   clipboard, brightness, power.
@@ -105,12 +120,23 @@ orders of magnitude below it.
 - **Pointer mode** (webcam): index finger drives the cursor · 🤏 pinch =
   drag/click · ✌ scroll · 🤘 zoom · three fingers = right-click · ✊ held ≈1 s
   = exit. Always boots OFF.
-- **Sight**: "what do you see" / "read my screen" → local **moondream**.
-- **HUD** (<http://localhost:8730>): live diagnostics, chat, config (provider
-  + key, mic picker, themes, MCP status) over server-sent events, zero build
-  step. The cosmic-web orb carries **~300 real folder dots** — wheel-zoom
-  toward the cursor, grab-drag through the cluster, click opens the folder.
-  The search box searches files and the web side by side.
+- **Sight**: "what do you see" / "read my screen" / "can you see my screen" →
+  local **qwen2.5-VL** (Ollama). First look after an idle spell retries once
+  while the model warm-loads, so a cold start doesn't read as "no camera".
+- **HUD** (<http://localhost:8730>): three tabs — **CORE** (live diagnostics,
+  the orb, and the **chat as a side panel** under the activity log), **CLUSTER**
+  (a cosmic-web sphere per capability domain, built from the live skill
+  registry), and **CONFIG** (provider + key, mic picker, the **spoken-language
+  picker**, themes, MCP status) — all over server-sent events, zero build step.
+  The CORE orb carries **~300 real folder dots** — wheel-zoom toward the cursor,
+  grab-drag through the cluster, click opens the folder. The search box searches
+  files and the web side by side.
+- **Desktop presence sphere** (`ui/overlay.py`): a small always-on-top CORE
+  sphere pinned to a screen corner, so MEDO stays visible while you work in
+  other apps. It shows state (idle / listening / thinking / speaking) and
+  bubbles up what you said and what it answered; **click** to talk without the
+  wake word, **double-click** to open the HUD. Its own process — a UI crash
+  can't take the assistant down. Toggle under `ui.overlay`.
 - **Extensible**: drop a `.py` in `plugins/` → it works by voice AND as an LLM
   tool; a Wear OS **watch app** (`watch/`) talks to the same API — one tap on
   **"Pair with MEDO"** finds the PC by UDP broadcast and swaps a 6-digit
@@ -147,25 +173,27 @@ dependencies, downloads the wake-word + Piper voice models, starts Ollama with
 the right environment (`OLLAMA_MODELS=D:\OllamaModels`, `GGML_CUDA_NO_PINNED=1`),
 launches the vision sidecar, and opens the HUD at <http://localhost:8730>.
 
-Then say **"hey jarvis"** — or type into the HUD. (macOS/Linux: `run.command`.)
+Then say **"medo"** — or type into the HUD. (macOS/Linux: `run.command`.)
 
 ## Configuration
 
 Everything lives in **`config.yaml`** (env-overridable, prefix `MEDO_`,
 nested with `__`, e.g. `MEDO_LLM__DEFAULT_MODEL=qwen3:14b`). Highlights:
-`llm.default_model`, `stt.language` (null = auto-detect),
-`audio.input_device` (mic priority list — first available wins, hot-swapped),
-`vision.pointer.*` (sensitivity, smoothing, scroll/zoom gains, fist exit hold),
+`llm.default_model`, `languages.active` (the ≤2 languages MEDO hears/speaks)
+and `languages.detection` (`auto_pair` | `fixed`), `audio.input_device` (mic
+priority list — first available wins, hot-swapped), `vision.pointer.*`
+(sensitivity, smoothing, scroll/zoom gains, fist exit hold), `filler` (the
+slow-answer fillers), `ui.overlay` (the corner sphere), `mcp.servers`,
 `hud.max_dir_dots`, `memory.max_facts`, `weather.default_city`. Per-machine
-secrets (online API key, picked mic, the companion-API token) persist in the
-git-ignored `secrets.local.yaml`.
+secrets (online API key, picked mic, the companion-API token, and MCP tokens
+under `mcp_env:`) persist in the git-ignored `secrets.local.yaml`.
 
 ## Ports (LAN only — never forward these)
 
 | Port | What |
 |------|------|
 | 8730 | HUD (127.0.0.1) |
-| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/search/files`, `/search/web` — **bearer-token auth** for LAN clients (token minted into `secrets.local.yaml` on first serve; localhost exempt; no TLS — LAN only) |
+| 8710 | Companion API — `/ask`, `/status`, `/sys`, `/models`, `/model`, `/provider`, `/dirs`, `/open`, `/wake`, `/interrupt`, `/audio/devices`, `/audio/input`, `/control/languages`, `/search/files`, `/search/web` — **bearer-token auth** for LAN clients (token minted into `secrets.local.yaml` on first serve; localhost exempt; no TLS — LAN only) |
 | 8731 | Vision sidecar — MJPEG `/video`, `/frame.jpg`, `POST /pointer` |
 | 11434 | Ollama |
 
@@ -233,12 +261,16 @@ volume, apps…) work regardless.
 **Q: The first question after picking the big model hangs ~30 s.**
 A: That's the one-time cold load of the 30B into VRAM; MEDO pre-warms on
 switch, and `keep_alive: 30m` keeps it loaded between turns. Repeated
-reloads usually mean something else is evicting VRAM (see moondream note
-under Limitations).
+reloads usually mean something else is evicting VRAM (see the vision-model
+note under Limitations).
 
-**Q: Macedonian replies are spoken with an English accent.**
-A: The Macedonian neural voice (edge-tts) needs internet; offline it falls
-back to the English Piper voice. Text in the HUD stays correct either way.
+**Q: A non-English reply isn't spoken (but shows in the HUD).**
+A: The neural voices (edge-tts) need internet. Online, every active language is
+spoken in its own voice — behind a TLS-intercepting proxy that means the OS
+trust store is used (`truststore`, injected at startup). Offline, English falls
+back to the local Piper voice; a non-English reply is **shown but not spoken**
+rather than read aloud with English phonemes (which was gibberish). Text in the
+HUD stays correct either way.
 
 **Q: `pip install` fails with SSL certificate errors.**
 A: Corporate/filtered networks intercept TLS. Use
@@ -268,15 +300,19 @@ block programmatic paste; your clipboard is restored either way.
 
 ## Known limitations
 
-- Macedonian replies are spoken with a **neural mk-MK voice via edge-tts**
-  (free, needs internet); offline they fall back to the English Piper voice.
-- The wake word is openWakeWord's pretrained **"hey jarvis"** — a custom
-  "hey MEDO" model is on the roadmap.
+- Non-English replies are spoken with **neural voices via edge-tts** (free,
+  needs internet — uses the OS trust store to work behind a TLS proxy); offline,
+  English uses the local Piper voice and other languages are shown but not
+  spoken.
+- The wake word is a **custom "medo" model** trained locally on my own voice
+  (openWakeWord). It fires on "medo" and "hey medo"; it was tuned on a small
+  set of my own recordings, so a very different voice/mic may want a quick
+  re-capture (`scripts/capture_wake_samples.py`) and retrain.
 - Brightness control needs a laptop-class display (external monitors usually
   don't support WMI brightness).
 - On macOS, pointer mode needs the **Accessibility** permission for whatever
   launches the sidecar (Terminal / `run.command`): System Settings → Privacy
   & Security → Accessibility. Until granted, the sidecar log says so and the
   cursor stays put.
-- Loading moondream temporarily evicts the 30B from VRAM (12 GB GPU) — the
-  next chat pays a one-time reload.
+- Loading the vision model (qwen2.5-VL) temporarily evicts the 30B from VRAM
+  (12 GB GPU) — the next chat pays a one-time reload.
