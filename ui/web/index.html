@@ -2459,14 +2459,6 @@
       g2.fillStyle = sg; g2.fillRect(0, 0, 64, 64);
       return spriteCache[h] = c;
     }
-    // quantized alpha -> hsla fillStyle tables (avoids per-particle string churn)
-    const styleTbl = {};
-    const styleOf = (h, sat, li) => {
-      const k = h + '/' + sat + '/' + li;
-      const tbl = styleTbl[k] || (styleTbl[k] = []);
-      return q => tbl[q] || (tbl[q] = `hsla(${h},${sat}%,${li}%,${(q / 255).toFixed(3)})`);
-    };
-    const q255 = a => a >= 1 ? 255 : a <= 0 ? 0 : (a * 255) | 0;
 
     // per-domain runtime state (flare = recently fired)
     const state = {};
@@ -2529,25 +2521,27 @@
       const cosY = Math.cos(ay), sinY = Math.sin(ay);
       const cosX = Math.cos(g.tilt), sinX = Math.sin(g.tilt);
       const spr = spriteFor(base);
-      const dustS = styleOf(base, 90, 70);
-      const filNear = styleOf(base, 95, 85), filFar = styleOf(base, 85, 58);
+      // Cosmic-web redesign: dust and filaments are drawn as soft additive
+      // sprites (a tinted radial glow) rather than hard 1px rects, so the web
+      // reads as luminous gas instead of static. (Ported from the cluster
+      // cosmic-web handoff; the per-frame fit() perf guard is kept.)
       ctx.globalCompositeOperation = 'lighter';
       for (const d of g.dust) {
         const q = rot3(d, cosY, sinY, cosX, sinX);
         const depth = (q.z + 1.05) / 2.1;
-        const a = (0.04 + depth * 0.18) * (0.6 + 0.4 * Math.sin(t * 2 + d.tw)) * glow;
-        const sz = Math.max(1, d.sz * p.r);
-        ctx.fillStyle = dustS(q255(a));
-        ctx.fillRect(p.x + q.x * p.r, p.y + q.y * p.r, sz, sz);
+        const a = (0.05 + depth * 0.22) * (0.6 + 0.4 * Math.sin(t * 2 + d.tw)) * glow;
+        const r2 = Math.max(1.1, d.sz * p.r * 1.6);
+        ctx.globalAlpha = Math.min(1, a);
+        ctx.drawImage(spr, p.x + q.x * p.r - r2, p.y + q.y * p.r - r2, r2 * 2, r2 * 2);
       }
       for (const f of g.fil) {
         const q = rot3(f, cosY, sinY, cosX, sinX);
         const depth = (q.z + 1) / 2;
         const flick = quality === 'low' ? 0.8 : 0.55 + 0.45 * Math.sin(t * 3 + f.tw);
-        const a = (0.1 + depth * 0.55) * flick * glow;
-        const sz = Math.max(1, f.sz * p.r * (0.5 + depth * 0.9));
-        ctx.fillStyle = (depth > 0.7 ? filNear : filFar)(q255(a));
-        ctx.fillRect(p.x + q.x * p.r, p.y + q.y * p.r, sz, sz);
+        const a = (0.12 + depth * 0.6) * flick * glow;
+        const r2 = Math.max(1.2, f.sz * p.r * (0.5 + depth * 0.9) * 1.4);
+        ctx.globalAlpha = Math.min(1, a);
+        ctx.drawImage(spr, p.x + q.x * p.r - r2, p.y + q.y * p.r - r2, r2 * 2, r2 * 2);
       }
       for (let i = 0; i < g.nodes.length; i++) {
         const nd = g.nodes[i];
@@ -2567,10 +2561,30 @@
       // stars
       for (const sp of starLayout(s, p, t)) {
         const isHover = hovered && hovered.sphere === s && hovered.star === sp.star;
-        ctx.fillStyle = isHover ? '#fff' : `hsla(${base},95%,75%,.9)`;
-        ctx.beginPath(); ctx.arc(sp.x, sp.y, isHover ? 4.5 : 3, 0, 7); ctx.fill();
+        // four-point star: soft glow + bright core + twinkling diffraction spikes
+        const tw = 0.75 + 0.25 * Math.sin(t * 3 + sp.x * 0.7 + sp.y * 0.3);
+        const R1 = (isHover ? 8 : 5.5) * tw;               // spike length
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = isHover ? 1 : 0.9 * tw;
+        ctx.drawImage(spr, sp.x - R1 * 1.6, sp.y - R1 * 1.6, R1 * 3.2, R1 * 3.2);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = isHover ? '#fff' : `hsla(${base},95%,88%,${(0.85 * tw).toFixed(3)})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - R1, sp.y); ctx.lineTo(sp.x + R1, sp.y);
+        ctx.moveTo(sp.x, sp.y - R1); ctx.lineTo(sp.x, sp.y + R1);
+        ctx.stroke();
+        const R2 = R1 * 0.45;                              // short diagonal spikes
+        ctx.strokeStyle = `hsla(${base},95%,85%,${(0.45 * tw).toFixed(3)})`;
+        ctx.beginPath();
+        ctx.moveTo(sp.x - R2, sp.y - R2); ctx.lineTo(sp.x + R2, sp.y + R2);
+        ctx.moveTo(sp.x - R2, sp.y + R2); ctx.lineTo(sp.x + R2, sp.y - R2);
+        ctx.stroke();
+        ctx.fillStyle = isHover ? '#fff' : `hsla(${base},60%,96%,.95)`;
+        ctx.beginPath(); ctx.arc(sp.x, sp.y, isHover ? 2.2 : 1.5, 0, 7); ctx.fill();
+        ctx.globalCompositeOperation = 'source-over';
         if (sp.star.controlsPc) { ctx.strokeStyle = `hsla(${base},95%,75%,.7)`;
-          ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(sp.x, sp.y, 6, 0, 7); ctx.stroke(); }
+          ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(sp.x, sp.y, R1 + 2.5, 0, 7); ctx.stroke(); }
         hotspots.push({ sphere: s, star: sp.star, x: sp.x, y: sp.y, r: 9 });
       }
       // label
