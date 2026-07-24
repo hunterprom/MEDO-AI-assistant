@@ -171,7 +171,10 @@ class VoiceLoop:
         except Exception:
             logger.debug("STT wake-confirm failed; allowing the wake", exc_info=True)
             return True
-        ok = wake_phrase_confirmed(text, self._settings.wakeword.phrase)
+        # Confirm against the phrase the LOADED model listens for (not the
+        # configured one), so the bundled fallback isn't rejected forever.
+        phrase = getattr(self._wakeword, "phrase", None) or self._settings.wakeword.phrase
+        ok = wake_phrase_confirmed(text, phrase)
         if not ok:
             logger.info("wake discarded by STT confirm — heard %r, not the phrase",
                         (text or "")[:60])

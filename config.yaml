@@ -242,8 +242,10 @@ stt:                                # M1
   language: null                    # null = auto-detect per utterance (Macedonian + English)
   # Manual language selection. "auto" detects per utterance (the default);
   # any code below FORCES it — Whisper stops guessing, decodes as that
-  # language, and MEDO answers in it. Same lever as `language:` above, spelled
-  # so "auto" is an obvious option; setting this wins.
+  # language, and MEDO answers in it. A real code here wins over `language:`
+  # above; "auto" means "no override from here" — it defers to `language:`
+  # (which is null = real auto-detect by default, but is respected if you set
+  # it, e.g. language: "mk").
   #
   # Reliable to force: en, mk, de, fr, es, it, pt, nl, pl, ru, tr, el, ja, ko,
   # zh, hi — every language in core/languages.py has a matching neural voice.

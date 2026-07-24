@@ -23,7 +23,7 @@ Adding a major is a config edit (``council.extra``), not a code change.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 #: Shared house style. Every specialist answers out loud, so the constraints

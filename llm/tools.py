@@ -26,6 +26,30 @@ def build_tools(registry: SkillRegistry) -> list[dict[str, Any]]:
     return tools
 
 
+def coerce_args(skill, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Coerce model values for STRING-typed params to ``str``.
+
+    Models sometimes emit a number/bool where a string is declared — a PID as
+    ``1234``, a path as a number — and skills call ``.strip()`` on the value,
+    which would raise ``AttributeError`` instead of answering. This coerces
+    only params the skill's own schema declares ``"string"``, so genuinely
+    numeric params (e.g. browser scroll ``amount``: integer) are left alone.
+    Idempotent and safe to call more than once.
+    """
+    if not arguments or skill is None:
+        return arguments
+    try:
+        props = skill.tool_schema()["function"]["parameters"].get("properties", {})
+    except Exception:      # a skill with an unusual schema — don't touch its args
+        return arguments
+    out = dict(arguments)
+    for key, val in arguments.items():
+        if (props.get(key, {}).get("type") == "string"
+                and val is not None and not isinstance(val, str)):
+            out[key] = str(val)
+    return out
+
+
 async def dispatch_tool(
     registry: SkillRegistry,
     name: str,
@@ -36,6 +60,7 @@ async def dispatch_tool(
     skill = registry.get(name)
     if skill is None:
         return SkillResult(f"I don't have a tool called {name}.", success=False)
+    arguments = coerce_args(skill, arguments)
     # Reconstruct a natural utterance so pattern-driven skills still behave, and
     # pass the structured args the LLM chose. ``via=tool`` lets a skill know it's
     # being called by the model (e.g. web search returns raw results to summarize).

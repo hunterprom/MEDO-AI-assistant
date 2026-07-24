@@ -118,6 +118,24 @@ def _resolve_model_path(phrase: str) -> str:
     return _bundled_match(phrase) or phrase
 
 
+def effective_phrase(phrase: str) -> str:
+    """The wake phrase the LOADED model actually listens for.
+
+    Mirrors :func:`_resolve_model_path`'s fallback decision but returns a
+    spoken NAME (not a file path): a custom-model path whose file is missing
+    falls back to the bundled phrase, and STT confirmation must key off THIS —
+    otherwise ``stt_confirm`` checks the transcript against "medo" while the
+    fallback model is listening for "hey jarvis", and the fallback (whose whole
+    job is "voice keeps working") could never wake by voice.
+    """
+    if phrase.endswith((".onnx", ".tflite")):
+        candidate = Path(os.path.expanduser(phrase))
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        return phrase if candidate.exists() else FALLBACK_PHRASE
+    return phrase
+
+
 class WakeWord:
     """Thin wrapper over ``openwakeword.model.Model`` for one wake phrase."""
 
@@ -129,6 +147,9 @@ class WakeWord:
         # (voice loop) counts them; exposed here so both the standby wait and
         # the barge-in watcher agree on it.
         self.trigger_frames = max(1, int(getattr(config, "trigger_frames", 1)))
+        # The phrase STT-confirm checks against: the one the loaded model really
+        # listens for (may be the bundled fallback if a custom file is missing).
+        self.phrase = effective_phrase(config.phrase)
         model_path = _resolve_model_path(config.phrase)
         # Framework follows the model file: .tflite needs tflite-runtime,
         # everything else (bundled + custom .onnx) runs on onnxruntime.
@@ -178,7 +199,6 @@ def _live_test() -> None:
     what happens while you say the phrase — the fastest way to tell a silent mic
     (``mic`` stays ~0) from a too-high threshold (``score`` peaks below it).
     """
-    import time
 
     from core.config import load_settings
     from voice.audio import FRAME_SAMPLES, Microphone, frame_rms

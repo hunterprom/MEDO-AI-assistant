@@ -353,28 +353,38 @@ class STTConfig(BaseModel):
 
     @model_validator(mode="after")
     def _apply_language_mode(self) -> STTConfig:
-        """Fold ``language_mode`` into ``language`` — one lever, one field.
+        """Fold ``language_mode`` into ``language`` — the one field the
+        transcriber reads.
 
-        Whichever of the two the user set, the transcriber sees the result in
-        ``language`` and nothing downstream has to know both names exist. An
-        unsupported code falls back to auto-detect with a warning rather than
-        forcing Whisper into a language MEDO has no voice for.
+        Semantics: a FORCED ``language_mode`` (a real code) wins and pins
+        ``language``. ``language_mode: "auto"`` means "no override from here" —
+        so it defers to whatever ``language`` says, which is ``null`` (real
+        auto-detect) by default but is RESPECTED when the user explicitly forced
+        it (e.g. ``language: "mk"``). The earlier version keyed off
+        ``"language_mode" in model_fields_set``, but the shipped config.yaml
+        always writes ``language_mode: "auto"`` — so it silently wiped an
+        explicit ``language: "mk"`` back to auto-detect, the exact misdetection
+        the user was fixing. An unsupported code falls back to auto with a
+        warning rather than forcing a language MEDO has no voice for.
         """
         from core import languages
 
         mode = (self.language_mode or "auto").strip().lower()
+        forced_legacy = self.language if (
+            self.language and str(self.language).strip().lower() not in ("", "auto")
+        ) else None
+
         if mode in ("", "auto"):
-            # Only auto-detect if the older field didn't already force one;
-            # "auto" is the default of a field the user may never have touched.
-            if "language_mode" in self.model_fields_set:
-                self.language = None
+            # No override from language_mode: honour an explicit `language`,
+            # else auto-detect.
             self.language_mode = "auto"
+            self.language = forced_legacy
             return self
         if languages.get(mode) is None:
             logging.getLogger(__name__).warning(
                 "stt.language_mode=%r is not a language MEDO speaks — using "
                 "auto-detect. Supported: %s", mode, ", ".join(languages.codes()))
-            self.language_mode, self.language = "auto", None
+            self.language_mode, self.language = "auto", forced_legacy
             return self
         self.language_mode = mode
         self.language = mode

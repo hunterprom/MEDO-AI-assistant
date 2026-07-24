@@ -66,9 +66,9 @@ OFF_REPLY_MK = ("Лав мод е исклучен — кажи „лав мод
 # consume the WHOLE word ("keylog\w*", not "keylogg") or the trailing \b fails
 # mid-word ("keylogg" + "er" has no boundary between them).
 _OFFENSIVE = re.compile(
-    r"\b(exploit\w*|malware|keylog\w*|ransomware|rootkit|backdoor|payload|"
-    r"metasploit|reverse\s+shell|brute[\s-]?force|crack\w*|"
-    r"password\s+cracker|hashcat|john\s+the\s+ripper|ddos|botnet|"
+    r"\b(exploit\w*|malware|keylog\w*|ransomware|rootkit\w*|backdoor\w*|payload\w*|"
+    r"metasploit|reverse\s+shell\w*|brute[\s-]?force|crack\w*|"
+    r"password\s+cracker\w*|hashcat|john\s+the\s+ripper|ddos|botnet\w*|"
     r"privilege\s+escalat\w*|bypass\s+(?:the\s+)?(?:whitelist|safety|"
     r"confirmation|gate)|disable\s+(?:the\s+)?(?:whitelist|safety|"
     r"confirmation|firewall\s+then\s+attack))\b",
@@ -81,17 +81,29 @@ _HOSTISH = re.compile(
     r"\b(\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?"          # IPv4 / CIDR
     r"|(?:[a-z0-9-]+\.)+[a-z]{2,})\b", re.IGNORECASE)   # a dotted hostname
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "this", "my", "local"}
+# When the scan is framed as LOCAL, a domain mentioned in passing ("scan my
+# computer for connections to facebook.com") is a subject, not a target — that
+# is a legitimate local audit, not an out-of-bounds remote scan.
+_LOCAL_SCOPE = re.compile(
+    r"\b(?:my|this)\s+(?:pc|computer|machine|laptop|system|ports?|network|box)\b"
+    r"|\blocalhost\b|\bthis\s+device\b|\bmy\s+own\b", re.IGNORECASE)
+# Suffixes _HOSTISH mistakes for a TLD ("report.pdf" -> host "report.pdf").
+_FILE_SUFFIX = re.compile(
+    r"\.(?:pdf|txt|md|docx?|xlsx?|pptx?|png|jpe?g|gif|csv|zip|log|json|ya?ml|exe|dll)$",
+    re.IGNORECASE)
 
 
 def _names_remote_target(text: str) -> bool:
     """A scan verb pointed at a host that isn't clearly THIS machine."""
     if not _SCAN_VERB.search(text):
         return False
+    if _LOCAL_SCOPE.search(text):          # "scan MY computer …" — local audit
+        return False
     for m in _HOSTISH.finditer(text):
         token = m.group(1).lower()
         host = token.split("/")[0]
-        if host in _LOCAL_HOSTS:
-            continue
+        if host in _LOCAL_HOSTS or _FILE_SUFFIX.search(host):
+            continue                       # a local marker, or a filename
         try:                                   # loopback IPs are local, allow
             if ipaddress.ip_address(host).is_loopback:
                 continue
@@ -292,7 +304,8 @@ def _default_describe_pid(query: str) -> dict | None:
 
 def _safe(fn) -> bool:
     try:
-        fn(); return True
+        fn()
+        return True
     except Exception:
         return False
 

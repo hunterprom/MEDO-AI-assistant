@@ -152,9 +152,12 @@ def test_default_keeps_the_configured_language():
     assert STTConfig(language=None).language is None
 
 
-def test_auto_mode_turns_detection_on():
-    cfg = STTConfig(language="en", language_mode="auto")
-    assert cfg.language is None            # None = detect per utterance
+def test_auto_mode_defers_to_the_language_field():
+    # "auto" means "no override from language_mode": null -> detect, but an
+    # explicit language is RESPECTED (the shipped config always writes
+    # language_mode: auto, so it must not wipe a user's language: "mk").
+    assert STTConfig(language=None, language_mode="auto").language is None
+    assert STTConfig(language="mk", language_mode="auto").language == "mk"
 
 
 @pytest.mark.parametrize("code", ["ja", "mk", "de", "EN", " ko "])
@@ -164,11 +167,16 @@ def test_forcing_a_language_pins_the_decoder(code):
     assert cfg.language_mode == code.strip().lower()
 
 
+def test_language_mode_code_overrides_the_legacy_language():
+    # A real language_mode code wins over a conflicting legacy language.
+    cfg = STTConfig(language="en", language_mode="ja")
+    assert cfg.language == "ja" and cfg.language_mode == "ja"
+
+
 def test_forcing_an_unsupported_language_falls_back_to_auto():
-    # Whisper knows Welsh; MEDO has no voice for it, so forcing it would give
-    # you a transcript you can't be answered in. Auto-detect is the honest
-    # fallback (and it warns).
-    cfg = STTConfig(language="en", language_mode="cy")
+    # Whisper knows Welsh; MEDO has no voice for it, so an unsupported code
+    # falls back to auto (deferring to the language field, which is null here).
+    cfg = STTConfig(language=None, language_mode="cy")
     assert cfg.language_mode == "auto" and cfg.language is None
 
 

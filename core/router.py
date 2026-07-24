@@ -25,7 +25,7 @@ from core.metrics import MetricsStore
 from core.safety import is_affirmative, is_negative
 from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
-from llm.tools import build_tools, dispatch_tool
+from llm.tools import build_tools, coerce_args, dispatch_tool
 
 #: A query "needs live info" (search the web, current events) when it trips one
 #: of these. Used only to decide whether to borrow the tool-brain — a false
@@ -134,6 +134,10 @@ class Router:
         #: question is treated as a follow-up that may also need live info even
         #: if it trips no keyword of its own ("is Macedonia on that list?").
         self._last_live_info = False
+        #: Set within a turn when a live-info tool (web_search…) runs on the LLM
+        #: path, so the follow-up chain survives web_search's skill_name-less
+        #: synthesis result. Reset at the top of every route().
+        self._turn_used_live_info = False
         #: Active model for the LLM path; set by the app / model picker.
         self.model: str | None = settings.llm.default_model
         #: Routing tallies (this session) + persisted per-request metrics that
@@ -188,6 +192,11 @@ class Router:
         text = text.strip()
         started = time.perf_counter()
 
+        # Capture BEFORE routing clears it: was this utterance a yes/no answering
+        # a pending confirmation? (self._pending is cleared inside _route_inner.)
+        answering_confirmation = self._pending is not None
+        self._turn_used_live_info = False
+
         # Announce the utterance so any UI (HUD) can show it, whatever the source.
         await self._bus.emit(Event(EventType.TRANSCRIPT, text))
         result = await self._route_inner(text, context or {}, on_delta)
@@ -200,16 +209,17 @@ class Router:
                 self.metrics.record, result.path.value, result.skill_name,
                 result.latency_ms,
             )
-        # Remember the turn (unless we're mid-confirmation, where the follow-up is
-        # a yes/no that shouldn't pollute conversational context).
-        if not self.awaiting_confirmation:
+        # Remember the turn, UNLESS this utterance was the yes/no that answered a
+        # pending confirmation — that's what shouldn't pollute the context. (The
+        # command that TRIGGERED a confirmation is recorded; the "yes" is not.)
+        if not answering_confirmation:
             self.conversation.add_turn(text, result.speech)
-        # Track whether this turn produced live/online info, so the NEXT question
-        # can be recognised as a follow-up that also needs it. Only genuine
-        # live-info skills set it; a normal chat reply clears it, so the chain
-        # ends as soon as the conversation moves on.
-        if not self.awaiting_confirmation:
-            self._last_live_info = result.skill_name in LIVE_INFO_SKILLS
+            # Track whether this turn produced live/online info, so the NEXT
+            # question can be recognised as a follow-up that also needs it. Set
+            # by a live-info skill OR a live-info tool used on the LLM path
+            # (web_search synthesizes, so its RouteResult carries no skill_name).
+            self._last_live_info = (result.skill_name in LIVE_INFO_SKILLS
+                                    or self._turn_used_live_info)
         logger.info(
             "[%s] %s (%.0f ms)%s",
             result.path.value,
@@ -449,6 +459,9 @@ class Router:
             name = fn.get("name", "")
             args = fn.get("arguments") or {}
             gated_skill = self._registry.get(name)
+            # Coerce string-typed args now, so a stashed confirmation request
+            # (re-executed on "yes") carries clean args too — not just dispatch.
+            args = coerce_args(gated_skill, args)
             if (gated_skill is not None and gated_skill.controls_pc
                     and not self._settings.safety.pc_control_enabled):
                 # Belt to the tool-filter's braces: even a hallucinated call
@@ -466,6 +479,10 @@ class Router:
                     self._pending = (skill, request)
                 return RouteResult(path=RoutePath.LLM, speech=result.speech, skill_name=name)
 
+            if name in LIVE_INFO_SKILLS:
+                # web_search answers via synthesis (no skill_name on the final
+                # RouteResult), so flag it here or the follow-up chain breaks.
+                self._turn_used_live_info = True
             messages.append({"role": "tool", "name": name, "content": result.speech})
             if name in SYNTHESIS_TOOLS:
                 needs_synthesis = True

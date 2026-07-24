@@ -2497,9 +2497,12 @@
     function fit() {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
       const w = stage.clientWidth, h = stage.clientHeight;
-      cv.width = Math.max(1, Math.round(w * dpr));
-      cv.height = Math.max(1, Math.round(h * dpr));
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const cw = Math.max(1, Math.round(w * dpr)), ch = Math.max(1, Math.round(h * dpr));
+      // Assigning canvas.width/height RESETS the whole bitmap + context state,
+      // so only do it when the size actually changed — otherwise it's a full
+      // per-frame reset that quietly halves the frame rate.
+      if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);   // cheap; keep it every frame
       return { W: w, H: h };
     }
 
