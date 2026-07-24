@@ -360,6 +360,21 @@ class WriteInAppSkill(Skill):
                        rf"(?P<text>.+?)\s+во\s+(?P<app>{alt})\b", re.IGNORECASE),
         ]
 
+    #: Asking MEDO to COMPOSE something ("open Notepad and summarize the
+    #: Odyssey, type it out") can't be served by a literal regex capture — the
+    #: group would grab "it out, the Odysseus" and type THAT. Decline the fast
+    #: path for these so the brain writes the text first and calls this skill as
+    #: a tool with the finished prose.
+    _NEEDS_COMPOSING = re.compile(
+        r"\b(?:summari[sz]e|summary|explain|describe|translate|compose|draft|"
+        r"rewrite|paraphrase|tell\s+me\s+about|write\s+(?:me\s+)?an?\b)",
+        re.IGNORECASE)
+
+    def match(self, text: str):
+        if self._NEEDS_COMPOSING.search(text):
+            return None          # let the LLM compose, then call us as a tool
+        return super().match(text)
+
     def _resolve(self, app: str) -> str | None:
         app = app.lower().strip()
         key = app if app in self._apps else _APP_ALIASES.get(app)

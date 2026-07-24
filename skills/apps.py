@@ -79,6 +79,21 @@ class AppsSkill(Skill):
             ),
         ]
 
+    #: A launch request that ALSO asks for text to be written ("open Notepad and
+    #: summarize the Odyssey, type it out") is not a plain launch. Matching it
+    #: here answers "Opening notepad." in 9 ms and silently drops the writing —
+    #: exactly what a live transcript showed. Decline, so WriteInAppSkill takes
+    #: the literal cases and the brain composes the rest and calls it as a tool.
+    _ALSO_WRITES = re.compile(
+        r"\b(?:write|type|typing|put|jot|summari[sz]e|summary|explain|describe|"
+        r"translate|compose|draft|paraphrase"
+        r"|напиши|искуцај|запиши|сумирај)\b", re.IGNORECASE)
+
+    def match(self, text: str):
+        if self._ALSO_WRITES.search(text):
+            return None
+        return super().match(text)
+
     def _resolve_key(self, app: str) -> str | None:
         app = app.lower().strip()
         if app in self._apps:

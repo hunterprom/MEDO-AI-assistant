@@ -275,6 +275,15 @@ def build_registry(
     registry.register(RememberFactSkill(facts))
     # Window actions before apps: "close the window" is not "close <app>".
     registry.register(WindowActionSkill())
+    # "open notepad AND type this in notepad" has to beat AppsSkill, which
+    # matches the leading "open notepad" and stops at launching it — dropping
+    # the typing half of the request silently (live transcript: MEDO answered
+    # "Opening notepad." and wrote nothing). WriteInApp only claims utterances
+    # that ALSO carry a write verb naming a configured app, so a bare
+    # "open notepad" still falls straight through to AppsSkill below.
+    from skills.file_edit import WriteInAppSkill
+
+    registry.register(WriteInAppSkill(apps_table))
     registry.register(AppsSkill(apps_table))
     # Websites right after apps: "open chrome" stays an app launch, while
     # "open tinkercad.com" (dotted) opens the browser — before FilesSkill so
@@ -345,17 +354,13 @@ def build_registry(
     # Editing before finding: "edit notes.md" is a specific action, while
     # FilesSkill's verbs (find/search/open) don't overlap with it. Both are
     # confined to the same whitelist.
-    from skills.file_edit import (
-        FileEditSkill,
-        OpenInEditorSkill,
-        WriteInAppSkill,
-    )
+    from skills.file_edit import FileEditSkill, OpenInEditorSkill
 
-    # "write this in notepad" first: its target is a closed set of configured
-    # apps, so it only claims utterances naming one. Otherwise FileEditSkill
-    # reads "напиши го ова во нотепад" as a write to a FILE called "нотепад",
-    # and TypeTextSkill's bare "type …" swallows the app name into the text.
-    registry.register(WriteInAppSkill(apps_table))
+    # (WriteInAppSkill is registered further up, ahead of AppsSkill — it has to
+    # win "open notepad and type this in notepad". It still comes before the two
+    # below: otherwise FileEditSkill reads "напиши го ова во нотепад" as a write
+    # to a FILE called "нотепад", and TypeTextSkill's bare "type …" would
+    # swallow the app name into the text.)
     registry.register(FileEditSkill(whitelist))
     registry.register(OpenInEditorSkill(whitelist, apps_table))
     registry.register(FilesSkill(whitelist))
