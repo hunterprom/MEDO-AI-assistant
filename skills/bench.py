@@ -206,8 +206,12 @@ class BenchSkill(Skill):
 
         # Inventory recall needs no camera — works even with the bench disabled.
         gd = request.match.groupdict() if request.match else {}
-        query = (request.args.get("query") or gd.get("query") or "").strip(" ?.!")
-        if query and "do i have" in text:
+        query = str(request.args.get("query") or gd.get("query") or "").strip(" ?.!")
+        # A `query` arg from the LLM tool means "search the inventory" (the
+        # synthesized text has no "do i have"); the fast path still keys off the
+        # spoken phrase.
+        from_tool = bool(request.args.get("query"))
+        if query and (from_tool or "do i have" in text):
             hits = await asyncio.to_thread(self._inventory.search, query)
             if not hits:
                 return SkillResult(f"Nothing in the bench inventory matches {query}.")

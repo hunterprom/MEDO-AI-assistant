@@ -1255,11 +1255,17 @@
     catch { box.innerHTML = '<div class="sr-loading">web search offline</div>'; return; }
     const results = data.results || [];
     $('sr-web-count').textContent = `(${results.length})`;
-    if (!results.length) { box.innerHTML = `<div class="sr-empty">${data.error || 'no web results'}</div>`; return; }
+    if (!results.length) {
+      const empty = document.createElement('div'); empty.className = 'sr-empty';
+      empty.textContent = data.error || 'no web results';   // textContent, never innerHTML (XSS)
+      box.innerHTML = ''; box.appendChild(empty); return;
+    }
     box.innerHTML = '';
     for (const r of results) {
       const a = document.createElement('a');
-      a.className = 'sr-item'; a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      // Only http(s) hrefs — a javascript:/data: URL in a result must not become live.
+      a.className = 'sr-item'; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.href = /^https?:\/\//i.test(r.url || '') ? r.url : '#';
       const nm = document.createElement('span'); nm.className = 'sr-name'; nm.textContent = `🌐 ${r.title || r.url}`;
       const sn = document.createElement('span'); sn.className = 'sr-snip'; sn.textContent = r.snippet || '';
       const pt = document.createElement('span'); pt.className = 'sr-path'; pt.textContent = r.url;
@@ -1316,7 +1322,11 @@
 
   /* ---- subsystems: vision feed, pointer, scanlines ---- */
   const camImg = $('cam-img'), camOff = $('cam-off');
-  let camWanted = localStorage.getItem('medo_camfeed') !== 'off' && !!CFG.visionEnabled;
+  // Guard localStorage: blocked cookies / some private modes throw SecurityError
+  // on access, and an unguarded read here would abort the whole IIFE (dead HUD).
+  function lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+  function lsSet(key, val) { try { localStorage.setItem(key, val); } catch { } }
+  let camWanted = lsGet('medo_camfeed') !== 'off' && !!CFG.visionEnabled;
   function applyCam() {
     $('optical').classList.toggle('hidden', !camWanted);
     $('cfg-cam').classList.toggle('on', camWanted);
@@ -1503,7 +1513,7 @@
     const sel = document.getElementById('cfg-uilang');
     if (!sel) return;
     let saved = 'en';
-    try { saved = localStorage.getItem('medo-ui-lang') || CONFIG.uiLanguage || 'en'; } catch { }
+    try { saved = localStorage.getItem('medo-ui-lang') || CFG.uiLanguage || 'en'; } catch { saved = CFG.uiLanguage || 'en'; }
     sel.value = I18N[saved] ? saved : 'en';
     applyLanguage(sel.value);
     sel.onchange = () => { applyLanguage(sel.value); log('UI LANGUAGE -> ' + sel.value.toUpperCase()); };
@@ -1698,7 +1708,7 @@
   function markActive(id) {
     for (const el of swWrap.querySelectorAll('.swatch')) el.classList.toggle('active', el.dataset.id === id);
   }
-  function applyTheme(t) { applyThemeFilter(t.hue, t.sat, t.gray); markActive(t.id); localStorage.setItem('medo_theme', JSON.stringify(t)); }
+  function applyTheme(t) { applyThemeFilter(t.hue, t.sat, t.gray); markActive(t.id); lsSet('medo_theme', JSON.stringify(t)); }
   for (const t of THEMES) {
     const b = document.createElement('button');
     b.className = 'swatch'; b.dataset.id = t.id; b.title = t.id.toUpperCase();
@@ -2003,13 +2013,14 @@
     const list = $('link-list');
     try {
       const d = await (await fetch(`${API}/link/devices`)).json();
+      const devices = d.devices || [];   // tolerate {} / an error object (was: TypeError)
       list.innerHTML = '';
-      if (!d.devices.length) {
+      if (!devices.length) {
         $('link-desc').textContent = 'NO DEVICES REGISTERED · EXPERIMENTAL ESP32 / RPI SDK';
         return;
       }
-      $('link-desc').textContent = `${d.devices.length} REGISTERED · EXPERIMENTAL`;
-      for (const dev of d.devices) {
+      $('link-desc').textContent = `${devices.length} REGISTERED · EXPERIMENTAL`;
+      for (const dev of devices) {
         const row = document.createElement('div');
         row.className = 'setting';
         row.innerHTML = '<div class="info"><span class="name"></span><span class="desc"></span></div>';

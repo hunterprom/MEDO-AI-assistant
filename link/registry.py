@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 _DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 _CAP_NAME = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
+#: Heuristic for a catastrophic-backtracking regex: a quantifier INSIDE a group
+#: that is itself quantified — (a+)+, (a*)*, (.+)*. Not exhaustive, but it
+#: rejects the classic ReDoS shapes a device manifest could smuggle in.
+_REDOS = re.compile(r"\([^()]*[+*][^()]*\)[+*]")
 TRANSPORTS = ("http_poll", "websocket")
 
 #: A device is offline when it hasn't polled/connected for this long.
@@ -75,6 +79,7 @@ def validate_manifest(data: Any) -> list[str]:
     if not isinstance(caps, list) or not (1 <= len(caps) <= 32):
         errors.append("capabilities must be a list of 1-32 entries")
         caps = []
+    seen_names: set[str] = set()
     for i, cap in enumerate(caps):
         where = f"capabilities[{i}]"
         if not isinstance(cap, dict):
@@ -83,16 +88,42 @@ def validate_manifest(data: Any) -> list[str]:
         cname = cap.get("name")
         if not isinstance(cname, str) or not _CAP_NAME.match(cname):
             errors.append(f"{where}.name must match ^[a-z0-9][a-z0-9_]{{0,31}}$")
+        elif cname in seen_names:
+            # Duplicate names -> two skills with the same id; the second
+            # register() raises ValueError mid-install, leaving inconsistent
+            # state. Reject up front.
+            errors.append(f"{where}.name {cname!r} is a duplicate in this manifest")
+        elif isinstance(cname, str):
+            seen_names.add(cname)
         desc = cap.get("description")
         if not isinstance(desc, str) or not (1 <= len(desc) <= 300):
             errors.append(f"{where}.description must be a 1-300 char string")
         params = cap.get("params", {})
         if not isinstance(params, dict):
             errors.append(f"{where}.params must be an object")
-        for pat in cap.get("fast_patterns", []) or []:
+        pats = cap.get("fast_patterns", []) or []
+        if not isinstance(pats, list):
+            errors.append(f"{where}.fast_patterns must be a list")
+            pats = []
+        if len(pats) > 8:                            # schema maxItems: 8
+            errors.append(f"{where}.fast_patterns allows at most 8 patterns")
+        for pat in pats:
+            if not isinstance(pat, str):
+                errors.append(f"{where}.fast_patterns entries must be strings")
+                continue
+            if len(pat) > 120:                       # a fast-path regex is short
+                errors.append(f"{where}.fast_patterns entry is too long (max 120 chars)")
+                continue
+            if _REDOS.search(pat):
+                # A nested quantifier ((a+)+) can hang the router for minutes on
+                # one utterance — a trivial DoS from one manifest field.
+                errors.append(
+                    f"{where}.fast_patterns {pat!r} has a nested quantifier "
+                    f"(catastrophic-backtracking risk) — rewrite it")
+                continue
             try:
                 re.compile(pat, re.IGNORECASE)
-            except re.error as exc:
+            except (re.error, TypeError) as exc:
                 errors.append(f"{where}.fast_patterns {pat!r} is not a regex: {exc}")
         if not isinstance(cap.get("requires_confirmation", False), bool):
             errors.append(f"{where}.requires_confirmation must be a boolean")
@@ -209,9 +240,11 @@ class LinkRegistry:
     def _install(self, manifest: dict) -> None:
         device_id = manifest["device_id"]
         # Re-registration replaces: drop this device's previous skills first.
+        # Match on the OWNING device, not a name prefix — else device "robo_dog"
+        # would clobber device "robo"'s "robo_dog_sit" skill (prefix collision).
         for skill in list(self._skills.all()):
             if isinstance(skill, DeviceCapabilitySkill) \
-                    and skill.name.startswith(f"{device_id}_"):
+                    and skill._device_id == device_id:
                 self._skills.unregister(skill.name)
         self._manifests[device_id] = manifest
         self._state.setdefault(device_id, _DeviceState())

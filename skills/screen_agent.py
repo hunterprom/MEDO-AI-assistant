@@ -126,9 +126,18 @@ class ScreenAgentSkill(Skill):
                 image, (w, h) = await asyncio.to_thread(self._capture)
             except Exception as exc:
                 return SkillResult(f"I couldn't capture the screen: {exc}", success=False)
-            raw = await self._ask(image, task, history)
+            # Guard the model call + its reply: Ollama being down, or a reply
+            # that's a JSON array/scalar (a common LLM habit), must degrade to a
+            # spoken error, not crash the turn out of the router.
+            try:
+                raw = await self._ask(image, task, history)
+            except Exception as exc:
+                logger.warning("screen-agent vision call failed: %s", exc)
+                return SkillResult(
+                    "I couldn't reach my vision model, so I stopped — is Ollama "
+                    "running?", success=False)
             action = parse_action(raw)
-            if action is None:
+            if not isinstance(action, dict):
                 return SkillResult(
                     "I couldn't work out the next step, so I stopped.", success=False)
             kind = str(action.get("action", "")).lower()

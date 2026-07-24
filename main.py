@@ -103,6 +103,29 @@ STATE_STYLES = {
 }
 
 
+#: Long-lived background tasks are kept here so the event loop can't GC them
+#: mid-flight (the create_task footgun), and each logs its own failure instead
+#: of dying silently ("Task exception was never retrieved" only at GC).
+_BG_TASKS: set = set()
+
+
+def _spawn(coro, what: str):
+    """Fire-and-forget a background task that LOGS if it dies, and is retained."""
+    task = asyncio.ensure_future(coro)
+    _BG_TASKS.add(task)
+
+    def _done(t: "asyncio.Task") -> None:
+        _BG_TASKS.discard(t)
+        if not t.cancelled():
+            exc = t.exception()
+            if exc is not None:
+                logging.getLogger(__name__).warning(
+                    "background task %s failed: %s", what, exc, exc_info=exc)
+
+    task.add_done_callback(_done)
+    return task
+
+
 def setup_logging(level: str) -> None:
     logging.basicConfig(
         level=getattr(logging, level, logging.INFO),
@@ -661,25 +684,30 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     ui = ConsoleUI(console, bus, settings.personality.name, show_states=voice)
 
     if once is not None:
-        await respond(router, sm, ui, log, once)
+        # Even a one-shot must unwind the MCP servers it connected above —
+        # otherwise every `--once` orphans their subprocesses (not reaped on
+        # Windows), leaking a process per invocation.
+        try:
+            await respond(router, sm, ui, log, once)
+        finally:
+            await mcp_manager.stop()
         return
 
     # Preload the local model in the background: a cold 30B costs ~27 s on the
     # first question otherwise, which users read as "it doesn't answer".
     if settings.llm.provider == "ollama" and router.model:
-        asyncio.create_task(llm.warmup(router.model))
+        _spawn(llm.warmup(router.model), "model warmup")
     # Index the user's documents in the background so "what do my documents
     # say about X" has something to search (incremental; skips unchanged files).
     if doc_index is not None:
-        asyncio.create_task(asyncio.to_thread(doc_index.reindex))
+        _spawn(asyncio.to_thread(doc_index.reindex), "document reindex")
     # Proactive routines (morning briefing etc.): answers are announced —
     # spoken in voice mode, printed otherwise, visible in the HUD either way.
     if settings.routines:
         from core.routines import RoutineScheduler
 
-        asyncio.create_task(
-            RoutineScheduler(settings.routines, router, announcer).run_forever()
-        )
+        _spawn(RoutineScheduler(settings.routines, router, announcer).run_forever(),
+               "routine scheduler")
 
     # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
     # returns immediately — so you can start a turn from the HUD without saying
@@ -722,6 +750,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
                 f"[yellow]Close the old MEDO window (or re-run run.bat, which "
                 f"now replaces it automatically) and try again.[/yellow]"
             )
+            await mcp_manager.stop()   # unwind the servers we connected above
             return
         console.print(
             f"[dim]Companion API on port {settings.remote.port} — "

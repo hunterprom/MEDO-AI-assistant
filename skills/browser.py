@@ -339,6 +339,13 @@ def browser_opener(session: BrowserSession):
         try:
             await session.goto(url)
             return True
+        except BrowserBlocked:
+            # A blocked host must NOT leak to the system browser, which has no
+            # block check — enforcing the blocklist is the whole point. Report
+            # failure instead of falling back (that fallback is only for a
+            # browser that can't START).
+            logger.info("refused a blocked host; not falling back to the system browser")
+            return False
         except Exception as exc:
             logger.warning("controlled browser failed (%s) — using system browser", exc)
             import webbrowser

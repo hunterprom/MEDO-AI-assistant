@@ -59,8 +59,12 @@ class RoutineScheduler:
                     ", ".join(f"{r.name} @ {r.at}" for r in self._routines))
         while True:
             now = datetime.now()
+            # key on the delay ONLY: two routines sharing a next-fire time would
+            # otherwise tie and fall through to comparing RoutineItem objects,
+            # which aren't orderable -> TypeError kills this whole task silently.
             delay, routine = min(
-                (seconds_until(r.at, r.days, now), r) for r in self._routines
+                ((seconds_until(r.at, r.days, now), r) for r in self._routines),
+                key=lambda pair: pair[0],
             )
             await asyncio.sleep(delay + 1.0)
             await self.fire(routine)
