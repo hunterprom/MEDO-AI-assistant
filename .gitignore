@@ -46,3 +46,5 @@ medo.log
 medo.err.log
 vision.log
 vision.err.log
+# Wake-word debug captures — recordings of your own voice/room. Never commit.
+logs/

@@ -27,6 +27,10 @@ class DocumentsSkill(Skill):
         "and quote what they say. Use for questions about the user's files, "
         "contracts, notes, papers."
     )
+    routing_phrases = [
+        "what do my notes say about", "find it in my documents",
+        "search my files for", "look through my pdfs for", "what did I write about",
+    ]
 
     patterns = [
         re.compile(r"\b(?:search|look\s+in|check)\s+my\s+(?:documents|docs|notes|files)\s+(?:for\s+)?(?P<q>.+)", re.IGNORECASE),

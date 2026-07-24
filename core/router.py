@@ -35,9 +35,33 @@ _LIVE_INFO_RE = re.compile(
     r"recent(?:ly)?|happening|search|look\s+up|google|online|internet|"
     r"who\s+(?:is|are|won|winning)|when\s+(?:is|does|did)|score|prices?|stocks?|"
     r"weather|forecast|release[ds]?|this\s+(?:week|month|year)|"
-    r"вест\w*|новост\w*|најнов\w*|што\s+се\s+случува|пребар\w*|на\s+интернет)\b",
+    r"tariff\w*|sanction\w*|election\w*|inflation|gdp|market\w*|"
+    r"вест\w*|новост\w*|најнов\w*|што\s+се\s+случува|пребар\w*|"
+    r"царин\w*|санкц\w*|на\s+интернет)\b",
     re.IGNORECASE,
 )
+
+#: Skills whose answer is live/online info. When one of these fires, the NEXT
+#: question is treated as a follow-up that may also need live info — so
+#: "is Macedonia on that tariff list?" right after the news reaches the
+#: tool-brain even though it trips no keyword of its own.
+LIVE_INFO_SKILLS = frozenset({
+    "news", "weather", "briefing", "web_search", "web_fetch",
+})
+
+#: A follow-up worth chaining onto the previous live-info turn: a question, or a
+#: continuation. Liberal on purpose — a false positive only borrows the (local)
+#: tool-brain for one turn, it never changes the answer.
+_FOLLOWUP_RE = re.compile(
+    r"^\s*(?:and|also|but|what|which|who|whom|whose|where|when|why|how|is|are|"
+    r"was|were|do|does|did|can|could|would|will|should|has|have|had|any|is\s+"
+    r"there|other|more|about|tell|дали|што|кој|каде|кога|зошто|како|а)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_followup_question(text: str) -> bool:
+    return "?" in text or bool(_FOLLOWUP_RE.search(text))
 from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: How many tool rounds before we force a final text answer (loop guard).
@@ -106,6 +130,10 @@ class Router:
         #: Lazily-built local Ollama client used to answer live-info queries when
         #: the selected brain is a CLI agent that can't use MEDO's tools.
         self._tool_brain: OllamaClient | None = None
+        #: True right after a live-info turn (news/weather/web…), so the next
+        #: question is treated as a follow-up that may also need live info even
+        #: if it trips no keyword of its own ("is Macedonia on that list?").
+        self._last_live_info = False
         #: Active model for the LLM path; set by the app / model picker.
         self.model: str | None = settings.llm.default_model
         #: Routing tallies (this session) + persisted per-request metrics that
@@ -176,6 +204,12 @@ class Router:
         # a yes/no that shouldn't pollute conversational context).
         if not self.awaiting_confirmation:
             self.conversation.add_turn(text, result.speech)
+        # Track whether this turn produced live/online info, so the NEXT question
+        # can be recognised as a follow-up that also needs it. Only genuine
+        # live-info skills set it; a normal chat reply clears it, so the chain
+        # ends as soon as the conversation moves on.
+        if not self.awaiting_confirmation:
+            self._last_live_info = result.skill_name in LIVE_INFO_SKILLS
         logger.info(
             "[%s] %s (%.0f ms)%s",
             result.path.value,
@@ -281,13 +315,26 @@ class Router:
         goes to the model you picked, and MEDO 'returns' to it automatically.
         """
         if (self._settings.llm.provider in CLI_PROVIDERS
-                and _LIVE_INFO_RE.search(text)):
+                and self._wants_live_info(text)):
             tb = self._tool_brain_client()
             if tb is not None and tb.is_available():
                 logger.info("auto tool-brain: %r needs live info -> %s",
                             text, self._settings.llm.tool_brain_model)
                 return tb, self._settings.llm.tool_brain_model, True
         return self._llm, self.model, False
+
+    def _wants_live_info(self, text: str) -> bool:
+        """Whether this turn likely needs live/online info the CLI agent can't get.
+
+        Either the query itself trips the keywords, OR it's a follow-up question
+        right after a live-info answer — the case that made "is Macedonia on the
+        tariff list?" (after the news) deflect with "grant me web access", because
+        it names no keyword of its own. A false positive only borrows the local
+        tool-brain for one turn; it never changes the answer.
+        """
+        if _LIVE_INFO_RE.search(text):
+            return True
+        return self._last_live_info and _is_followup_question(text)
 
     @property
     def _offline_reply(self) -> str:
@@ -429,3 +476,66 @@ class Router:
         if not needs_synthesis and direct:
             return RouteResult(path=RoutePath.LLM, speech=" ".join(direct), skill_name=used_skill)
         return None
+
+
+# --- M2.5a: build/inspect the semantic route index from the CLI --------------
+
+def build_route_index(settings=None):
+    """Construct a SkillRouteIndex over the live registry and build it.
+
+    Reuses the same local embedder as facts/RAG (memory.embed_model on the
+    Ollama host). Returns (index, report). Used by ``--index`` and by the app
+    later; kept here so the sidecar/tests share one construction path.
+    """
+    from core.config import load_settings
+    from core.embeddings import embed_texts
+    from core.route_index import SkillRouteIndex
+
+    settings = settings or load_settings()
+    model, host = settings.memory.embed_model, settings.llm.host
+    # Generous timeout: this is a one-time batched startup build, and the first
+    # call also pays for the embed model loading into Ollama. Per-utterance
+    # query embedding (M2.5b) uses the default short timeout instead.
+    embedder = (lambda texts: embed_texts(texts, model, host, timeout=60.0)) \
+        if model else None
+    # build_registry lives in main; import lazily to avoid a heavy import here.
+    from main import Announcer, build_registry
+
+    registry = build_registry(settings, Announcer())
+    index = SkillRouteIndex(settings.memory.db_path, embedder, model or "none")
+    report = index.build(registry.all())
+    index.prune(s.name for s in registry.all())
+    return index, report
+
+
+def _print_index_report(report) -> None:
+    print(f"\nSemantic route index — embedder: "
+          f"{'enabled' if report.enabled else 'UNAVAILABLE (Ollama/model down)'}\n")
+    print(f"  {'SKILL':24} {'PHRASES':>7}  STATUS")
+    print("  " + "-" * 44)
+    for row in report.rows:
+        print(f"  {row.skill:24} {row.phrases:>7}  {row.status}")
+    print(f"\n  {len(report.rows)} skills · {report.cached} cached · "
+          f"{report.fresh} fresh · {report.skipped} skipped\n")
+
+
+def _main(argv=None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="python -m core.router",
+                                     description="MEDO router tools (M2.5)")
+    parser.add_argument("--index", action="store_true",
+                        help="(re)build and print the semantic skill index")
+    args = parser.parse_args(argv)
+    if args.index:
+        _, report = build_route_index()
+        _print_index_report(report)
+        return 0
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(_main())

@@ -47,10 +47,18 @@ class HudServer:
 
     # -- lifecycle ----------------------------------------------------------
 
-    async def start(self) -> None:
+    def build_app(self) -> web.Application:
+        """The aiohttp app — separated so routes can be tested without a socket."""
         app = web.Application()
         app.router.add_get("/", self._index)
         app.router.add_get("/events", self._events)
+        # Live capability map for the orb (M21). Same origin as the HUD page,
+        # so no CORS/token dance; the registry is already in hand.
+        app.router.add_get("/capabilities", self._capabilities)
+        return app
+
+    async def start(self) -> None:
+        app = self.build_app()
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         host, port = self._settings.hud.host, self._settings.hud.port
@@ -106,6 +114,26 @@ class HudServer:
         }
         html = html.replace("__MEDO_CONFIG__", json.dumps(page_config))
         return web.Response(text=html, content_type="text/html")
+
+    async def _capabilities(self, request: web.Request) -> web.Response:
+        """GET /capabilities — the live capability map (agents + skills) the orb
+        maps onto nodes (M21). Built from the same registry as the fast path, so
+        it stays truthful; plugins and MEDO Link devices appear automatically."""
+        if self._registry is None:
+            return web.json_response({"agents": [], "skillIndex": {}})
+        try:
+            from core.agents import capabilities_feed
+            from core.council import enabled_council, load_council
+
+            council = enabled_council(
+                load_council(self._settings.council.extra),
+                self._settings.council.disabled,
+            )
+            feed = capabilities_feed(self._registry, council)
+        except Exception:
+            logger.warning("could not build the capabilities feed", exc_info=True)
+            feed = {"agents": [], "skillIndex": {}}
+        return web.json_response(feed)
 
     def _agent_graph(self) -> dict:
         """The cluster-view graph, or an empty one when there's no registry.

@@ -6,6 +6,7 @@ import threading
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from core.config import load_settings
 from core.metrics import LatencyLog
@@ -215,3 +216,53 @@ def test_missing_custom_model_falls_back_to_bundled(tmp_path, monkeypatch):
     )
     resolved = ww._resolve_model_path(str(tmp_path / "hey_medo.onnx"))  # missing
     assert resolved == "/bundled/hey_jarvis_v0.1.onnx"
+
+
+# --- STT wake-confirm: verify the WORDS, kill loud-noise triggers -------------
+
+from voice.wakeword import wake_phrase_confirmed  # noqa: E402
+
+
+@pytest.mark.parametrize("text", [
+    "hey medo", "hey medo what time is it", "medo", "Hey, Medo!",
+    "hey meadow", "hey medoh", "медо",
+])
+def test_wake_confirm_accepts_a_real_wake(text):
+    assert wake_phrase_confirmed(text, "models/wakeword/hey_medo.onnx") is True
+
+
+@pytest.mark.parametrize("text", [
+    "", "   ", "you", "thanks for watching", "let me go", "hello there",
+    "the meeting is at ten",
+])
+def test_wake_confirm_rejects_noise_and_unrelated_speech(text):
+    # empty = non-speech (door slam / music / clap); the rest lack the phrase.
+    assert wake_phrase_confirmed(text, "models/wakeword/hey_medo.onnx") is False
+
+
+def test_wake_confirm_uses_the_configured_phrase():
+    assert wake_phrase_confirmed("hey jarvis", "hey_jarvis") is True
+    assert wake_phrase_confirmed("hey medo", "hey_jarvis") is False
+
+
+def test_confirm_wake_fails_open_when_stt_errors():
+    loop = _make_loop()
+    class _Boom:
+        def transcribe(self, audio):
+            raise RuntimeError("stt down")
+    loop._stt = _Boom()
+    # a broken transcriber must not make MEDO unwakeable
+    assert loop._confirm_wake(np.zeros(1280, dtype=np.int16)) is True
+
+
+def test_confirm_wake_rejects_when_transcript_lacks_the_phrase():
+    loop = _make_loop()
+    class _Stt:
+        def transcribe(self, audio):
+            return "just some background chatter"
+    loop._stt = _Stt()
+    assert loop._confirm_wake(np.zeros(1280, dtype=np.int16)) is False
+
+
+def test_default_stt_confirm_is_on():
+    assert load_settings().wakeword.stt_confirm is True

@@ -270,10 +270,11 @@ class SpheresConfig(BaseModel):
     """
 
     enabled: bool = True
-    #: ``high`` draws glow, orbit trails and dust; ``low`` drops them for a
-    #: flat, cheap render on weak GPUs. The HUD also auto-drops to low if it
-    #: measures a slow first frame, so this is the ceiling, not a promise.
-    quality: Literal["low", "high"] = "high"
+    #: Each cluster sphere renders as a rotating cosmic-web (nodes + filaments +
+    #: dust). ``high`` = full dust shell + glow sprites; ``medium`` = fewer dust
+    #: particles; ``low`` = no dust and slower rotation, for weak GPUs. This is
+    #: the ceiling — the HUD may still drop lower if it measures a slow frame.
+    quality: Literal["low", "medium", "high"] = "high"
 
 
 class UIConfig(BaseModel):
@@ -407,6 +408,23 @@ class WakeWordConfig(BaseModel):
     #: clatter are ignored outright. Needs openWakeWord's VAD model available;
     #: if it can't load, MEDO logs a warning and runs without it.
     vad_threshold: float = 0.0
+    #: DIAGNOSIS mode (off by default). When on, EVERY wake activation — real or
+    #: false — is logged (time, score, audio RMS) and the ~1.5 s buffer that
+    #: triggered it is saved to logs/wake_captures/ as a .wav. Turn on, slam
+    #: some doors and say the wake word for a day, then run
+    #: ``python -m voice.wakeword --report`` to see where the noise scores vs
+    #: the real wake word — so the threshold is set from data, not guessed.
+    #: The captures are your own voice: logs/ is git-ignored.
+    debug_capture: bool = False
+    #: STRONGEST loud-noise defence, on by default. After the score crosses the
+    #: threshold, MEDO re-transcribes the ~1.5 s that triggered it and only
+    #: actually wakes if the wake phrase is really in the audio. A door slam,
+    #: music or a clap transcribes to nothing, so it is discarded silently —
+    #: this verifies WORDS, not just a score, which is what a loud transient
+    #: can't fake. Cost: one short STT pass per trigger (only on triggers). Set
+    #: false only if a genuine "hey medo" is being wrongly rejected; then tune
+    #: threshold/vad from the --report data instead.
+    stt_confirm: bool = True
 
 
 class AudioConfig(BaseModel):

@@ -895,7 +895,44 @@
 <script>
 (() => {
   'use strict';
-  const CFG = __MEDO_CONFIG__;
+  // Server injects __MEDO_CONFIG__; fall back to a demo config so the page
+  // still runs (and the CLUSTER spheres render) when opened standalone.
+  const CFG = (typeof __MEDO_CONFIG__ !== 'undefined') ? __MEDO_CONFIG__ : {
+    apiPort: 8765, streamPort: 8766,
+    dirs: [],
+    ui: { spheres: { quality: 'high' } },
+    agents: { skillDomain: {}, spheres: [
+      { key: 'experts',   label: 'Council',   stars: [
+        { label: 'Architect', skill: 'council.architect', controlsPc: false },
+        { label: 'Critic',    skill: 'council.critic',    controlsPc: false },
+        { label: 'Planner',   skill: 'council.planner',   controlsPc: false } ] },
+      { key: 'vision',    label: 'Vision',    stars: [
+        { label: 'Screen OCR', skill: 'vision.ocr',    controlsPc: false },
+        { label: 'Camera',     skill: 'vision.camera', controlsPc: false } ] },
+      { key: 'web',       label: 'Web',       stars: [
+        { label: 'Search',  skill: 'web.search',  controlsPc: false },
+        { label: 'Scraper', skill: 'web.scrape',  controlsPc: false },
+        { label: 'Fetch',   skill: 'web.fetch',   controlsPc: false } ] },
+      { key: 'knowledge', label: 'Knowledge', stars: [
+        { label: 'RAG Index', skill: 'knowledge.rag',   controlsPc: false },
+        { label: 'Notes',     skill: 'knowledge.notes', controlsPc: false } ] },
+      { key: 'memory',    label: 'Memory',    stars: [
+        { label: 'Long-term', skill: 'memory.longterm', controlsPc: false },
+        { label: 'Recall',    skill: 'memory.recall',   controlsPc: false } ] },
+      { key: 'system',    label: 'System',    stars: [
+        { label: 'Shell',     skill: 'system.shell', controlsPc: true },
+        { label: 'Files',     skill: 'system.files', controlsPc: true },
+        { label: 'Processes', skill: 'system.ps',    controlsPc: true } ] },
+      { key: 'apps',      label: 'Apps',      stars: [
+        { label: 'Launcher',  skill: 'apps.launch',  controlsPc: true },
+        { label: 'Automator', skill: 'apps.auto',    controlsPc: true } ] },
+      { key: 'agenda',    label: 'Agenda',    stars: [
+        { label: 'Calendar',  skill: 'agenda.cal',   controlsPc: false },
+        { label: 'Reminders', skill: 'agenda.todo',  controlsPc: false } ] },
+      { key: 'security',  label: 'Security',  stars: [
+        { label: 'Gatekeeper', skill: 'security.gate', controlsPc: false } ] }
+    ] }
+  };
   const API = `http://${location.hostname}:${CFG.apiPort}`;
   const STREAM = `http://${location.hostname}:${CFG.streamPort}`;
 
@@ -2340,6 +2377,86 @@
       plugins:330, other:220 };
     const hueOf = k => (k in HUE) ? HUE[k] : 210;
 
+    /* cosmic-web geometry per sphere — same recipe as the CORE orb, in unit
+       space (scaled by each sphere's radius at draw time): a bright centre
+       node, satellite nodes, filament dots between them, and a dust shell. */
+    const rnd = () => Math.random() * 2 - 1;
+    const inSphere = rad => {
+      let x, y, z;
+      do { x = rnd(); y = rnd(); z = rnd(); } while (x * x + y * y + z * z > 1);
+      return { x: x * rad, y: y * rad, z: z * rad };
+    };
+    const geo = {};
+    for (const s of graph.spheres) {
+      const nodes = [{ x: 0, y: 0, z: 0, sz: 0.5, br: 1 }];
+      const n = Math.min(14, 6 + s.stars.length);
+      for (let i = 0; i < n; i++) {
+        const p = inSphere(0.25 + Math.pow(Math.random(), 0.6) * 0.75);
+        nodes.push({ ...p, sz: 0.14 + Math.random() * 0.16, br: 0.5 + Math.random() * 0.5 });
+      }
+      const fil = [];
+      const addFil = (a, b) => {
+        const steps = 10 + Math.floor(Math.random() * 6);
+        const bend = { x: rnd() * 0.22, y: rnd() * 0.22, z: rnd() * 0.22 };
+        for (let k = 1; k < steps; k++) {
+          const u = k / steps, w = Math.sin(u * Math.PI);
+          fil.push({
+            x: a.x + (b.x - a.x) * u + bend.x * w + rnd() * 0.02,
+            y: a.y + (b.y - a.y) * u + bend.y * w + rnd() * 0.02,
+            z: a.z + (b.z - a.z) * u + bend.z * w + rnd() * 0.02,
+            tw: Math.random() * Math.PI * 2, sz: 0.03 + Math.random() * 0.04,
+          });
+        }
+      };
+      for (let i = 1; i < nodes.length; i++) {
+        const a = nodes[i];
+        let bj = 0, bd = 9;
+        for (let j = 1; j < nodes.length; j++) {
+          if (j === i) continue;
+          const d = (nodes[j].x - a.x) ** 2 + (nodes[j].y - a.y) ** 2 + (nodes[j].z - a.z) ** 2;
+          if (d < bd) { bd = d; bj = j; }
+        }
+        addFil(a, nodes[bj]);
+        if (Math.random() < 0.5) addFil(a, nodes[0]);
+      }
+      const dust = [];
+      const dustN = quality === 'low' ? 0 : (quality === 'medium' ? 60 : 110);
+      for (let i = 0; i < dustN; i++) {
+        const p = inSphere(1.05);
+        dust.push({ ...p, tw: Math.random() * Math.PI * 2, sz: 0.02 + Math.random() * 0.03 });
+      }
+      geo[s.key] = { nodes, fil, dust, spin: Math.random() * Math.PI * 2,
+        tilt: 0.3 + Math.random() * 0.35, speed: 0.22 + Math.random() * 0.18 };
+    }
+    const rot3 = (p, cosY, sinY, cosX, sinX) => {
+      const x = p.x * cosY + p.z * sinY;
+      let z = -p.x * sinY + p.z * cosY;
+      const y = p.y * cosX - z * sinX;
+      z = p.y * sinX + z * cosX;
+      return { x, y, z };
+    };
+    // tinted glow sprite per hue (one radial gradient, stamped with drawImage)
+    const spriteCache = {};
+    function spriteFor(h) {
+      if (spriteCache[h]) return spriteCache[h];
+      const c = document.createElement('canvas'); c.width = c.height = 64;
+      const g2 = c.getContext('2d');
+      const sg = g2.createRadialGradient(32, 32, 0, 32, 32, 32);
+      sg.addColorStop(0, `hsla(${h},100%,93%,1)`);
+      sg.addColorStop(0.35, `hsla(${h},95%,62%,.5)`);
+      sg.addColorStop(1, `hsla(${h},90%,40%,0)`);
+      g2.fillStyle = sg; g2.fillRect(0, 0, 64, 64);
+      return spriteCache[h] = c;
+    }
+    // quantized alpha -> hsla fillStyle tables (avoids per-particle string churn)
+    const styleTbl = {};
+    const styleOf = (h, sat, li) => {
+      const k = h + '/' + sat + '/' + li;
+      const tbl = styleTbl[k] || (styleTbl[k] = []);
+      return q => tbl[q] || (tbl[q] = `hsla(${h},${sat}%,${li}%,${(q / 255).toFixed(3)})`);
+    };
+    const q255 = a => a >= 1 ? 255 : a <= 0 ? 0 : (a * 255) | 0;
+
     // per-domain runtime state (flare = recently fired)
     const state = {};
     for (const s of graph.spheres) state[s.key] = { flare: 0, status: 'idle' };
@@ -2391,24 +2508,47 @@
       const lit = st.flare > 0;
       const err = st.status === 'error';
       const base = err ? 0 : hue;
-      // halo
-      if (quality !== 'low') {
-        const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 1.7);
-        halo.addColorStop(0, `hsla(${base},90%,60%,${lit ? .22 : .10})`);
-        halo.addColorStop(1, 'hsla(0,0%,0%,0)');
-        ctx.fillStyle = halo; ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r * 1.7, 0, 7); ctx.fill();
+      const g = geo[s.key];
+      const glow = lit ? 1 + st.flare * 0.9 : 1;
+      // cosmic web: rotate the unit-space particles, project scaled by p.r
+      const ay = g.spin + t * (quality === 'low' ? g.speed * 0.4 : g.speed);
+      const cosY = Math.cos(ay), sinY = Math.sin(ay);
+      const cosX = Math.cos(g.tilt), sinX = Math.sin(g.tilt);
+      const spr = spriteFor(base);
+      const dustS = styleOf(base, 90, 70);
+      const filNear = styleOf(base, 95, 85), filFar = styleOf(base, 85, 58);
+      ctx.globalCompositeOperation = 'lighter';
+      for (const d of g.dust) {
+        const q = rot3(d, cosY, sinY, cosX, sinX);
+        const depth = (q.z + 1.05) / 2.1;
+        const a = (0.04 + depth * 0.18) * (0.6 + 0.4 * Math.sin(t * 2 + d.tw)) * glow;
+        const sz = Math.max(1, d.sz * p.r);
+        ctx.fillStyle = dustS(q255(a));
+        ctx.fillRect(p.x + q.x * p.r, p.y + q.y * p.r, sz, sz);
       }
-      // body
-      const g = ctx.createRadialGradient(p.x - p.r*.3, p.y - p.r*.35, p.r*.1, p.x, p.y, p.r);
-      g.addColorStop(0, `hsla(${base},95%,80%,.95)`);
-      g.addColorStop(.4, `hsla(${base},90%,58%,.5)`);
-      g.addColorStop(1, `hsla(${base},85%,30%,0)`);
-      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
-      // rim
-      ctx.strokeStyle = `hsla(${base},95%,72%,${lit ? .95 : .5})`;
-      ctx.lineWidth = lit ? 2 : 1; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.stroke();
+      for (const f of g.fil) {
+        const q = rot3(f, cosY, sinY, cosX, sinX);
+        const depth = (q.z + 1) / 2;
+        const flick = quality === 'low' ? 0.8 : 0.55 + 0.45 * Math.sin(t * 3 + f.tw);
+        const a = (0.1 + depth * 0.55) * flick * glow;
+        const sz = Math.max(1, f.sz * p.r * (0.5 + depth * 0.9));
+        ctx.fillStyle = (depth > 0.7 ? filNear : filFar)(q255(a));
+        ctx.fillRect(p.x + q.x * p.r, p.y + q.y * p.r, sz, sz);
+      }
+      for (let i = 0; i < g.nodes.length; i++) {
+        const nd = g.nodes[i];
+        const q = rot3(nd, cosY, sinY, cosX, sinX);
+        const depth = (q.z + 1) / 2;
+        const rad = nd.sz * p.r * (0.55 + depth * 0.75) * (i === 0 ? 2.1 : 1);
+        const pulse = i === 0 ? 0.85 + 0.15 * Math.sin(t * 1.6) : 0.7 + 0.3 * Math.sin(t * 2 + nd.sz * 40);
+        ctx.globalAlpha = Math.min(1, nd.br * pulse * (0.25 + depth * 0.65) * glow);
+        ctx.drawImage(spr, p.x + q.x * p.r - rad, p.y + q.y * p.r - rad, rad * 2, rad * 2);
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      // flare ring when a skill fires (kept from the old look)
       if (lit) { ctx.strokeStyle = `hsla(${base},95%,72%,${st.flare*.5})`;
+        ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(p.x, p.y, p.r * (1.1 + (1-st.flare)*.5), 0, 7); ctx.stroke(); }
       // stars
       for (const sp of starLayout(s, p, t)) {

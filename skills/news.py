@@ -20,6 +20,10 @@ _OFFLINE_MK = "Не можам да ги земам вестите сега — 
 class NewsSkill(Skill):
     name = "news"
     description = "Read the latest news headlines."
+    routing_phrases = [
+        "what's the news", "catch me up on the headlines", "what's happening today",
+        "anything new in the world", "give me the latest",
+    ]
 
     patterns = [
         re.compile(r"\b(?:the\s+)?news\b", re.IGNORECASE),

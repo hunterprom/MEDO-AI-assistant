@@ -22,6 +22,10 @@ _MONTHS_MK = ("јануари", "февруари", "март", "април", "�
 class DateTimeSkill(Skill):
     name = "datetime"
     description = "Report the current local time or date."
+    routing_phrases = [
+        "what time is it", "tell me the time", "what's the date today",
+        "what day is it", "how late is it",
+    ]
 
     # Note the ``'?s`` — STT and casual typing produce "whats"/"whens" without an
     # apostrophe, and these deterministic answers must never fall through to the LLM

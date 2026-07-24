@@ -212,6 +212,43 @@ def build_spheres(registry, council=None) -> list[Sphere]:
     return spheres
 
 
+def _slug(text: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in text.lower()).strip("-")
+
+
+def capabilities_feed(registry, council=None) -> dict:
+    """The live capability map served at ``GET /capabilities`` (M21 S1).
+
+    Same grouping as :func:`agent_graph`, reshaped into what the orb needs to
+    place and light nodes: agents (domains) each with their ``skills[]``, every
+    skill carrying ``id``/``label``/``status``/``description``. ``status`` is a
+    sane default (``idle``) in this snapshot; live status arrives over SSE
+    (S3). ``skillIndex`` maps every registered skill id -> its agent id, so a
+    ``routed`` event can find the node to flare.
+
+    Council specialists are ``kind: "agent"`` leaf nodes (they aren't directly
+    routable skills); everything else is ``kind: "skill"`` with a real id that
+    matches the ``routed`` event's ``skill``.
+    """
+    spheres = build_spheres(registry, council)
+    by_name = {s.name: s for s in registry.all()}
+    agents = []
+    for sphere in spheres:
+        skills = []
+        for star in sphere.stars:
+            skill_obj = by_name.get(star.skill) if star.skill else None
+            skills.append({
+                "id": star.skill or f"{sphere.key}:{_slug(star.label)}",
+                "label": star.label,
+                "kind": "skill" if star.skill else "agent",
+                "status": "idle",
+                "controlsPc": star.controls_pc,
+                "description": (skill_obj.description if skill_obj else ""),
+            })
+        agents.append({"id": sphere.key, "label": sphere.label, "skills": skills})
+    return {"agents": agents, "skillIndex": skill_domain_index(registry)}
+
+
 def agent_graph(registry, council=None) -> dict:
     """The JSON-able graph the HUD embeds: ``{spheres, skillDomain}``."""
     spheres = build_spheres(registry, council)

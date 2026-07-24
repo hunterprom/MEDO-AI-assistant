@@ -31,6 +31,7 @@ and constructing :class:`VoiceLoop` — is cheap and dependency-free (tests).
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import re
 import threading
@@ -38,6 +39,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from rich.console import Console
 
 from core.config import Settings
@@ -111,6 +113,16 @@ class VoiceLoop:
         # Set by the interruptible player when the user barges in mid-reply;
         # the turn loop reads it to skip the wake word and listen immediately.
         self._barged_in = False
+        # Wake-word diagnosis (off unless wakeword.debug_capture): records every
+        # activation's score + audio so a threshold can be set from real data.
+        from core.config import PROJECT_ROOT
+        from voice.wake_debug import WakeCaptureLog
+
+        self._wake_capture = WakeCaptureLog(
+            PROJECT_ROOT / "logs" / "wake_captures",
+            enabled=settings.wakeword.debug_capture,
+            sample_rate=settings.audio.sample_rate,
+        )
         #: Language of the utterance being handled, so _speak picks its voice.
         self._turn_language: str | None = None
 
@@ -145,6 +157,26 @@ class VoiceLoop:
 
     # --- standby -------------------------------------------------------------
 
+    def _confirm_wake(self, audio) -> bool:
+        """True if the buffered trigger audio really contains the wake phrase.
+
+        Fail-OPEN: if STT itself errors, allow the wake — a broken transcriber
+        must never make MEDO unwakeable, and the sustained-frame gate already
+        rejected the obvious transients.
+        """
+        from voice.wakeword import wake_phrase_confirmed
+
+        try:
+            text = self._stt.transcribe(normalize_peak(audio))
+        except Exception:
+            logger.debug("STT wake-confirm failed; allowing the wake", exc_info=True)
+            return True
+        ok = wake_phrase_confirmed(text, self._settings.wakeword.phrase)
+        if not ok:
+            logger.info("wake discarded by STT confirm — heard %r, not the phrase",
+                        (text or "")[:60])
+        return ok
+
     def _wait_for_wake(self, mic: Microphone, opened_device) -> str:
         """Block until something should end the wait; returns why.
 
@@ -168,6 +200,13 @@ class VoiceLoop:
         frames = 0
         run = 0                 # consecutive over-threshold frames (anti-noise)
         need = getattr(wake, "trigger_frames", 1)
+        # STT confirmation: re-transcribe the trigger buffer and require the wake
+        # phrase before actually waking — the strongest loud-noise defence.
+        confirm = self._settings.wakeword.stt_confirm and self._stt is not None
+        # Rolling ~1.5 s of frames, kept when we need the audio that triggered
+        # an activation (for the STT confirm or a debug capture).
+        recent = (collections.deque(maxlen=20)
+                  if (self._wake_capture.enabled or confirm) else None)
         while True:
             if self._settings.audio.input_device != opened_device:
                 logger.info("input device changed — reopening the microphone")
@@ -185,11 +224,23 @@ class VoiceLoop:
                 console.print("[dim](woken from the HUD)[/dim]")
                 return "go"
             frame = mic.read_frame()               # ~80 ms/frame, so /wake lands fast
+            if recent is not None:
+                recent.append(frame)
             score = wake.predict(frame)
             # Require the phrase to hold above threshold for `need` frames: a
             # transient noise spikes for one frame, a spoken "hey medo" doesn't.
             run = run + 1 if score >= wake.threshold else 0
             if run >= need:
+                audio = np.concatenate(list(recent)) if recent else frame
+                if self._wake_capture.enabled:
+                    # Save what actually triggered this (diagnosis mode).
+                    self._wake_capture.record(score, frame_rms(frame), audio)
+                # Verify the WORDS: a loud transient scores high but transcribes
+                # to nothing, so it's discarded here and MEDO keeps sleeping.
+                if confirm and not self._confirm_wake(audio):
+                    run = 0
+                    wake.reset()
+                    continue
                 logger.info("wake word detected (score %.2f, %d frames)", score, run)
                 return "go"
             peak_score = max(peak_score, score)

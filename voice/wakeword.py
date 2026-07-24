@@ -41,6 +41,47 @@ def display_phrase(phrase: str) -> str:
 #: configured custom model file is missing, so voice never dies over a bad path.
 FALLBACK_PHRASE = "hey_jarvis"
 
+#: Wake-phrase filler words that don't distinguish the phrase from noise, so a
+#: transcript needn't contain them to confirm (a person says "medo", not always
+#: the "hey").
+_WAKE_FILLER = {"hey", "hi", "ok", "okay", "yo", "hello", "a", "the", "hej", "еј"}
+
+
+def wake_phrase_confirmed(transcript: str, phrase: str) -> bool:
+    """Does an STT read of the wake buffer plausibly contain the wake phrase?
+
+    The second stage of loud-noise rejection (``wakeword.stt_confirm``): a door
+    slam, music or a clap transcribes to nothing, so an empty/whitespace
+    transcript is rejected outright — that alone kills most false wakes.
+    Unrelated speech that lacks the phrase is rejected too. A real "hey medo"
+    passes even when Whisper spells it oddly ("hey meadow", "medoh"), because
+    the match is lenient — the point is never to drop a genuine wake.
+    """
+    import difflib
+    import re as _re
+
+    from core import mk
+
+    # Romanize so a bilingual user's "медо" matches the Latin "medo" (Whisper
+    # may transcribe the same wake word in either script).
+    text = mk.to_latin((transcript or "").strip().lower())
+    if not text:
+        return False                               # non-speech -> no words
+    distinct = [w for w in mk.to_latin(display_phrase(phrase).lower()).split()
+                if w not in _WAKE_FILLER]
+    if not distinct:
+        return True                                # phrase is only filler
+    tokens = _re.findall(r"[\w']+", text)
+    for want in distinct:
+        if want in text:                           # exact / substring
+            return True
+        floor = max(3, len(want) - 1)              # don't fuzzy-match tiny words
+        for tok in tokens:
+            if len(tok) >= floor and \
+                    difflib.SequenceMatcher(None, tok, want).ratio() >= 0.7:
+                return True
+    return False
+
 
 def _bundled_match(name: str) -> str | None:
     """First bundled openWakeWord ``.onnx`` whose filename starts with ``name``."""
@@ -191,5 +232,35 @@ def _live_test() -> None:
                   f"{'Lower wakeword.threshold in config.yaml.' if 0 < peak < wake.threshold else ''}")
 
 
+def _report() -> None:
+    """``--report``: summarize captured activations (see voice.wake_debug)."""
+    from core.config import PROJECT_ROOT
+    from voice.wake_debug import WakeCaptureLog, format_report, load_labels
+
+    directory = PROJECT_ROOT / "logs" / "wake_captures"
+    log = WakeCaptureLog(directory, enabled=True)
+    print(format_report(log.rows(), load_labels(directory)))
+
+
+def _main(argv=None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m voice.wakeword",
+        description="Wake-word tools: live level monitor and capture report.")
+    parser.add_argument("--monitor", action="store_true",
+                        help="live score/RMS/threshold monitor (the default)")
+    parser.add_argument("--report", action="store_true",
+                        help="summarize logs/wake_captures/ (needs debug_capture)")
+    args = parser.parse_args(argv)
+    if args.report:
+        _report()
+    else:
+        _live_test()          # default: the monitor, as before
+    return 0
+
+
 if __name__ == "__main__":
-    _live_test()
+    import sys
+
+    sys.exit(_main())

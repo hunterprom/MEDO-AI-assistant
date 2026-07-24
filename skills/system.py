@@ -234,6 +234,11 @@ class VolumeSkill(Skill):
 class SystemInfoSkill(Skill):
     name = "system_info"
     description = "Report battery, CPU, memory, and free disk space."
+    routing_phrases = [
+        "how much battery do I have", "what's my cpu usage",
+        "how much disk space is left", "how much memory am I using",
+        "how's my computer doing",
+    ]
 
     patterns = [
         re.compile(r"\bbattery\b", re.IGNORECASE),

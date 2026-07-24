@@ -48,6 +48,10 @@ _CITY = r"[\w .'-]+"
 class WeatherSkill(Skill):
     name = "weather"
     description = "Report current weather or tomorrow's forecast for a city."
+    routing_phrases = [
+        "what's the weather like", "is it going to rain", "do I need a jacket",
+        "how hot is it outside", "what's tomorrow's forecast",
+    ]
 
     patterns = [
         re.compile(rf"\bweather\b(?:\s+(?:in|for|at)\s+(?P<city>{_CITY}))?", re.IGNORECASE),

@@ -311,10 +311,26 @@ wakeword:                           # M1
   # SPEECH — music, door bangs, keyboard clatter never even get scored. Uses
   # openWakeWord's VAD model; if it can't load, MEDO warns and runs without it.
   vad_threshold: 0.0
-  # Still too many false wakes after the above? The model itself can be retrained
-  # longer/with more data: .venv\Scripts\python -m voice.train_wakeword --generate
-  # then follow docs/Wake Word Training.md (more negative samples + more epochs
-  # is what lowers the false-positive rate).
+  # DIAGNOSIS: log every wake activation (real or false) + save the ~1.5 s of
+  # audio that triggered it to logs/wake_captures/. Turn on, then for a day slam
+  # doors, play music, and say the wake word; then:
+  #   .venv\Scripts\python -m voice.wakeword --report
+  # to see where the noise scores vs the real wake word, and set `threshold`
+  # from that (above the noise cluster, below the real one). The captures are
+  # your own voice — logs/ is git-ignored. Watch it live meanwhile with:
+  #   .venv\Scripts\python -m voice.wakeword --monitor
+  debug_capture: false
+  # STRONGEST loud-noise defence (on by default). After the wake score crosses
+  # the threshold, MEDO re-transcribes the ~1.5 s that triggered it and only
+  # actually wakes if "medo" is really in the audio. A door slam, music or a
+  # clap transcribes to nothing -> discarded silently. Verifies WORDS, not just
+  # a score, so a loud transient can't fake it. One short STT pass per trigger.
+  # Turn OFF only if a real "hey medo" is being wrongly rejected.
+  stt_confirm: true
+  # Still too many false wakes after tuning? The model itself can be retrained
+  # with HARD NEGATIVES (your room's loud sounds), NOT just more epochs — see
+  # docs/Wake Word Training.md. More training time != fewer loud-noise triggers;
+  # better negatives do.
 
 audio:                              # M1
   # Which microphone the wake word listens on — a PRIORITY LIST: the first

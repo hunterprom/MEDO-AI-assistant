@@ -60,6 +60,31 @@ class Skill(ABC):
     #: (safety.pc_control_enabled) blocks them all at one router choke point;
     #: purely sensing/answering skills stay available either way.
     controls_pc: bool = False
+    #: Example utterances that should route here — the skill's SEMANTIC surface
+    #: for the Tier-2 router (M2.5). Plain phrases a person says, NOT regex, and
+    #: NOT synonyms of the fast-path patterns: those stay in ``patterns``. This
+    #: is additive and data-only — the deterministic fast path never reads it,
+    #: so populating it can never change what the fast path routes. Empty is
+    #: fine; the router then falls back to ``description``.
+    routing_phrases: list[str] = []
+
+    def routing_surface(self) -> list[str]:
+        """The phrases the semantic router embeds to represent this skill.
+
+        ``routing_phrases`` first (curated examples), then the human
+        ``description``, then the skill name as a last resort so every skill
+        has *some* surface. Purely additive; the fast path never calls this.
+        """
+        parts = [p for p in self.routing_phrases if p and p.strip()]
+        if self.description:
+            parts.append(self.description)
+        if not parts:
+            parts.append(self.name.replace("_", " "))
+        return parts
+
+    def routing_text(self) -> str:
+        """The single string embedded + cached for this skill (see M2.5a)."""
+        return " · ".join(self.routing_surface())
 
     def match(self, text: str) -> re.Match[str] | None:
         """Return the first pattern that matches ``text``, or ``None``."""
