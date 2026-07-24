@@ -1,0 +1,9 @@
+# TEMPLATE — copy to <code>.yaml (the ISO-639-1 code in core/languages.py) to
+# give a language its spoken fillers. Keep them SHORT and natural — they cover a
+# 2-8 s gap, not a speech. `opening` = the first line; `waiting` = the single
+# follow-up on a very long wait. Add <code> to languages.available/active to use it.
+opening:
+  - "<a short 'let me think'>"
+  - "<another>"
+waiting:
+  - "<a short 'still working on it'>"

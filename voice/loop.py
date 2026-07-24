@@ -124,6 +124,13 @@ class VoiceLoop:
         # MEDO is speaking runs two player threads at once — corrupting the wake
         # model's ring buffers and truncating one of the two replies.
         self._speak_lock = asyncio.Lock()
+        # 'Let me think' fillers for slow LLM answers (core/filler.py). LLM path
+        # only — armed on the router's on_llm_start hook in _run_turn.
+        from core.filler import Filler
+
+        self._filler = Filler(settings.filler,
+                              active=settings.active_languages(),
+                              primary=settings.primary_language())
         # Wake-word diagnosis (off unless wakeword.debug_capture): records every
         # activation's score + audio so a threshold can be set from real data.
         from core.config import PROJECT_ROOT
@@ -669,11 +676,55 @@ class VoiceLoop:
                 await self._speak(sentence)
 
         speaker_task = asyncio.create_task(stream_speaker())
+
+        # Filler: bridge dead air on a SLOW LLM answer. Armed ONLY when the
+        # router commits to the LLM path (on_llm_start) — the fast path never
+        # fires it. A big question gets a quick "let me think"; anything still
+        # silent after the delay gets one; a very long wait gets ONE follow-up.
+        # It never talks over the reply: _speak is serialized, each step
+        # re-checks that nothing has been voiced (streamed["count"]), and when
+        # the reply lands we SIGNAL the filler to wind down rather than cancel
+        # it — cancelling mid-_speak would release the speak-lock early and let
+        # the reply's audio overlap the filler's.
+        llm_started = asyncio.Event()
+        route_done = asyncio.Event()
+
+        async def _sleep_or_done(seconds: float) -> bool:
+            """Sleep, waking early (True) the moment the reply has arrived."""
+            try:
+                await asyncio.wait_for(route_done.wait(), seconds)
+                return True
+            except asyncio.TimeoutError:
+                return False
+
+        async def filler_task() -> None:
+            fill = self._filler
+            if fill is None or not fill.enabled:
+                return
+            await llm_started.wait()
+            if await _sleep_or_done(fill.opening_delay(text)):
+                return
+            if streamed["count"] or self._barged_in:
+                return
+            phrase = fill.opening(self._turn_language)
+            if phrase:
+                await self._speak(phrase)          # finishes; lock released clean
+            if await _sleep_or_done(fill.followup_delay):
+                return
+            if streamed["count"] or self._barged_in:
+                return
+            phrase = fill.waiting(self._turn_language)
+            if phrase:
+                await self._speak(phrase)
+
+        filler = asyncio.create_task(filler_task())
         try:
             result = await self._router.route(
                 text, context={"language": self._turn_language},
-                on_delta=on_delta)
+                on_delta=on_delta, on_llm_start=llm_started.set)
         finally:
+            route_done.set()      # tell the filler to stop BEFORE its next line
+            await filler          # let any in-progress filler audio finish first
             tail = stream_buf["text"].strip()
             if streamed["count"] and tail:
                 streamed["count"] += 1

@@ -121,6 +121,28 @@ class PersonalityConfig(BaseModel):
     quips_language: str = "match"
 
 
+class FillerConfig(BaseModel):
+    """Spoken 'let me think' fillers that bridge dead air on a SLOW LLM answer.
+
+    Only the LLM path arms them — the fast path answers in milliseconds. A big
+    or complex question gets a quick acknowledgement; ANY LLM answer still
+    silent after ``delay_s`` gets a filler; a very long wait (Claude Code can
+    take 20-30 s) gets ONE follow-up. Butler-toned phrases live in
+    ``lang/filler_phrases/<code>.yaml`` and follow the active languages (a
+    missing bank falls back to the primary + English). See core/filler.py.
+    """
+
+    enabled: bool = True
+    #: Speak a filler when the LLM has produced nothing after this long.
+    delay_s: float = 8.0
+    #: A big/complex question gets this quicker acknowledgement instead.
+    big_delay_s: float = 2.0
+    #: A question with at least this many words counts as "big".
+    big_question_words: int = 12
+    #: After the first filler, wait this long for the reply before ONE follow-up.
+    followup_s: float = 12.0
+
+
 class RemoteConfig(BaseModel):
     """Companion API (watch app) — see remote/server.py."""
 
@@ -833,6 +855,7 @@ class Settings(BaseSettings):
     router: RouterConfig = Field(default_factory=RouterConfig)
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
+    filler: FillerConfig = Field(default_factory=FillerConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
     vision: VisionConfig = Field(default_factory=VisionConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)

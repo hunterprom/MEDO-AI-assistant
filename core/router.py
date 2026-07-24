@@ -198,6 +198,7 @@ class Router:
         text: str,
         context: dict[str, Any] | None = None,
         on_delta: Any = None,
+        on_llm_start: Any = None,
     ) -> RouteResult:
         """Route one utterance. ``on_delta`` (optional ``Callable[[str], None]``)
         receives LLM content chunks as they stream, so the voice loop can speak
@@ -212,7 +213,7 @@ class Router:
 
         # Announce the utterance so any UI (HUD) can show it, whatever the source.
         await self._bus.emit(Event(EventType.TRANSCRIPT, text))
-        result = await self._route_inner(text, context or {}, on_delta)
+        result = await self._route_inner(text, context or {}, on_delta, on_llm_start)
         result.latency_ms = (time.perf_counter() - started) * 1000.0
 
         self.stats[result.path] += 1
@@ -244,7 +245,8 @@ class Router:
         return result
 
     async def _route_inner(
-        self, text: str, context: dict[str, Any], on_delta: Any = None
+        self, text: str, context: dict[str, Any], on_delta: Any = None,
+        on_llm_start: Any = None,
     ) -> RouteResult:
         # --- CONFIRMATION GATE ---
         # A destructive action is waiting on a yes/no; this reply answers it.
@@ -260,6 +262,14 @@ class Router:
                 return await self._run_skill(skill, request)
 
         # --- LLM PATH ---
+        # Signal the caller (the voice loop) that we've committed to the LLM,
+        # which is slow enough to want a filler; the fast path above never gets
+        # here, so a filler armed on this hook is LLM-only by construction.
+        if on_llm_start is not None:
+            try:
+                on_llm_start()
+            except Exception:      # a UI nicety must never break routing
+                logger.debug("on_llm_start hook raised", exc_info=True)
         return await self._llm_reply(text, context, on_delta)
 
     async def _run_skill(self, skill: Skill, request: SkillRequest) -> RouteResult:

@@ -73,6 +73,17 @@ personality:
                                     # never on errors, confirmations, or destructive acts)
   quips_language: "match"           # match user's language (mk quips for mk input) | en | mk
 
+filler:                             # 'let me think' fillers on slow LLM answers
+  # Bridges dead air while a slow model composes (a hard local query, or Claude
+  # Code, which says nothing until it's wholly done). LLM path ONLY — the fast
+  # path answers in milliseconds and never triggers this. Phrases are per
+  # language in lang/filler_phrases/<code>.yaml and follow the active languages.
+  enabled: true
+  delay_s: 8.0                      # speak a filler if still silent after this
+  big_delay_s: 2.0                  # a big/complex question gets a quicker one
+  big_question_words: 12            # >= this many words counts as "big"
+  followup_s: 12.0                  # one more "still working on it" after this
+
 remote:
   # Companion API for the watch app (remote/server.py). LAN-only; there is no
   # TLS — never forward this port beyond your local network.
