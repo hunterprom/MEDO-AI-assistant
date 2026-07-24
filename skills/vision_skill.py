@@ -16,12 +16,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import logging
 import re
 from typing import Any
 
 from core import mk
 from core.config import Settings
 from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
 
 #: Appended when the question was Macedonian. The instruction itself stays in
 #: English: a 3B vision model comprehends the task far better that way, and it
@@ -139,28 +142,39 @@ async def _describe(settings: Settings, image_b64: str, prompt: str,
         prompt += ANSWER_MK
     host = settings.llm.host.rstrip("/")
     model = settings.vision_llm.model
-    try:
-        async with httpx.AsyncClient(timeout=settings.vision_llm.timeout_s) as client:
-            resp = await client.post(
-                f"{host}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "images": [image_b64],
-                    "stream": False,
-                    "options": {"temperature": 0.2},
-                },
-            )
-            if resp.status_code == 404:
-                return SkillResult(
-                    f"Моделот за гледање не е инсталиран — пушти: ollama pull {model}."
-                    if speak_mk else
-                    f"The vision model isn't installed — run: ollama pull {model}.",
-                    success=False,
-                )
-            resp.raise_for_status()
-            answer = (resp.json().get("response") or "").strip()
-    except httpx.HTTPError:
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "images": [image_b64],
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+    # One retry: the FIRST look after an idle spell hits a cold vision model
+    # (~10 s to load a 3B), and a request landing mid-load gets refused — which
+    # surfaced as "is Ollama running?" while Ollama was in fact running fine.
+    last_exc: Exception | None = None
+    for attempt in (0, 1):
+        try:
+            async with httpx.AsyncClient(timeout=settings.vision_llm.timeout_s) as client:
+                resp = await client.post(f"{host}/api/generate", json=payload)
+                if resp.status_code == 404:
+                    return SkillResult(
+                        f"Моделот за гледање не е инсталиран — пушти: ollama pull {model}."
+                        if speak_mk else
+                        f"The vision model isn't installed — run: ollama pull {model}.",
+                        success=False,
+                    )
+                resp.raise_for_status()
+                answer = (resp.json().get("response") or "").strip()
+            break
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if attempt == 0:
+                logger.info("vision call failed (%s) — retrying once while the "
+                            "model loads", exc)
+                await asyncio.sleep(2.0)
+    else:
+        logger.warning("vision model unreachable: %s", last_exc)
         return SkillResult(
             "Не можам да го стигнам моделот за гледање — дали работи Ollama?"
             if speak_mk else
@@ -256,6 +270,9 @@ class SeeScreenSkill(Skill):
                    r"\s+(?:my|the|your)\s+screen\b", re.IGNORECASE),
         re.compile(r"\b(?:look\s+at|check)\s+(?:my|the|your)\s+screen\b", re.IGNORECASE),
         re.compile(r"\bwhat\s+am\s+i\s+looking\s+at\b", re.IGNORECASE),
+        # Bare "see screen" — and the "C screen" Whisper produces for it, which
+        # otherwise fell to the LLM and got a "no screen tool" hallucination.
+        re.compile(r"\b(?:see|c)\s+(?:the\s+|my\s+|your\s+)?screen\b", re.IGNORECASE),
         # MK: "што гледаш на екранот", "што има на мојот екран". One optional
         # word before "екран" absorbs the possessive, which Whisper spells
         # several ways (мојот / твојот / твоот).

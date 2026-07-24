@@ -360,6 +360,35 @@ class Router:
             return True
         return self._last_live_info and _is_followup_question(text)
 
+    def _failure_reply(self, exc: Exception) -> str:
+        """What to say when an LLM call FAILED — with the real reason.
+
+        A CLI agent that is installed and on PATH but exited with an error (a
+        usage limit, an auth hiccup, a bad model name) used to collapse into
+        "make sure it is installed, logged in, and on your PATH", which sends
+        you hunting a problem you don't have. Only claim that when the CLI
+        genuinely isn't there; otherwise repeat what the agent actually said.
+        """
+        provider = self._settings.llm.provider
+        if provider not in CLI_PROVIDERS:
+            return self._offline_reply
+        name = "Claude Code" if provider == "claude-code" else "Codex"
+        detail = str(exc).strip()
+        low = detail.lower()
+        if ("not installed" in low or "not on path" in low
+                or "could not launch" in low):
+            return OFFLINE_CLI_REPLY.format(name=name)     # genuinely missing
+        if "timed out" in low:
+            return (f"{name} took too long to answer, so I stopped waiting. "
+                    f"Try again, or switch provider in the HUD.")
+        # Real error text from the agent — say it, trimmed to something speakable.
+        said = detail.split(":", 1)[-1].strip() if ":" in detail else detail
+        said = " ".join(said.split())
+        if len(said) > 140:
+            said = said[:137].rstrip() + "…"
+        return f"{name} couldn't answer: {said}" if said else \
+            OFFLINE_CLI_REPLY.format(name=name)
+
     @property
     def _offline_reply(self) -> str:
         """The provider-appropriate 'can't reach the model' message."""
@@ -457,7 +486,7 @@ class Router:
             )
         except LLMUnavailableError as exc:
             logger.warning("LLM path unavailable: %s", exc)
-            return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
+            return RouteResult(path=RoutePath.LLM, speech=self._failure_reply(exc))
 
     async def _run_tool_calls(
         self,
