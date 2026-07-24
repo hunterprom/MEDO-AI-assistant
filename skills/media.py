@@ -103,7 +103,10 @@ class MediaSkill(Skill):
         return _SPOKEN[action]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        action = self._action(request.text.lower())
+        # LLM tool path: use the explicit action arg (the synthesized text
+        # "media playpause" doesn't match the word-boundary patterns).
+        arg = str(request.args.get("action") or "").strip().lower()
+        action = arg if arg in _MEDIA_KEYS else self._action(request.text.lower())
         if action is None:
             # No default: a bare call used to toggle play/pause on whatever
             # had media focus, which is a real action taken from no request.

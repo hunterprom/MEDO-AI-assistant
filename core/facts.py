@@ -19,6 +19,16 @@ from pathlib import Path
 #: Embeds a batch of texts to vectors; None when the backend is unavailable.
 Embedder = Callable[[Sequence[str]], "list | None"]
 
+
+def _like_escape(text: str) -> str:
+    r"""Escape SQL LIKE wildcards so a needle is matched literally.
+
+    Use with ``LIKE ? ESCAPE '\'``. Without it, ``%`` and ``_`` in user/model
+    input act as wildcards — turning a "contains" match into "matches
+    everything".
+    """
+    return (text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS facts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,10 +165,14 @@ class FactsStore:
         needle = needle.strip()
         if not needle:
             return 0
-        pattern = f"%{needle}%"
+        # Escape LIKE wildcards: without this, forget("%") or forget("_")
+        # matches everything and wipes the whole facts table (a real data-loss
+        # bug — the model can pass "50%" from "forget my 50% raise").
+        pattern = f"%{_like_escape(needle)}%"
         with self._connect() as conn:
             cur = conn.execute(
-                "DELETE FROM facts WHERE fact LIKE ? COLLATE NOCASE", (pattern,)
+                r"DELETE FROM facts WHERE fact LIKE ? ESCAPE '\' COLLATE NOCASE",
+                (pattern,),
             )
             return cur.rowcount
 

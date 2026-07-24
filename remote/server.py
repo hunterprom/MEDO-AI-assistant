@@ -254,7 +254,14 @@ class RemoteServer:
             return False
         header = request.headers.get("Authorization", "")
         supplied = header[7:] if header.startswith("Bearer ") else request.query.get("token", "")
-        return bool(supplied) and hmac.compare_digest(supplied, expected)
+        if not supplied:
+            return False
+        try:
+            return hmac.compare_digest(supplied, expected)
+        except TypeError:
+            # compare_digest rejects non-ASCII str operands; a token with a
+            # non-ASCII char in it simply can't match ours — refuse, don't 500.
+            return False
 
     async def start(self) -> None:
         """Bind and start serving; returns once the socket is listening."""
@@ -455,7 +462,7 @@ class RemoteServer:
     async def _handle_pair_confirm(self, request: web.Request) -> web.Response:
         """Exchange the on-screen code for the API token (attempt-limited)."""
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be JSON like {\"code\": \"123456\"}")
         supplied = str(payload.get("code") or "").strip()
@@ -502,7 +509,7 @@ class RemoteServer:
     async def _handle_set_model(self, request: web.Request) -> web.Response:
         """Switch the active LLM model at runtime."""
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be JSON like {\"name\": \"…\"}")
 
@@ -532,7 +539,7 @@ class RemoteServer:
         The api_key is write-only: stored, never echoed back or logged.
         """
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be JSON like {\"provider\": \"…\"}")
 
@@ -614,7 +621,7 @@ class RemoteServer:
         switching mics never cuts a reply or triggers a phantom listen.
         """
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be JSON like {\"device\": 4}")
 
@@ -660,7 +667,7 @@ class RemoteServer:
         paths are never opened, so a stray request can't launch anything else.
         """
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be JSON like {\"key\": \"downloads\"}")
 
@@ -696,7 +703,7 @@ class RemoteServer:
             logger.debug("interrupt: could not stop audio", exc_info=True)
         listen = True
         with contextlib.suppress(ValueError):
-            listen = bool((await request.json()).get("listen", True))
+            listen = bool((await _json_dict(request)).get("listen", True))
         if listen and self._wake_event is not None:
             self._wake_event.set()
         logger.info("interrupt requested (listen=%s)", listen)
@@ -709,10 +716,10 @@ class RemoteServer:
         power…) at the router. Persisted per machine so the choice survives
         restarts. Sensing skills are never affected.
         """
-        try:
-            enabled = bool((await request.json()).get("on"))
-        except (ValueError, TypeError):
+        body = await _json_dict(request)
+        if "on" not in body:
             return _error(400, "body must be JSON like {\"on\": true}")
+        enabled = bool(body.get("on"))
         self._settings.safety.pc_control_enabled = enabled
         if self._persist_secrets:
             from core.config import save_pc_control
@@ -729,10 +736,10 @@ class RemoteServer:
         thing you enter for a task. It changes presentation and which skills
         are surfaced; it does NOT touch any safety rule (see docs/Decisions.md).
         """
-        try:
-            enabled = bool((await request.json()).get("on"))
-        except (ValueError, TypeError):
+        body = await _json_dict(request)
+        if "on" not in body:
             return _error(400, "body must be JSON like {\"on\": true}")
+        enabled = bool(body.get("on"))
         self._settings.mode.lion = enabled
         logger.info("LION MODE %s via companion API — defensive-security "
                     "profile %s (safety gate unchanged)",
@@ -764,7 +771,7 @@ class RemoteServer:
         ``settings.council`` live, so the next question sees the change.
         """
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except (ValueError, TypeError):
             return _error(400, "body must be JSON")
         if "enabled" in payload:
@@ -793,7 +800,7 @@ class RemoteServer:
         choice, not a machine setting.
         """
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
             mode = str(payload["mode"])
             on = bool(payload["on"])
         except (ValueError, KeyError, TypeError):
@@ -814,7 +821,7 @@ class RemoteServer:
         if self._link is None:
             return _error(503, "MEDO Link is not enabled")
         try:
-            manifest = await request.json()
+            manifest = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be the device manifest as JSON")
         # to_thread: register persists to sqlite.
@@ -847,7 +854,7 @@ class RemoteServer:
         if self._link is None:
             return _error(503, "MEDO Link is not enabled")
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
             device_id = str(payload["device_id"])
             command_id = str(payload["id"])
         except (ValueError, KeyError, TypeError):
@@ -898,7 +905,7 @@ class RemoteServer:
     async def _handle_facts_add(self, request: web.Request) -> web.Response:
         """Remember a fact typed into the HUD."""
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be JSON like {\"fact\": \"…\"}")
         fact = str(payload.get("fact") or "").strip()
@@ -910,7 +917,7 @@ class RemoteServer:
     async def _handle_facts_delete(self, request: web.Request) -> web.Response:
         """Forget one fact by id (HUD memory manager delete button)."""
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
             fact_id = int(payload.get("id"))
         except (ValueError, TypeError):
             return _error(400, "body must be JSON like {\"id\": 3}")
@@ -954,7 +961,7 @@ class RemoteServer:
     async def _handle_ask(self, request: web.Request) -> web.Response:
         """Route one utterance and return the reply as JSON."""
         try:
-            payload = await request.json()
+            payload = await _json_dict(request)
         except ValueError:
             return _error(400, "body must be JSON like {\"text\": \"…\"}")
 
@@ -1003,3 +1010,19 @@ def _web_search(query: str, max_results: int = 8) -> list[dict] | None:
 
 def _error(status: int, message: str) -> web.Response:
     return web.json_response({"ok": False, "error": message}, status=status)
+
+
+async def _json_dict(request: web.Request) -> dict:
+    """A JSON OBJECT body, or ``{}`` for anything that isn't one.
+
+    A body that is valid JSON but not an object (``5``, ``[1,2]``, ``"x"``)
+    used to reach ``payload.get(...)`` and raise ``AttributeError`` → a 500 on
+    the request path (including the unauthenticated ``/pair/confirm``). Coercing
+    to ``{}`` here means each handler falls into its own "missing field" 400
+    instead — never a 500 — while a genuine object is passed through untouched.
+    """
+    try:
+        data = await request.json()
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}

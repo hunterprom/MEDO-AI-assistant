@@ -62,9 +62,14 @@ class NoteStore:
         return [Note(**dict(r)) for r in rows]
 
     def search(self, term: str, limit: int = 20) -> list[Note]:
+        # Escape LIKE wildcards so "50%" or "_" match literally instead of
+        # matching every note (see core.facts._like_escape).
+        from core.facts import _like_escape
+
         rows = self._db.execute(
-            "SELECT id, text, created_at FROM notes WHERE text LIKE ? ORDER BY id DESC LIMIT ?",
-            (f"%{term}%", limit),
+            "SELECT id, text, created_at FROM notes WHERE text LIKE ? ESCAPE '\\' "
+            "ORDER BY id DESC LIMIT ?",
+            (f"%{_like_escape(term)}%", limit),
         ).fetchall()
         return [Note(**dict(r)) for r in rows]
 

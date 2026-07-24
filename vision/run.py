@@ -293,8 +293,10 @@ def _make_video_handler(holder: dict, cfg: VisionRunConfig):
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 data = json.loads(self.rfile.read(length) or b"{}")
+                # AttributeError guards a valid-JSON non-object body (5, [], "x")
+                # whose .get would otherwise 500 with a traceback.
                 want = bool(data.get("on"))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 self._send_json(
                     400, {"ok": False, "error": 'body must be JSON like {"on": true}'}
                 )

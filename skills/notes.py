@@ -31,10 +31,19 @@ class NotesSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         text = request.text
         m = request.match
+        # LLM tool path: the model passes {action, text, id} the regex can't see.
+        args = request.args or {}
+        action = str(args.get("action") or "").strip().lower()
 
-        # delete note N
-        if m and m.groupdict().get("id"):
-            note_id = int(m.group("id"))
+        # delete note N (regex group OR the LLM's id arg)
+        del_id = m.group("id") if (m and m.groupdict().get("id")) else args.get("id")
+        if action == "delete" or (del_id is not None and action != "add"):
+            if del_id is None:
+                return SkillResult("Which note number?", success=False)
+            try:
+                note_id = int(del_id)
+            except (ValueError, TypeError):
+                return SkillResult("Which note number?", success=False)
             ok = self._store.delete(note_id)
             return SkillResult(
                 f"Deleted note {note_id}." if ok else f"There's no note {note_id}.",
@@ -42,18 +51,22 @@ class NotesSkill(Skill):
             )
 
         # read / list
-        if re.search(r"\b(read|list|show|what)\b", text, re.IGNORECASE) and "note" in text.lower() \
-                and not re.search(r"\b(take|make|write|jot|add)\b", text, re.IGNORECASE):
+        if action == "list" or (
+                re.search(r"\b(read|list|show|what)\b", text, re.IGNORECASE)
+                and "note" in text.lower()
+                and not re.search(r"\b(take|make|write|jot|add)\b", text, re.IGNORECASE)):
             notes = self._store.list()
             if not notes:
                 return SkillResult("You have no notes.")
             spoken = "; ".join(f"{n.id}: {n.text}" for n in notes[:10])
             return SkillResult(f"You have {len(notes)} notes. {spoken}.", data={"count": len(notes)})
 
-        # take a note
+        # take a note — body from the regex group OR the LLM's text arg
         body = ""
         if m:
             body = (m.groupdict().get("body") or m.groupdict().get("body2") or "").strip()
+        if not body:
+            body = str(args.get("text") or "").strip()
         if not body:
             return SkillResult("What should the note say?", success=False)
         note = self._store.add(body)

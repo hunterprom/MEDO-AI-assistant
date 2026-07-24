@@ -57,7 +57,10 @@ def is_text_file(path: Path) -> bool:
     Suffix first (cheap and explicit), then an actual decode of the head — a
     ``.log`` full of binary noise should still be refused.
     """
-    if path.suffix.lower() not in TEXT_SUFFIXES:
+    # A bare dotfile (".env", ".gitignore") has an EMPTY suffix, so also match
+    # the whole name — otherwise those two entries in the set are dead.
+    if path.suffix.lower() not in TEXT_SUFFIXES \
+            and path.name.lower() not in TEXT_SUFFIXES:
         return False
     try:
         with path.open("rb") as fh:

@@ -411,6 +411,10 @@ class GestureEngine:
                             # Re-arm the latches/accumulators the moment their pose ends.
                             if action != RIGHT_CLICK:
                                 three_hold.update(False)
+                            # nav_hold latches _fired until it sees update(False);
+                            # without this it fires ONCE then never again.
+                            if action not in (NEXT_TAB, SWITCH_WINDOW, TASKBAR):
+                                nav_hold.update(False)
                             if action != SCROLL:
                                 scroll_acc.reset()
                             if action != ZOOM and second is None:
@@ -419,6 +423,13 @@ class GestureEngine:
                             prev_tip = (float(tip.x), iy)
                         except Exception:
                             logger.exception("pointer control failed; disabling")
+                            # Release a held drag before disabling — else the
+                            # left button stays logically down (stuck drag).
+                            if pinch_down:
+                                try:
+                                    mouse.release_left()
+                                except Exception:
+                                    pass
                             self._pointer = False
                             pinch_down = False
                         # Exit only on a deliberately HELD fist, not a misread.
@@ -432,6 +443,7 @@ class GestureEngine:
                                 pass
                             pinch_down = False
                         three_hold.update(False)
+                        nav_hold.update(False)      # re-arm nav on hand loss too
                         fist_hold.update(False)
                         pp_hold.update(False)
                         scroll_acc.reset()

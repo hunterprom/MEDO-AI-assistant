@@ -137,13 +137,20 @@ class TimerSkill(Skill):
     def _extract_label(self, text: str) -> str:
         m = re.search(r"\bto\s+(.*)", text, re.IGNORECASE)
         if m:
-            return m.group(1).strip().strip(".!?")
+            label = m.group(1).strip().strip(".!?")
+            # "set a timer TO 5 minutes" is a duration, not a label.
+            if parse_duration(label) > 0:
+                return ""
+            return label
         return ""
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         text = request.text
+        # LLM tool path: the model passes structured args the regex can't see.
+        args = request.args or {}
+        action = str(args.get("action") or "").strip().lower()
 
-        if re.search(r"\bcancel\b", text, re.IGNORECASE):
+        if action == "cancel" or re.search(r"\bcancel\b", text, re.IGNORECASE):
             count = len(self._timers)
             for timer in list(self._timers.values()):
                 timer.task.cancel()
@@ -152,7 +159,7 @@ class TimerSkill(Skill):
             self._timers.clear()
             return SkillResult(f"Cancelled {count} timer{'s' if count != 1 else ''}.")
 
-        if re.search(r"\b(list|show)\b", text, re.IGNORECASE):
+        if action == "list" or re.search(r"\b(list|show)\b", text, re.IGNORECASE):
             if not self._timers:
                 return SkillResult("You have no active timers.")
             desc = "; ".join(
@@ -160,11 +167,19 @@ class TimerSkill(Skill):
             )
             return SkillResult(f"{len(self._timers)} active: {desc}.")
 
-        seconds = parse_duration(text)
+        # Duration + label from the model's args first, then the spoken text.
+        seconds = 0
+        if args.get("seconds") is not None:
+            try:
+                seconds = int(args["seconds"])
+            except (ValueError, TypeError):
+                seconds = 0
+        if seconds <= 0:
+            seconds = parse_duration(text)
         if seconds <= 0:
             return SkillResult("How long should the timer be?", success=False)
 
-        label = self._extract_label(text)
+        label = str(args.get("label") or "").strip() or self._extract_label(text)
         # Labelled reminders persist across restarts; bare timers are ephemeral.
         reminder_id: int | None = None
         if label and self._store is not None:

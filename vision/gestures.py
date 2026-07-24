@@ -550,8 +550,11 @@ class GestureStabilizer:
             return None
         if self._latched is not None:
             return None                     # still held down; not a new event
-        # Fire exactly once, at the frame the hold is satisfied.
-        if self._count == self._need and self._cooldown_left == 0:
+        # Fire once the hold is satisfied. `>=` not `==`: if a previous
+        # gesture's cooldown was still counting down on the exact frame _count
+        # first hit _need, an `==` test would miss it and _count would climb
+        # past _need forever, so that gesture could never fire again.
+        if self._count >= self._need and self._cooldown_left == 0:
             self._latched = gesture
             self._cooldown_left = self._cooldown
             return gesture

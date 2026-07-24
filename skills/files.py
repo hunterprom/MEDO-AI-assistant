@@ -91,7 +91,12 @@ class FilesSkill(Skill):
             )
         m = request.match
         gd = m.groupdict() if m else {}
-        query = (gd.get("query") or gd.get("open") or "").strip().strip("?.!")
+        # LLM tool path: the model passes a `query` (and maybe action=open) that
+        # the fast-path regex groups don't carry.
+        args = request.args or {}
+        query = (gd.get("query") or gd.get("open")
+                 or str(args.get("query") or "")).strip().strip("?.!")
+        wants_open = bool(gd.get("open")) or str(args.get("action") or "").lower() == "open"
         if not query:
             return SkillResult("Која датотека?" if speak_mk else "Which file?",
                                success=False)
@@ -106,7 +111,7 @@ class FilesSkill(Skill):
             )
 
         # "open ..." -> open the single best match (after a final whitelist check).
-        if gd.get("open"):
+        if wants_open:
             target = hits[0]
             if not self._whitelist.is_allowed(target):
                 return SkillResult(
