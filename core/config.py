@@ -95,6 +95,19 @@ class RouterConfig(BaseModel):
     semantic_shadow: bool = True          # log-only until proven on real usage
     semantic_threshold: float = 0.6       # min cosine similarity to route
     semantic_margin: float = 0.04         # best must beat the runner-up by this
+    # Adaptive route memory (M2.5e): LEARN from confirmed LLM resolutions. When
+    # a query misses the fast path and the curated semantic tier, and the LLM
+    # resolves it to exactly one non-destructive query skill, that (utterance ->
+    # skill) is stored as an embedded exemplar; later, the same/near-same
+    # phrasing shortcuts straight to the skill on the SEMANTIC path. CONSULTING
+    # runs inside _semantic_route (so it inherits `semantic_enabled` and the
+    # `semantic_shadow` gate); LEARNING is gated only by `route_memory_enabled`,
+    # so a personal corpus can accumulate even while the curated tier is still in
+    # shadow. Default OFF: the whole feature is a no-op until flipped on.
+    route_memory_enabled: bool = False    # master gate; inert when False
+    route_memory_threshold: float = 0.82  # HIGH cosine gate, no margin (exemplars
+                                          # are near-exact single user phrasings)
+    route_memory_max: int = 500           # row cap; least-used evicted past this
 
 
 class ConversationConfig(BaseModel):

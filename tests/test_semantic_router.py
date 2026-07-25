@@ -71,10 +71,14 @@ class _FakeSkill(Skill):
 
     patterns: list = []
 
-    def __init__(self, name: str, phrases: list[str]) -> None:
+    def __init__(self, name: str, phrases: list[str], *,
+                 controls_pc: bool = False,
+                 requires_confirmation: bool = False) -> None:
         self.name = name
         self.description = f"{name} skill"
         self.routing_phrases = phrases
+        self.controls_pc = controls_pc
+        self.requires_confirmation = requires_confirmation
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         return SkillResult(speech=f"{self.name}:{request.text}", success=True)
@@ -152,6 +156,94 @@ async def test_fast_path_still_wins_over_semantic(tmp_path):
     result = await router.route("what time is it")
     assert result.path is RoutePath.FAST
     assert result.skill_name == "datetime"
+
+
+# --- adaptive route memory (M2.5e) wiring ------------------------------------
+# The store itself is unit-tested in test_route_memory.py. Here we prove the
+# ROUTER: a learned exemplar shortcuts a phrase the curated tier declines, the
+# shadow gate still applies to learned hits, learning is gated + safe, and the
+# whole thing is inert when the flag is off. _fake_embedder maps a no-marker
+# phrase to the [1,1,1] diagonal, which the curated tier declines (equidistant).
+
+def _mem_router(tmp_path, *, shadow: bool):
+    router = _router(tmp_path, shadow=shadow)
+    router._settings.router.route_memory_enabled = True
+    router._route_memory = None            # rebuild with the flag on
+    return router
+
+
+@pytest.mark.asyncio
+async def test_learned_exemplar_shortcuts_a_declined_phrase(tmp_path):
+    router = _mem_router(tmp_path, shadow=False)
+    weather = router._registry.get("weather")
+    # Teach it a phrase the CURATED tier can't route (fake embedder -> [1,1,1]).
+    await router._learn_route("please do the weather thing", weather)
+    result = await router.route("please do the weather thing")
+    assert result.path is RoutePath.SEMANTIC
+    assert result.skill_name == "weather"
+    assert router.stats[RoutePath.SEMANTIC] == 1
+
+
+@pytest.mark.asyncio
+async def test_shadow_gate_applies_to_learned_hits(tmp_path):
+    router = _mem_router(tmp_path, shadow=True)
+    await router._learn_route("please do the weather thing",
+                              router._registry.get("weather"))
+    result = await router.route("please do the weather thing")
+    # Shadow: the learned route is logged only; the turn still goes to the LLM.
+    assert result.path is RoutePath.LLM
+    assert result.speech == OFFLINE_LLM_REPLY
+    assert router.stats[RoutePath.SEMANTIC] == 0
+
+
+@pytest.mark.asyncio
+async def test_destructive_resolution_is_never_learned(tmp_path):
+    from core.route_memory import RouteMemory
+    from core.router import RouteResult
+
+    router = _mem_router(tmp_path, shadow=False)
+    router._registry.register(
+        _FakeSkill("wipe_disk", ["erase everything"], controls_pc=True))
+    res = RouteResult(path=RoutePath.LLM, speech="done", skill_name="wipe_disk",
+                      data={"tool_call_count": 1})
+    await router._maybe_learn_route("wipe the disk", res, answering_confirmation=False)
+    # A PC-controlling skill must never become a learnable shortcut.
+    store = RouteMemory(router._settings.memory.db_path,
+                        router._settings.memory.embed_model or "none")
+    assert len(store) == 0
+
+
+@pytest.mark.asyncio
+async def test_multi_tool_turn_is_not_learned(tmp_path):
+    from core.route_memory import RouteMemory
+    from core.router import RouteResult
+
+    router = _mem_router(tmp_path, shadow=False)
+    res = RouteResult(path=RoutePath.LLM, speech="a and b", skill_name="weather",
+                      data={"tool_call_count": 2})           # ambiguous multi-tool
+    await router._maybe_learn_route("do two things", res, answering_confirmation=False)
+    store = RouteMemory(router._settings.memory.db_path,
+                        router._settings.memory.embed_model or "none")
+    assert len(store) == 0
+
+
+@pytest.mark.asyncio
+async def test_route_memory_inert_when_disabled(tmp_path):
+    from core.route_memory import RouteMemory
+    from core.router import RouteResult
+
+    router = _router(tmp_path, shadow=False)                 # flag stays default False
+    res = RouteResult(path=RoutePath.LLM, speech="warm", skill_name="weather",
+                      data={"tool_call_count": 1})
+    await router._maybe_learn_route("some new phrasing", res,
+                                    answering_confirmation=False)
+    store = RouteMemory(router._settings.memory.db_path,
+                        router._settings.memory.embed_model or "none")
+    assert len(store) == 0                                    # learning off -> nothing
+    # And a never-seen phrase still falls straight through to the LLM.
+    result = await router.route("some new phrasing")
+    assert result.path is RoutePath.LLM
+    assert result.speech == OFFLINE_LLM_REPLY
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -191,6 +191,12 @@ class Router:
         #: None = not built yet; False = permanently unavailable (no embedder).
         self._embedder = embedder
         self._route_index: Any = None
+        #: Adaptive route memory (M2.5e): learned exemplars consulted alongside
+        #: the curated index. Same None/False sentinels. `_last_query_vec` caches
+        #: the utterance embedding computed in _semantic_route so a learn on the
+        #: same turn costs zero extra embeds.
+        self._route_memory: Any = None
+        self._last_query_vec: Any = None
 
     async def _ensure_route_index(self):
         """Build the semantic route index once; None when it can't be built."""
@@ -221,11 +227,43 @@ class Router:
         logger.info("semantic route index ready: %d skill(s)", len(idx))
         return idx
 
+    @staticmethod
+    def _is_learnable(skill: "Skill") -> bool:
+        """A skill safe to LEARN and REPLAY on the semantic tier: a query skill
+        (no PC control, no confirmation) that already opted into the curated tier
+        with routing_phrases. A learned exemplar can therefore only ever shortcut
+        to something the curated tier could also reach — never a destructive one.
+        """
+        return (not getattr(skill, "controls_pc", False)
+                and not getattr(skill, "requires_confirmation", False)
+                and bool(getattr(skill, "routing_phrases", None)))
+
+    async def _ensure_route_memory(self):
+        """Build the learned-exemplar store once; None when it can't/shouldn't be
+        used (no embedder, or the feature is off). Same sentinels as the index."""
+        if self._route_memory is not None:
+            return self._route_memory or None
+        if self._embedder is None or not self._settings.router.route_memory_enabled:
+            self._route_memory = False
+            return None
+        from core.route_memory import RouteMemory
+
+        self._route_memory = RouteMemory(self._settings.memory.db_path,
+                                         self._settings.memory.embed_model or "none")
+        return self._route_memory
+
     async def _semantic_route(self, text: str) -> "tuple[Skill, float] | None":
         """Best skill for ``text`` by MEANING, or None (embedder down / no
-        confident match). Never raises into routing."""
+        confident match). Consults the curated index AND — when enabled — the
+        learned route memory, embedding the utterance once for both. Never raises
+        into routing; byte-identical to the curated-only path when memory is off.
+        """
         idx = await self._ensure_route_index()
-        if idx is None:
+        mem = await self._ensure_route_memory()
+        # Preserve today's short-circuit: with nothing to consult, don't embed.
+        if idx is None and mem is None:
+            return None
+        if self._embedder is None:
             return None
         try:
             qv = await asyncio.to_thread(self._embedder, [text])
@@ -233,12 +271,74 @@ class Router:
             return None
         if not qv:
             return None
-        hit = idx.match(qv[0], self._settings.router.semantic_threshold,
-                        self._settings.router.semantic_margin)
-        if hit is None:
-            return None
-        skill = self._registry.get(hit[0])
-        return (skill, hit[1]) if skill is not None else None
+        self._last_query_vec = qv[0]
+        best: tuple[Skill, float] | None = None
+        if idx is not None:
+            hit = idx.match(qv[0], self._settings.router.semantic_threshold,
+                            self._settings.router.semantic_margin)
+            if hit is not None:
+                skill = self._registry.get(hit[0])
+                if skill is not None:
+                    best = (skill, hit[1])
+        if mem is not None:
+            try:
+                mhit = await asyncio.to_thread(
+                    mem.match, qv[0], self._settings.router.route_memory_threshold)
+            except Exception:
+                mhit = None
+            if mhit is not None:
+                skill = self._registry.get(mhit[0])
+                # Guard replay too: only shortcut to a still-learnable skill, and
+                # let a curated hit win an exact tie (a learned one takes it only
+                # on a strictly higher score).
+                if (skill is not None and self._is_learnable(skill)
+                        and (best is None or mhit[1] > best[1])):
+                    best = (skill, mhit[1])
+        return best
+
+    async def _maybe_learn_route(self, text: str, result: RouteResult,
+                                 answering_confirmation: bool) -> None:
+        """Learn (utterance -> skill) from a CLEAN single-skill LLM resolution.
+
+        Deliberately narrow: only the LLM path, only a real skill_name, only when
+        exactly one tool was called, never while a destructive action is mid
+        confirmation, and only for a learnable (query) skill. Everything else —
+        synthesis answers (skill_name=None), multi-tool turns, errors — is skipped.
+        """
+        if not self._settings.router.route_memory_enabled or answering_confirmation:
+            return
+        if result.path is not RoutePath.LLM or not result.skill_name:
+            return
+        if self._pending is not None:               # a destructive tool is waiting
+            return
+        if result.data.get("tool_call_count") != 1:  # exactly one resolved skill
+            return
+        skill = self._registry.get(result.skill_name)
+        if skill is None or not self._is_learnable(skill):
+            return
+        await self._learn_route(text, skill)
+
+    async def _learn_route(self, text: str, skill: "Skill") -> None:
+        """Store one learned exemplar. Best-effort — never breaks a turn."""
+        try:
+            mem = await self._ensure_route_memory()
+            if mem is None:
+                return
+            from core.safety import _normalize
+
+            norm = _normalize(text)
+            if len(norm) < 3:
+                return
+            vec = self._last_query_vec
+            if vec is None:                          # semantic tier was off; embed now
+                qv = await asyncio.to_thread(self._embedder, [text])
+                vec = qv[0] if qv else None
+            if vec is None:
+                return
+            await asyncio.to_thread(mem.remember, norm, skill.name, vec,
+                                    self._settings.router.route_memory_max)
+        except Exception:
+            logger.debug("route-memory learn failed", exc_info=True)
 
     @property
     def llm(self) -> OllamaClient:
@@ -267,6 +367,9 @@ class Router:
         # a pending confirmation? (self._pending is cleared inside _route_inner.)
         answering_confirmation = self._pending is not None
         self._turn_used_live_info = False
+        # Cleared each turn so a stale embedding can never attach to a later
+        # learned route; set by _semantic_route when it embeds this utterance.
+        self._last_query_vec = None
 
         # Announce the utterance so any UI (HUD) can show it, whatever the source.
         await self._bus.emit(Event(EventType.TRANSCRIPT, text))
@@ -291,6 +394,9 @@ class Router:
             # (web_search synthesizes, so its RouteResult carries no skill_name).
             self._last_live_info = (result.skill_name in LIVE_INFO_SKILLS
                                     or self._turn_used_live_info)
+        # Adaptive route memory (M2.5e): a clean single-skill LLM resolution is
+        # worth learning so the same phrasing skips the LLM next time.
+        await self._maybe_learn_route(text, result, answering_confirmation)
         logger.info(
             "[%s] %s (%.0f ms)%s",
             result.path.value,
@@ -652,7 +758,11 @@ class Router:
 
         # Structured tools already speak for themselves — answer directly.
         if not needs_synthesis and direct:
-            return RouteResult(path=RoutePath.LLM, speech=" ".join(direct), skill_name=used_skill)
+            # tool_call_count lets adaptive route memory learn ONLY clean,
+            # single-skill resolutions (existing callers ignore data).
+            return RouteResult(path=RoutePath.LLM, speech=" ".join(direct),
+                               skill_name=used_skill,
+                               data={"tool_call_count": len(tool_calls)})
         return None
 
 
