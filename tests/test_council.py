@@ -366,3 +366,24 @@ def test_council_brain_falls_back_to_cli_when_local_absent(settings, monkeypatch
     client, model = r.council_brain()
     assert client is r._llm and model == "claude-sonnet-5"   # nothing to borrow
     assert r._tool_brain_ok is False
+
+
+def test_council_brain_probes_a_down_toolbrain_at_most_once(settings, monkeypatch):
+    # The blocking ~2s probe must not fire per specialist in a parallel convene —
+    # even on the FAILURE path (tool-brain down). Bounded to once per TTL.
+    from llm.client import OllamaClient
+
+    calls = {"n": 0}
+
+    def probe(self):
+        calls["n"] += 1
+        return False
+
+    monkeypatch.setattr(OllamaClient, "is_available", probe)
+    settings.llm.provider = "claude-code"
+    r = _router(settings)
+    r.model = "claude-sonnet-5"
+    for _ in range(4):                       # four specialists resolve the brain
+        client, _model = r.council_brain()
+        assert client is r._llm              # down -> CLI fallback each time
+    assert calls["n"] == 1                   # probed ONCE, not per specialist

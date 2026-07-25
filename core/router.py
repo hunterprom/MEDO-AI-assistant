@@ -66,6 +66,9 @@ from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: How many tool rounds before we force a final text answer (loop guard).
 MAX_TOOL_ROUNDS = 4
+#: Re-check a DOWN council tool-brain no more than once per this many seconds,
+#: so a parallel convene never fires the blocking ~2s probe per specialist.
+_COUNCIL_PROBE_TTL = 30.0
 #: Tools whose output is raw and needs the model to synthesize a spoken reply.
 #: Everything else returns a ready-to-speak sentence, so we skip the second LLM
 #: hop — faster, and it can't be undone by a small model second-guessing itself.
@@ -136,9 +139,14 @@ class Router:
         #: Lazily-built local Ollama client used to answer live-info queries when
         #: the selected brain is a CLI agent that can't use MEDO's tools.
         self._tool_brain: OllamaClient | None = None
-        #: Set once the tool-brain has answered an availability probe True, so
-        #: the council doesn't re-probe (a blocking 2s HTTP call) per specialist.
+        #: Set once the tool-brain has answered an availability probe True (it
+        #: rarely drops mid-session), so the council never re-probes after. A
+        #: DOWN result isn't sticky — it's re-checked after _COUNCIL_PROBE_TTL so
+        #: a later `ollama serve` is picked up — but `_tool_brain_probe_at`
+        #: bounds the blocking ~2s probe to once per TTL, so a parallel convene
+        #: with the tool-brain down can't fire it per specialist.
         self._tool_brain_ok = False
+        self._tool_brain_probe_at: float | None = None
         #: True right after a live-info turn (news/weather/web…), so the next
         #: question is treated as a follow-up that may also need live info even
         #: if it trips no keyword of its own ("is Macedonia on that list?").
@@ -201,7 +209,11 @@ class Router:
     async def _ensure_route_index(self):
         """Build the semantic route index once; None when it can't be built."""
         if self._route_index is not None:
-            return self._route_index or None
+            # Explicit sentinel test (not truthiness): a SkillRouteIndex also
+            # defines __len__, so `or None` would misfire if a stored index were
+            # ever empty. It isn't today (the len==0 guard below stores False),
+            # but keep this robust and consistent with _ensure_route_memory.
+            return self._route_index if self._route_index is not False else None
         if self._embedder is None:
             self._route_index = False
             return None
@@ -242,7 +254,11 @@ class Router:
         """Build the learned-exemplar store once; None when it can't/shouldn't be
         used (no embedder, or the feature is off). Same sentinels as the index."""
         if self._route_memory is not None:
-            return self._route_memory or None
+            # An EMPTY RouteMemory is falsy (it defines __len__), and it
+            # legitimately starts empty — so `or None` would collapse a
+            # valid-but-empty store to None and the very first exemplar could
+            # never be written (chicken-and-egg). Test the False sentinel itself.
+            return self._route_memory if self._route_memory is not False else None
         if self._embedder is None or not self._settings.router.route_memory_enabled:
             self._route_memory = False
             return None
@@ -534,16 +550,37 @@ class Router:
         when the selected brain is a CLI agent; otherwise use the selected brain
         unchanged (Ollama users keep the model they picked).
 
-        The availability probe (a blocking ~2s HTTP GET) runs at most once per
-        session — memoized on success — so it never repeats across the parallel
-        consults of a single convene.
+        The availability probe (a blocking ~2s HTTP GET) is bounded to at most
+        once per _COUNCIL_PROBE_TTL — cached forever once it succeeds — so it
+        never repeats per specialist across the parallel consults of a convene,
+        whether the tool-brain is up OR down.
         """
         if self._settings.llm.provider in CLI_PROVIDERS:
             tb = self._tool_brain_client()
-            if tb is not None and (self._tool_brain_ok or tb.is_available()):
-                self._tool_brain_ok = True
+            if tb is not None and self._tool_brain_available(tb):
                 return tb, self._settings.llm.tool_brain_model
         return self._llm, self.model
+
+    def _tool_brain_available(self, tb: OllamaClient) -> bool:
+        """Is the local tool-brain reachable? Probes at most once per
+        _COUNCIL_PROBE_TTL. Once True it stays cached (Ollama rarely drops
+        mid-session); a False result is re-checked only after the TTL, so a
+        parallel convene with the tool-brain down doesn't re-block per specialist
+        yet a later `ollama serve` is still picked up. council_brain() has no
+        await before this call, so the first gathered specialist's probe
+        completes and stamps the time before any other specialist runs.
+        """
+        if self._tool_brain_ok:
+            return True
+        now = time.monotonic()
+        if (self._tool_brain_probe_at is not None
+                and now - self._tool_brain_probe_at < _COUNCIL_PROBE_TTL):
+            return False                       # recently probed down — don't re-block
+        self._tool_brain_probe_at = now
+        if tb.is_available():
+            self._tool_brain_ok = True
+            return True
+        return False
 
     def _pick_brain(self, text: str) -> tuple[OllamaClient, str | None, bool]:
         """Choose (client, model, borrowed) for this turn.

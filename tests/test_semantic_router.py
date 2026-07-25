@@ -185,6 +185,31 @@ async def test_learned_exemplar_shortcuts_a_declined_phrase(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_route_memory_bootstraps_from_an_empty_store(tmp_path):
+    # Regression: an empty RouteMemory is falsy (it defines __len__), so the old
+    # `return self._route_memory or None` collapsed a valid-but-empty store to
+    # None and the FIRST exemplar could never be written. In production the first
+    # _ensure_route_memory call comes from _semantic_route (empty store), then the
+    # learn that follows must still write row 1 through the cached branch — the
+    # ordering the earlier test front-loaded around.
+    from core.router import RouteResult
+
+    router = _mem_router(tmp_path, shadow=False)
+    # 1) Production ordering: the semantic tier runs first and builds the (empty)
+    #    store; it must not deadlock the feature by returning None thereafter.
+    assert await router._semantic_route("please do the weather thing") is None
+    # 2) The LLM then resolves it to one learnable skill -> learn on the empty store.
+    res = RouteResult(path=RoutePath.LLM, speech="warm", skill_name="weather",
+                      data={"tool_call_count": 1})
+    await router._maybe_learn_route("please do the weather thing", res,
+                                    answering_confirmation=False)
+    assert len(router._route_memory) == 1          # first exemplar actually persisted
+    # 3) ...so the same phrasing now shortcuts on the SEMANTIC path.
+    result = await router.route("please do the weather thing")
+    assert result.path is RoutePath.SEMANTIC and result.skill_name == "weather"
+
+
+@pytest.mark.asyncio
 async def test_shadow_gate_applies_to_learned_hits(tmp_path):
     router = _mem_router(tmp_path, shadow=True)
     await router._learn_route("please do the weather thing",
