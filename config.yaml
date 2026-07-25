@@ -42,6 +42,23 @@ llm:
 
 router:
   fast_path_enabled: true           # deterministic skills before touching the LLM
+  # Tier-2 SEMANTIC router: when no regex matches, reach a query skill by MEANING
+  # before paying for the LLM. Change it live from the HUD CONFIG tab
+  # (SEMANTIC TIER · OFF / SHADOW / LIVE) — that choice is remembered per machine
+  # in secrets.local.yaml; the two flags below are only the boot default.
+  #   enabled: false                  -> OFF    (fast -> LLM, as before)
+  #   enabled: true, shadow: true     -> SHADOW (logs the would-be route, still uses the LLM)
+  #   enabled: true, shadow: false    -> LIVE   (routes by meaning)
+  semantic_enabled: true
+  semantic_shadow: true             # log-only until proven on real usage, then go LIVE
+  semantic_threshold: 0.6           # min cosine similarity to route
+  semantic_margin: 0.04             # the best match must beat the runner-up by this
+  # Adaptive route memory: LEARN (utterance -> skill) from confirmed single-tool
+  # LLM resolutions, then shortcut the same phrasing on the semantic tier. Off by
+  # default; CONSULTING what it learned still obeys the semantic mode above.
+  route_memory_enabled: false
+  route_memory_threshold: 0.82      # HIGH cosine gate, no margin (near-exact phrasings)
+  route_memory_max: 500             # row cap; least-used exemplars evicted past this
 
 conversation:                       # continuous mode (voice/loop.py, core/modes.py)
   # When on, MEDO keeps listening after each reply for a natural follow-up

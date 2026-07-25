@@ -109,6 +109,34 @@ class RouterConfig(BaseModel):
                                           # are near-exact single user phrasings)
     route_memory_max: int = 500           # row cap; least-used evicted past this
 
+    # The semantic tier has THREE honest states, which the two flags above
+    # encode. The HUD CONFIG tab and the companion API speak in this single
+    # word so a user never has to reason about the flag pair:
+    #   "off"    -> disabled (fast -> LLM, as before)
+    #   "shadow" -> logs the would-be route but still uses the LLM (safe rollout)
+    #   "live"   -> routes by meaning
+    def semantic_mode(self) -> str:
+        """The tier's state as one word: ``off`` | ``shadow`` | ``live``."""
+        if not self.semantic_enabled:
+            return "off"
+        return "shadow" if self.semantic_shadow else "live"
+
+    def apply_semantic_mode(self, mode: str) -> str:
+        """Set the tier from one word; returns the resolved mode. Raises
+        ``ValueError`` on anything but off/shadow/live so a bad API/HUD value is
+        rejected rather than silently ignored."""
+        mode = (mode or "").strip().lower()
+        if mode == "off":
+            self.semantic_enabled = False
+        elif mode == "shadow":
+            self.semantic_enabled, self.semantic_shadow = True, True
+        elif mode == "live":
+            self.semantic_enabled, self.semantic_shadow = True, False
+        else:
+            raise ValueError(
+                f"semantic mode must be 'off', 'shadow', or 'live'; got {mode!r}")
+        return self.semantic_mode()
+
 
 class ConversationConfig(BaseModel):
     """Continuous-conversation mode (voice/loop.py + core/modes.py)."""
@@ -1029,6 +1057,11 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
     control = data.get("control", {}) or {}
     if "pc" in control:  # the HUD's PC CONTROL switch, remembered per machine
         settings.safety.pc_control_enabled = bool(control["pc"])
+    router = data.get("router", {}) or {}  # the HUD's SEMANTIC TIER selector
+    if "semantic_enabled" in router:
+        settings.router.semantic_enabled = bool(router["semantic_enabled"])
+    if "semantic_shadow" in router:
+        settings.router.semantic_shadow = bool(router["semantic_shadow"])
     langs = data.get("languages", {}) or {}
     if langs.get("active"):  # the HUD language picker, remembered per machine
         try:
@@ -1103,6 +1136,28 @@ def save_pc_control(enabled: bool, path: Path = SECRETS_PATH) -> None:
         _write_local(data, path)
     except Exception:
         logging.getLogger(__name__).exception("could not persist the PC-control switch")
+
+
+def save_semantic_mode(mode: str, path: Path = SECRETS_PATH) -> str:
+    """Validate + persist the HUD's SEMANTIC TIER choice (off/shadow/live).
+
+    Validation goes through :meth:`RouterConfig.apply_semantic_mode` on a throwaway
+    config, so a bad word RAISES before anything is written (the caller surfaces
+    it). The resolved flag PAIR is stored under ``router:`` in the git-ignored
+    overrides file and re-applied at startup by ``apply_local_secrets`` — never
+    written to the committed config.yaml. Returns the resolved mode.
+    """
+    cfg = RouterConfig()
+    resolved = cfg.apply_semantic_mode(mode)  # raises ValueError on a bad mode
+    try:
+        data = _read_local(path)
+        data.setdefault("router", {}).update(
+            {"semantic_enabled": cfg.semantic_enabled,
+             "semantic_shadow": cfg.semantic_shadow})
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist the semantic mode")
+    return resolved
 
 
 def save_audio_input(device: int | str | None, path: Path = SECRETS_PATH) -> None:

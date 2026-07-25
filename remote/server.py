@@ -209,6 +209,7 @@ class RemoteServer:
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
         app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_post("/control/pc", self._handle_pc_control)
+        app.router.add_post("/control/semantic", self._handle_semantic)
         app.router.add_post("/control/modes", self._handle_modes)
         app.router.add_post("/control/lion", self._handle_lion)
         app.router.add_get("/council", self._handle_council)
@@ -410,6 +411,8 @@ class RemoteServer:
                 "has_anthropic_key": bool(self._settings.llm.anthropic_api_key),
                 # The PC CONTROL switch (may MEDO act on this computer?).
                 "pc_control": self._settings.safety.pc_control_enabled,
+                # The Tier-2 semantic router: off | shadow | live.
+                "semantic": self._settings.router.semantic_mode(),
                 # Session modes (continuous conversation, interpreter).
                 "continuous": self._modes.continuous,
                 "interpreter": self._modes.interpreter,
@@ -765,6 +768,31 @@ class RemoteServer:
         logger.info("PC control switched %s via companion API",
                     "ON" if enabled else "OFF")
         return web.json_response({"ok": True, "on": enabled})
+
+    async def _handle_semantic(self, request: web.Request) -> web.Response:
+        """The HUD's SEMANTIC TIER selector: off | shadow | live.
+
+        The tier sits between the regex fast path and the LLM and reaches a
+        query skill by MEANING. ``off`` disables it; ``shadow`` logs the
+        would-be route but still uses the LLM (safe rollout); ``live`` routes by
+        meaning. The router reads the flags live, so the change takes effect on
+        the next turn. Persisted per machine so the choice survives restarts.
+        Safety is untouched: a semantically-routed skill still passes the same
+        PC-control and confirmation gates as any other.
+        """
+        body = await _json_dict(request)
+        try:
+            resolved = self._settings.router.apply_semantic_mode(
+                str(body.get("mode") or ""))
+        except ValueError:
+            return _error(400, "body must be JSON like {\"mode\": "
+                               "\"off\"|\"shadow\"|\"live\"}")
+        if self._persist_secrets:
+            from core.config import save_semantic_mode
+
+            save_semantic_mode(resolved)
+        logger.info("semantic tier set to %s via companion API", resolved)
+        return web.json_response({"ok": True, "mode": resolved})
 
     async def _handle_lion(self, request: web.Request) -> web.Response:
         """MEDO LION MODE (the defensive-security profile) from the HUD.
