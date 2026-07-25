@@ -81,6 +81,20 @@ class LLMConfig(BaseModel):
 
 class RouterConfig(BaseModel):
     fast_path_enabled: bool = True
+    # Tier-2 SEMANTIC router (M2.5): sits between the regex fast path and the
+    # LLM. When no pattern matches, an utterance can still reach a query-style
+    # skill by MEANING — each eligible skill's routing_phrases are embedded once
+    # (the same local nomic-embed-text the facts stack uses) and the utterance is
+    # cosine-matched against them. Only skills that opt in with routing_phrases
+    # are eligible, and only when the best match clears `semantic_threshold` AND
+    # beats the runner-up by `semantic_margin` (an ambiguous match falls through
+    # to the LLM). `semantic_shadow` logs what it WOULD route without acting —
+    # leave it on until the logs show it routing well, then flip it off to go
+    # live. Embedder down => the tier is simply skipped.
+    semantic_enabled: bool = True
+    semantic_shadow: bool = True          # log-only until proven on real usage
+    semantic_threshold: float = 0.6       # min cosine similarity to route
+    semantic_margin: float = 0.04         # best must beat the runner-up by this
 
 
 class ConversationConfig(BaseModel):

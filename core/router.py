@@ -148,7 +148,8 @@ class Router:
         self.model: str | None = settings.llm.default_model
         #: Routing tallies (this session) + persisted per-request metrics that
         #: feed the README's Performance table (python -m core.metrics --report).
-        self.stats: dict[RoutePath, int] = {RoutePath.FAST: 0, RoutePath.LLM: 0}
+        self.stats: dict[RoutePath, int] = {
+            RoutePath.FAST: 0, RoutePath.SEMANTIC: 0, RoutePath.LLM: 0}
         self.metrics: MetricsStore | None = (
             MetricsStore(settings.memory.db_path)
             if settings.logging.routing_stats else None
@@ -182,6 +183,59 @@ class Router:
         self._persona = Persona(settings.personality,
                                 active=settings.active_languages(),
                                 primary=settings.primary_language())
+        #: Tier-2 semantic route index (M2.5), built lazily on the first miss —
+        #: embedding the opt-in skills is one Ollama call, then cached in SQLite.
+        #: None = not built yet; False = permanently unavailable (no embedder).
+        self._embedder = embedder
+        self._route_index: Any = None
+
+    async def _ensure_route_index(self):
+        """Build the semantic route index once; None when it can't be built."""
+        if self._route_index is not None:
+            return self._route_index or None
+        if self._embedder is None:
+            self._route_index = False
+            return None
+        from core.route_index import SkillRouteIndex
+
+        idx = SkillRouteIndex(self._settings.memory.db_path, self._embedder,
+                              self._settings.memory.embed_model or "none")
+        # Only skills that OPT IN with curated routing_phrases are eligible: a
+        # bare description is too vague to route on, and actuation skills that
+        # need extracted parameters belong on the LLM path, not here.
+        sources = [s for s in self._registry.all()
+                   if getattr(s, "routing_phrases", None)]
+        try:
+            await asyncio.to_thread(idx.build, sources)
+        except Exception:
+            logger.exception("semantic route index build failed — tier disabled")
+            self._route_index = False
+            return None
+        if len(idx) == 0:
+            self._route_index = False
+            return None
+        self._route_index = idx
+        logger.info("semantic route index ready: %d skill(s)", len(idx))
+        return idx
+
+    async def _semantic_route(self, text: str) -> "tuple[Skill, float] | None":
+        """Best skill for ``text`` by MEANING, or None (embedder down / no
+        confident match). Never raises into routing."""
+        idx = await self._ensure_route_index()
+        if idx is None:
+            return None
+        try:
+            qv = await asyncio.to_thread(self._embedder, [text])
+        except Exception:
+            return None
+        if not qv:
+            return None
+        hit = idx.match(qv[0], self._settings.router.semantic_threshold,
+                        self._settings.router.semantic_margin)
+        if hit is None:
+            return None
+        skill = self._registry.get(hit[0])
+        return (skill, hit[1]) if skill is not None else None
 
     @property
     def llm(self) -> OllamaClient:
@@ -261,6 +315,23 @@ class Router:
                 request = SkillRequest(text=text, match=regex_match, context=context)
                 return await self._run_skill(skill, request)
 
+        # --- SEMANTIC TIER (M2.5) ---
+        # No regex matched; try to reach a query-style skill by MEANING before
+        # paying for the LLM. Shadow mode logs the would-be route and falls
+        # through, so it can be proven on real usage before going live.
+        if self._settings.router.semantic_enabled:
+            sem = await self._semantic_route(text)
+            if sem is not None:
+                skill, score = sem
+                if self._settings.router.semantic_shadow:
+                    logger.info("[semantic-shadow] %r -> %s (%.2f); using LLM",
+                                text, skill.name, score)
+                else:
+                    logger.info("[semantic] %r -> %s (%.2f)", text, skill.name, score)
+                    return await self._run_skill(
+                        skill, SkillRequest(text=text, context=context),
+                        path=RoutePath.SEMANTIC)
+
         # --- LLM PATH ---
         # Signal the caller (the voice loop) that we've committed to the LLM,
         # which is slow enough to want a filler; the fast path above never gets
@@ -272,16 +343,19 @@ class Router:
                 logger.debug("on_llm_start hook raised", exc_info=True)
         return await self._llm_reply(text, context, on_delta)
 
-    async def _run_skill(self, skill: Skill, request: SkillRequest) -> RouteResult:
-        """Execute a fast-path skill, deferring for confirmation if it asks.
+    async def _run_skill(self, skill: Skill, request: SkillRequest,
+                         path: RoutePath = RoutePath.FAST) -> RouteResult:
+        """Execute a fast-path (or semantic-tier) skill, deferring for
+        confirmation if it asks.
 
         There is deliberately NO profile that relaxes this gate. Lion mode
         (mode.lion) surfaces extra skills and reskins the HUD, but the
         confirmation and PC-control checks below run identically whether it is
-        on or off — see docs/Decisions.md.
+        on or off — see docs/Decisions.md. ``path`` only labels the result
+        (FAST vs SEMANTIC); the safety checks are the same either way.
         """
         if skill.controls_pc and not self._settings.safety.pc_control_enabled:
-            return RouteResult(path=RoutePath.FAST, speech=PC_CONTROL_OFF_REPLY,
+            return RouteResult(path=path, speech=PC_CONTROL_OFF_REPLY,
                               skill_name=skill.name)
         outcome = await skill.execute(request)
         if (outcome.needs_confirmation and self._settings.safety.confirm_destructive):
@@ -295,7 +369,7 @@ class Router:
                 language=request.context.get("language"),
             )
         return RouteResult(
-            path=RoutePath.FAST,
+            path=path,
             speech=outcome.speech,
             skill_name=skill.name,
             data=outcome.data,

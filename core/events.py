@@ -33,8 +33,9 @@ class AssistantState(str, Enum):
 class RoutePath(str, Enum):
     """Which brain handled a request. Logged for the README routing stats."""
 
-    FAST = "FAST"   # deterministic rule-based skill, no LLM
-    LLM = "LLM"     # Ollama conversation / tool calling
+    FAST = "FAST"           # deterministic rule-based skill, no LLM
+    SEMANTIC = "SEMANTIC"   # Tier-2: matched a skill by MEANING (M2.5), no LLM
+    LLM = "LLM"             # Ollama conversation / tool calling
 
 
 class EventType(str, Enum):

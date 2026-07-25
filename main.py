@@ -505,7 +505,9 @@ async def handle_command(
             console.print(f"Active model set to [bold]{arg}[/bold].")
     elif name == "/stats":
         s = router.stats
-        console.print(f"Routing — FAST: {s[RoutePath.FAST]}  LLM: {s[RoutePath.LLM]}")
+        console.print(
+            f"Routing — FAST: {s[RoutePath.FAST]}  "
+            f"SEMANTIC: {s.get(RoutePath.SEMANTIC, 0)}  LLM: {s[RoutePath.LLM]}")
     elif name == "/latency":
         ui.latency_table(log)
     else:

@@ -40,6 +40,11 @@ class BriefingSkill(Skill):
         "Deliver the morning briefing: date and time, weather, top headlines, "
         "active reminders, and upcoming plans."
     )
+    routing_phrases = [
+        "give me the rundown for today", "what's on for today",
+        "catch me up on my day", "start my day", "what do I need to know today",
+        "fill me in on the morning",
+    ]
     patterns = [
         # "brief" and "briefing" are both natural ("morning brief", "morning
         # briefing", "daily brief"). Requiring the full word "briefing" here is

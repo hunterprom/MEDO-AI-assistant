@@ -196,6 +196,39 @@ class SkillRouteIndex:
         """In-memory routing vectors (empty until :meth:`build`)."""
         return list(self._entries)
 
+    def match(self, query_vector: "np.ndarray | None",
+              threshold: float = 0.6, margin: float = 0.04
+              ) -> "tuple[str, float] | None":
+        """Best-matching skill for a query embedding, or None.
+
+        Cosine similarity against every indexed skill; the winner must clear
+        ``threshold`` AND beat the runner-up by ``margin`` — an ambiguous match
+        (two skills nearly tied) is deliberately declined so it falls through to
+        the LLM rather than guess. Pure + unit-testable (no embedder call here).
+        """
+        if not self._entries or query_vector is None:
+            return None
+        q = np.asarray(query_vector, dtype=np.float32).ravel()
+        qn = float(np.linalg.norm(q))
+        if qn == 0.0:
+            return None
+        q = q / qn
+        scored: list[tuple[str, float]] = []
+        for e in self._entries:
+            v = e.vector.ravel()
+            vn = float(np.linalg.norm(v))
+            if vn == 0.0 or v.shape != q.shape:
+                continue
+            scored.append((e.skill, float(q @ (v / vn))))
+        if not scored:
+            return None
+        scored.sort(key=lambda x: x[1], reverse=True)
+        best_skill, best = scored[0]
+        runner_up = scored[1][1] if len(scored) > 1 else -1.0
+        if best >= threshold and (best - runner_up) >= margin:
+            return best_skill, best
+        return None
+
     def __len__(self) -> int:
         return len(self._entries)
 
