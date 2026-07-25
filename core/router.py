@@ -136,6 +136,9 @@ class Router:
         #: Lazily-built local Ollama client used to answer live-info queries when
         #: the selected brain is a CLI agent that can't use MEDO's tools.
         self._tool_brain: OllamaClient | None = None
+        #: Set once the tool-brain has answered an availability probe True, so
+        #: the council doesn't re-probe (a blocking 2s HTTP call) per specialist.
+        self._tool_brain_ok = False
         #: True right after a live-info turn (news/weather/web…), so the next
         #: question is treated as a follow-up that may also need live info even
         #: if it trips no keyword of its own ("is Macedonia on that list?").
@@ -413,6 +416,28 @@ class Router:
             cfg.default_model = name
             self._tool_brain = type(self._llm)(cfg)
         return self._tool_brain
+
+    def council_brain(self) -> "tuple[OllamaClient, str | None]":
+        """(client, model) for the specialist council / circuit helper.
+
+        The council role-plays experts on a plain text prompt — it wants a FAST
+        model, not MEDO's tools or a web connection. A CLI-agent brain is the
+        wrong tool twice over: it spawns a whole process PER specialist, and
+        ``convene_council`` fires two or three of them in PARALLEL, which is
+        exactly what left "the agents" hanging. So borrow the local tool-brain
+        when the selected brain is a CLI agent; otherwise use the selected brain
+        unchanged (Ollama users keep the model they picked).
+
+        The availability probe (a blocking ~2s HTTP GET) runs at most once per
+        session — memoized on success — so it never repeats across the parallel
+        consults of a single convene.
+        """
+        if self._settings.llm.provider in CLI_PROVIDERS:
+            tb = self._tool_brain_client()
+            if tb is not None and (self._tool_brain_ok or tb.is_available()):
+                self._tool_brain_ok = True
+                return tb, self._settings.llm.tool_brain_model
+        return self._llm, self.model
 
     def _pick_brain(self, text: str) -> tuple[OllamaClient, str | None, bool]:
         """Choose (client, model, borrowed) for this turn.

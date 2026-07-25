@@ -310,3 +310,59 @@ async def test_circuit_with_no_brain_says_so(settings):
     phrase = "how do I wire an led to an arduino"
     r = await skill.execute(SkillRequest(text=phrase, match=skill.match(phrase)))
     assert r.success is False
+
+
+# --- council brain selection (make the agents actually work) ------------------
+# The council role-plays experts on a text prompt. When the selected brain is a
+# CLI agent, convening several in parallel would spawn a pile of slow processes
+# (the "stuck" failure); Router.council_brain borrows the fast local tool-brain
+# instead. Ollama users keep the model they picked.
+
+def _router(settings):
+    from core.events import EventBus
+    from core.router import Router
+    from llm.client import OllamaClient
+    from skills.base import SkillRegistry
+
+    return Router(settings, SkillRegistry(), OllamaClient(settings.llm), EventBus())
+
+
+def test_council_brain_uses_selected_ollama_brain(settings):
+    from llm.client import OllamaClient
+
+    settings.llm.provider = "ollama"
+    r = _router(settings)
+    r.model = "qwen3:30b"
+    client, model = r.council_brain()
+    assert isinstance(client, OllamaClient) and client is r._llm
+    assert model == "qwen3:30b"
+
+
+def test_council_brain_borrows_local_when_cli_agent(settings, monkeypatch):
+    from llm.client import OllamaClient
+
+    monkeypatch.setattr(OllamaClient, "is_available", lambda self: True)
+    settings.llm.provider = "claude-code"
+    settings.llm.tool_brain_model = "llama3.2:3b"
+    r = _router(settings)
+    r.model = "claude-sonnet-5"
+    client, model = r.council_brain()
+    assert client is not r._llm            # a separate LOCAL client, not the CLI
+    assert model == "llama3.2:3b"
+    assert r._tool_brain_ok is True        # probe memoized — no re-probe per expert
+    # A second call must not re-probe (would blow up if it did).
+    monkeypatch.setattr(OllamaClient, "is_available",
+                        lambda self: (_ for _ in ()).throw(AssertionError("re-probed")))
+    assert r.council_brain()[1] == "llama3.2:3b"
+
+
+def test_council_brain_falls_back_to_cli_when_local_absent(settings, monkeypatch):
+    from llm.client import OllamaClient
+
+    monkeypatch.setattr(OllamaClient, "is_available", lambda self: False)
+    settings.llm.provider = "claude-code"
+    r = _router(settings)
+    r.model = "claude-sonnet-5"
+    client, model = r.council_brain()
+    assert client is r._llm and model == "claude-sonnet-5"   # nothing to borrow
+    assert r._tool_brain_ok is False

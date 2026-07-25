@@ -618,13 +618,17 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     async def expert(system: str, user: str) -> str:
         """One specialist round-trip: a role prompt plus the question.
 
-        Shared by the council and the wiring helper. Returns "" when the model
-        is unavailable, so a caller degrades instead of raising at the user.
+        Shared by the council and the wiring helper. Runs on the council brain
+        (a fast local model when the selected brain is a CLI agent — see
+        Router.council_brain), so convening several experts in parallel doesn't
+        spawn a pile of slow CLI processes. Returns "" when no model is
+        available, so a caller degrades instead of raising at the user.
         """
-        if not router.model:
+        client, model = router.council_brain()
+        if not model:
             return ""
         try:
-            message = await llm.chat(router.model, [
+            message = await client.chat(model, [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ])
