@@ -30,6 +30,9 @@ mic ──► openWakeWord ("medo") ──► record ──► faster-whisper (d
   watch app ──► companion API :8710 /ask ──────► Intent Router
   vision sidecar gestures ──► POST /ask ────────►   │
                                                     ├─ FAST: regex skill (<1 ms)
+                                                    ├─ SEMANTIC: reach a skill by
+                                                    │   MEANING (local embeddings,
+                                                    │   + learns from real usage)
                                                     └─ LLM: tool loop (strip_think,
                                                         ≤4 rounds, confirmation
                                                         gate, "let me think" filler)
@@ -53,13 +56,18 @@ generated from it — not estimated:
 
 | Path | Requests | Share | p50 | p95 |
 |------|---------:|------:|--------:|--------:|
-| FAST | *(run the report)* | | | |
-| LLM  | *(run the report)* | | | |
+| FAST     | *(run the report)* | | | |
+| SEMANTIC | *(run the report)* | | | |
+| LLM      | *(run the report)* | | | |
 
 Method: measured end-to-end inside the Intent Router (utterance in → reply
 ready), on my machine — RTX 3060 12 GB, `qwen3:30b` via Ollama for the LLM
 path. Fast-path commands never touch the model, which is why they sit three
-orders of magnitude below it.
+orders of magnitude below it. The **SEMANTIC** tier sits in between: when no
+regex matches, an utterance can still reach a query-style skill by *meaning*
+via local embeddings — one embed, no LLM round-trip — and with adaptive route
+memory it *learns* from confirmed LLM resolutions so a phrasing that cost the
+LLM once shortcuts straight to the skill next time.
 
 ## What it does
 
@@ -97,6 +105,17 @@ orders of magnitude below it.
 - **Fast path**: ~30 regex commands run deterministically in <1 ms — time,
   timers, notes, volume, media, apps, files, screenshots, windows, typing,
   clipboard, brightness, power.
+- **Semantic tier — reach a skill by *meaning***: when no regex matches, MEDO
+  embeds the utterance once (local `nomic-embed-text`) and routes to the
+  query-style skill whose example phrases sit closest — no LLM round-trip. An
+  ambiguous near-tie is declined on purpose so it falls through to the brain
+  rather than guess. **Adaptive route memory** (opt-in) then closes the loop:
+  when the brain resolves a missed phrasing to a single safe query skill, MEDO
+  remembers `(phrasing → skill)` as a learned exemplar, so the same wording
+  shortcuts straight to the skill next time — the middle tier grows and
+  personalises from your own usage, fully offline. Destructive/actuation skills
+  are never learnable, and a learned route still passes the same confirmation
+  and PC-control gates.
 - **Search where you actually search**: "search drone motors on YouTube",
   "check my email for the invoice", "find Half-Life on Steam" open that site's
   own results — ~35 sites built in (YouTube, Gmail, Reddit, Steam, GitHub,
