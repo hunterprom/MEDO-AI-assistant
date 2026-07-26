@@ -144,5 +144,13 @@ async def test_notes_semantic_reach_lists_them(tmp_path):
     assert "buy more solder" in res.speech
 
 
+def test_see_bench_is_semantically_safe():
+    from skills.bench import BenchInventory, BenchSkill
+    b = BenchSkill(_settings(), BenchInventory(":memory:"))
+    assert b.routing_phrases
+    # bare call identifies the part (no required args, not controls_pc)
+    assert Router._semantic_safe(b) is True
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

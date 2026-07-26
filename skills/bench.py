@@ -165,6 +165,16 @@ class BenchSkill(Skill):
         "Identify the electronic part currently on the workbench camera "
         "(reads part markings too); can also log parts to the bench inventory."
     )
+    # Reached by MEANING, a bare call identifies the part on the bench camera
+    # (the safe default; inventory recall needs the explicit "do I have" cue).
+    routing_phrases = [
+        "can you identify this component for me",
+        "what part is this on my workbench",
+        "read the markings off this chip",
+        "look at what I'm holding under the bench camera",
+        "what's this little component I've got here",
+        "help me figure out what this part is",
+    ]
 
     patterns = [
         re.compile(r"\bwhat(?:'?s| is)\s+on\s+(?:my|the)\s+bench\b", re.IGNORECASE),
