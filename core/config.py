@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -895,6 +896,25 @@ class RoutineItem(BaseModel):
     enabled: bool = True
 
 
+#: Events a webhook can fire on — the label maps to an EventBus subscription.
+WEBHOOK_EVENTS = ("wake", "transcript", "routed", "reply")
+
+
+class WebhookConfig(BaseModel):
+    """One outbound webhook: POST a JSON payload to a URL when an event fires.
+
+    Lets MEDO drive external automations (n8n, Home Assistant, a logger) with no
+    per-integration code. ``auth_token`` is an optional bearer secret, so an
+    HUD-added webhook is persisted to the git-ignored overrides, never committed.
+    """
+
+    name: str = "webhook"
+    event: str = "routed"               # one of WEBHOOK_EVENTS
+    url: str = ""
+    auth_token: str = ""                # optional Authorization: Bearer <token>
+    enabled: bool = True
+
+
 class BriefingConfig(BaseModel):
     """Morning briefing sections (M8, skills/briefing.py) — order matters."""
 
@@ -944,6 +964,7 @@ class Settings(BaseSettings):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     routines: list[RoutineItem] = Field(default_factory=list)
+    webhooks: list[WebhookConfig] = Field(default_factory=list)
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
@@ -1085,6 +1106,20 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
         except Exception:
             logging.getLogger(__name__).warning(
                 "ignoring invalid saved MCP server %r", name)
+    saved_routines = data.get("routines")  # the HUD's scheduled-routines editor
+    if isinstance(saved_routines, list):
+        try:
+            settings.routines = [RoutineItem(**r) for r in saved_routines
+                                 if isinstance(r, dict)]
+        except Exception:
+            logging.getLogger(__name__).warning("ignoring invalid saved routines")
+    saved_hooks = data.get("webhooks")  # the HUD's event-webhooks editor
+    if isinstance(saved_hooks, list):
+        try:
+            settings.webhooks = [WebhookConfig(**h) for h in saved_hooks
+                                 if isinstance(h, dict)]
+        except Exception:
+            logging.getLogger(__name__).warning("ignoring invalid saved webhooks")
     router = data.get("router", {}) or {}  # the HUD's SEMANTIC TIER selector
     if "semantic_enabled" in router:
         settings.router.semantic_enabled = bool(router["semantic_enabled"])
@@ -1313,6 +1348,88 @@ def remove_mcp_server(name: str, path: Path = SECRETS_PATH) -> bool:
             return True
     except Exception:
         logging.getLogger(__name__).exception("could not remove the MCP server")
+    return False
+
+
+def resolve_routines(routines: list) -> list[RoutineItem]:
+    """Validate a list of routine dicts -> [RoutineItem]. Raises ValueError on a
+    bad HH:MM time or a routine with nothing to ask."""
+    out: list[RoutineItem] = []
+    for r in routines or []:
+        if not isinstance(r, dict):
+            continue
+        at = str(r.get("at") or "").strip()
+        if not re.match(r"^\d{1,2}:\d{2}$", at):
+            raise ValueError(f"time must be HH:MM, got {at!r}")
+        hh, mm = (int(x) for x in at.split(":"))
+        if hh > 23 or mm > 59:
+            raise ValueError(f"{at} is not a valid time")
+        ask = [str(a).strip() for a in (r.get("ask") or []) if str(a).strip()]
+        if not ask:
+            raise ValueError(f"routine {r.get('name') or 'routine'!r} has nothing to ask")
+        out.append(RoutineItem(
+            name=str(r.get("name") or "routine").strip() or "routine",
+            at=f"{hh:02d}:{mm:02d}",
+            days=[str(d).strip().lower()[:3] for d in (r.get("days") or [])],
+            ask=ask, enabled=bool(r.get("enabled", True))))
+    return out
+
+
+def save_routines(routines: list, path: Path = SECRETS_PATH) -> list[RoutineItem]:
+    """Validate + persist the HUD's scheduled routines. Takes effect on restart."""
+    items = resolve_routines(routines)              # raises on a bad routine
+    try:
+        data = _read_local(path)
+        data["routines"] = [i.model_dump() for i in items]
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist routines")
+    return items
+
+
+def save_webhook(name: str, event: str, url: str, auth_token: str = "",
+                 path: Path = SECRETS_PATH) -> dict:
+    """Validate + persist one HUD-added event webhook (its auth token is a secret,
+    so it lives in the overrides, never config.yaml). Raises ValueError on a
+    missing name/url or an unknown event. Takes effect on restart."""
+    name = (name or "").strip()
+    url = (url or "").strip()
+    event = (event or "").strip().lower()
+    if not name:
+        raise ValueError("a webhook needs a name")
+    if not url:
+        raise ValueError("a webhook needs a URL to POST to")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError("the URL must start with http:// or https://")
+    if event not in WEBHOOK_EVENTS:
+        raise ValueError(f"event must be one of {', '.join(WEBHOOK_EVENTS)}")
+    spec = WebhookConfig(name=name, event=event, url=url,
+                         auth_token=(auth_token or "").strip())
+    try:
+        data = _read_local(path)
+        hooks = [h for h in (data.get("webhooks") or [])
+                 if isinstance(h, dict) and h.get("name") != name]
+        hooks.append(spec.model_dump())
+        data["webhooks"] = hooks
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist the webhook")
+    return {"name": name, "event": event, "url": url,
+            "has_auth": bool(spec.auth_token)}
+
+
+def remove_webhook(name: str, path: Path = SECRETS_PATH) -> bool:
+    """Remove an HUD-added webhook from the overrides. True if it existed."""
+    try:
+        data = _read_local(path)
+        hooks = data.get("webhooks") or []
+        kept = [h for h in hooks if not (isinstance(h, dict) and h.get("name") == name)]
+        if len(kept) != len(hooks):
+            data["webhooks"] = kept
+            _write_local(data, path)
+            return True
+    except Exception:
+        logging.getLogger(__name__).exception("could not remove the webhook")
     return False
 
 

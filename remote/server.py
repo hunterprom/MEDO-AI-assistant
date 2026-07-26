@@ -210,6 +210,11 @@ class RemoteServer:
         app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_post("/control/mcp", self._handle_mcp_add)
         app.router.add_post("/control/mcp/remove", self._handle_mcp_remove)
+        app.router.add_get("/routines", self._handle_routines_status)
+        app.router.add_post("/control/routines", self._handle_routines_set)
+        app.router.add_get("/webhooks", self._handle_webhooks_status)
+        app.router.add_post("/control/webhook", self._handle_webhook_add)
+        app.router.add_post("/control/webhook/remove", self._handle_webhook_remove)
         app.router.add_post("/control/pc", self._handle_pc_control)
         app.router.add_post("/control/semantic", self._handle_semantic)
         app.router.add_post("/control/browser", self._handle_browser)
@@ -546,6 +551,88 @@ class RemoteServer:
         self._settings.mcp.servers.pop(name, None)
         removed = remove_mcp_server(name) if self._persist_secrets else True
         logger.info("MCP server %r removed via companion API", name)
+        return web.json_response(
+            {"ok": True, "name": name, "removed": bool(removed), "restart": True})
+
+    async def _handle_routines_status(self, request: web.Request) -> web.Response:
+        """The scheduled routines (HUD editor) — 'at 08:00 ask these things'."""
+        return web.json_response({"ok": True, "routines": [
+            {"name": r.name, "at": r.at, "days": list(r.days),
+             "ask": list(r.ask), "enabled": r.enabled}
+            for r in self._settings.routines]})
+
+    async def _handle_routines_set(self, request: web.Request) -> web.Response:
+        """Replace the routines list from the HUD. Takes effect on restart (the
+        scheduler is built at boot). Persisted per machine."""
+        from core.config import resolve_routines, save_routines
+        body = await _json_dict(request)
+        try:
+            items = resolve_routines(body.get("routines") or [])
+        except ValueError as exc:
+            return _error(400, str(exc))
+        self._settings.routines = items
+        if self._persist_secrets:
+            save_routines(body.get("routines") or [])
+        logger.info("routines updated via companion API: %d", len(items))
+        return web.json_response({"ok": True, "count": len(items), "restart": True})
+
+    async def _handle_webhooks_status(self, request: web.Request) -> web.Response:
+        """Configured event webhooks (HUD CONFIG tab). Auth tokens never leave
+        the box — only whether one is set is reported."""
+        return web.json_response({"ok": True, "webhooks": [
+            {"name": h.name, "event": h.event, "url": h.url,
+             "enabled": h.enabled, "has_auth": bool(h.auth_token)}
+            for h in self._settings.webhooks]})
+
+    async def _handle_webhook_add(self, request: web.Request) -> web.Response:
+        """Add/update one outbound webhook from the HUD: name + event + URL
+        (+ optional bearer auth). The token is a secret, so it's persisted to the
+        git-ignored overrides — never config.yaml. Fires on the next restart."""
+        from core.config import WebhookConfig, save_webhook
+        body = await _json_dict(request)
+        name = str(body.get("name") or "").strip()
+        event = str(body.get("event") or "routed").strip().lower()
+        url = str(body.get("url") or "").strip()
+        auth = str(body.get("auth") or body.get("auth_token") or "").strip()
+        try:
+            spec = WebhookConfig(name=name, event=event, url=url, auth_token=auth)
+        except Exception:
+            return _error(400, "invalid webhook spec")
+        try:
+            if self._persist_secrets:
+                save_webhook(name, event=event, url=url, auth_token=auth)
+            else:
+                # Validate even when we're not persisting (tests, ephemeral runs).
+                from core.config import WEBHOOK_EVENTS
+                if not name:
+                    raise ValueError("a webhook needs a name")
+                if not (url.startswith("http://") or url.startswith("https://")):
+                    raise ValueError("the URL must start with http:// or https://")
+                if event not in WEBHOOK_EVENTS:
+                    raise ValueError(
+                        f"event must be one of {', '.join(WEBHOOK_EVENTS)}")
+        except ValueError as exc:
+            return _error(400, str(exc))
+        # Replace any existing hook of the same name, then append (reflected now).
+        self._settings.webhooks = [
+            h for h in self._settings.webhooks if h.name != name] + [spec]
+        logger.info("webhook %r added via companion API", name)
+        return web.json_response(
+            {"ok": True, "name": name, "event": event, "restart": True})
+
+    async def _handle_webhook_remove(self, request: web.Request) -> web.Response:
+        """Remove an HUD-added webhook. Stops firing on the next restart."""
+        from core.config import remove_webhook
+        body = await _json_dict(request)
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return _error(400, "a webhook name is required")
+        before = len(self._settings.webhooks)
+        self._settings.webhooks = [
+            h for h in self._settings.webhooks if h.name != name]
+        removed = remove_webhook(name) if self._persist_secrets else (
+            len(self._settings.webhooks) != before)
+        logger.info("webhook %r removed via companion API", name)
         return web.json_response(
             {"ok": True, "name": name, "removed": bool(removed), "restart": True})
 

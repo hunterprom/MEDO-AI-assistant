@@ -938,6 +938,32 @@
           THEIR TOOLS BECOME SKILLS THE BRAIN CAN CALL · CONNECTS ON RESTART · LOCAL (COMMAND) SERVERS STILL GO IN config.yaml → mcp.servers · DROP-IN PYTHON SKILLS GO IN plugins/
         </div>
       </div>
+      <div class="head" style="margin-top:8px">ROUTINES · SCHEDULED</div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">Proactive routines</span><span class="desc" id="routines-desc">AT A TIME, MEDO ASKS THESE THINGS &amp; ANNOUNCES THE ANSWERS · RUNS DAILY · TAKES A RESTART</span></div>
+        <div id="routines-list" class="sr-list"></div>
+        <div class="field"><label>NAME</label><input id="routine-name" placeholder="morning briefing" autocomplete="off" /></div>
+        <div class="field"><label>TIME — HH:MM, 24-hour</label><input id="routine-at" placeholder="08:00" autocomplete="off" /></div>
+        <div class="field"><label>ASK — one per line, routed like you typed them</label><textarea id="routine-ask" rows="3" placeholder="what's the weather&#10;what's the news" style="width:100%;background:#0a1420;border:1px solid #1e3a54;color:#c9e6ff;font-family:'Share Tech Mono',monospace;font-size:12px;padding:8px;border-radius:6px;resize:vertical"></textarea></div>
+        <div class="rowbtns"><button class="btn-sm" id="routine-add">ADD ROUTINE</button><span id="routine-status"></span></div>
+      </div>
+      <div class="head" style="margin-top:8px">WEBHOOKS · ON EVENTS</div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">Event webhooks</span><span class="desc" id="webhooks-desc">WHEN SOMETHING HAPPENS, POST A JSON PAYLOAD TO A URL · TAKES A RESTART</span></div>
+        <div id="webhooks-list" class="sr-list"></div>
+        <div class="field"><label>NAME</label><input id="webhook-name" placeholder="log to n8n" autocomplete="off" /></div>
+        <div class="field"><label>EVENT</label>
+          <select class="cfg" id="webhook-event" style="max-width:none">
+            <option value="routed">a command was handled (routed)</option>
+            <option value="wake">MEDO woke (turn started)</option>
+            <option value="reply">MEDO replied (spoke/answered)</option>
+            <option value="transcript">something was heard (transcript)</option>
+          </select>
+        </div>
+        <div class="field"><label>URL — receives POST {event, text, skill, path, at}</label><input id="webhook-url" placeholder="http://localhost:5678/webhook/medo" autocomplete="off" spellcheck="false" /></div>
+        <div class="field"><label>AUTH TOKEN — optional bearer, stored locally, never committed</label><input id="webhook-auth" type="password" placeholder="(optional)" autocomplete="off" spellcheck="false" /></div>
+        <div class="rowbtns"><button class="btn-sm" id="webhook-add">ADD WEBHOOK</button><span id="webhook-status"></span></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1039,7 +1065,7 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'core') scrollChat();    // the chat panel lives here now
-    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadLinkDevices(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadRoutines(); loadWebhooks(); loadLinkDevices(); }
     clusterOnShow(screen === 'cluster');   // start/stop the animation loop
   }
   $('tab-core').onclick = () => go('core');
@@ -2027,6 +2053,92 @@
         st.textContent = 'added · restart to connect';
         $('mcp-name').value = ''; $('mcp-url').value = ''; $('mcp-auth').value = '';
         log(`MCP · ADDED ${name} · RESTART TO APPLY`); loadMcp();
+      } else st.textContent = r.error || 'failed';
+    } catch { st.textContent = 'API offline'; }
+  };
+
+  /* ---- proactive routines ---- */
+  let _routines = [];
+  function renderRoutines() {
+    const list = $('routines-list'); list.innerHTML = '';
+    if (!_routines.length) return;
+    for (const r of _routines) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;align-items:baseline;padding:4px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
+      const n = document.createElement('span'); n.textContent = `${r.at} ${r.name}`; n.style.color = '#c9e6ff';
+      const t = document.createElement('span'); t.textContent = (r.ask || []).join(' · '); t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
+      const rm = document.createElement('button'); rm.textContent = '×'; rm.className = 'btn-sm';
+      rm.style.cssText = 'margin-left:auto;padding:0 8px'; rm.title = 'remove this routine';
+      rm.onclick = async () => {
+        _routines = _routines.filter(x => x.name !== r.name);
+        await postRoutines(); log(`ROUTINE · REMOVED ${r.name} · RESTART TO APPLY`);
+      };
+      row.append(n, t, rm); list.appendChild(row);
+    }
+  }
+  async function postRoutines() {
+    try {
+      await fetch(`${API}/control/routines`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ routines: _routines }) });
+      renderRoutines();
+    } catch { log('ROUTINES — API offline'); }
+  }
+  async function loadRoutines() {
+    try {
+      const d = await (await fetch(`${API}/routines`)).json();
+      _routines = d.routines || []; renderRoutines();
+    } catch { $('routines-desc').textContent = 'API OFFLINE'; }
+  }
+  $('routine-add').onclick = async () => {
+    const name = $('routine-name').value.trim(), at = $('routine-at').value.trim();
+    const ask = $('routine-ask').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const st = $('routine-status');
+    if (!name || !at) { st.textContent = 'need a name and time'; return; }
+    if (!/^\d{1,2}:\d{2}$/.test(at)) { st.textContent = 'time must be HH:MM'; return; }
+    if (!ask.length) { st.textContent = 'add at least one thing to ask'; return; }
+    _routines = _routines.filter(x => x.name !== name);
+    _routines.push({ name, at, ask, days: [], enabled: true });
+    st.textContent = 'saved · restart to schedule';
+    $('routine-name').value = ''; $('routine-at').value = ''; $('routine-ask').value = '';
+    log(`ROUTINE · ADDED ${name} · RESTART TO APPLY`); await postRoutines();
+  };
+
+  /* ---- event webhooks ---- */
+  async function loadWebhooks() {
+    const list = $('webhooks-list');
+    try {
+      const d = await (await fetch(`${API}/webhooks`)).json();
+      const hooks = d.webhooks || []; list.innerHTML = '';
+      if (!hooks.length) return;
+      for (const h of hooks) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:10px;align-items:baseline;padding:4px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
+        const n = document.createElement('span'); n.textContent = `${h.event} → ${h.name}`; n.style.color = '#c9e6ff';
+        const t = document.createElement('span'); t.textContent = h.url + (h.has_auth ? ' · 🔒' : ''); t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
+        const rm = document.createElement('button'); rm.textContent = '×'; rm.className = 'btn-sm';
+        rm.style.cssText = 'margin-left:auto;padding:0 8px'; rm.title = 'remove this webhook';
+        rm.onclick = async () => {
+          try {
+            await fetch(`${API}/control/webhook/remove`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: h.name }) });
+            log(`WEBHOOK · REMOVED ${h.name} · RESTART TO APPLY`); loadWebhooks();
+          } catch { log('WEBHOOK — API offline'); }
+        };
+        row.append(n, t, rm); list.appendChild(row);
+      }
+    } catch { $('webhooks-desc').textContent = 'API OFFLINE'; }
+  }
+  $('webhook-add').onclick = async () => {
+    const name = $('webhook-name').value.trim(), event = $('webhook-event').value;
+    const url = $('webhook-url').value.trim(), auth = $('webhook-auth').value.trim();
+    const st = $('webhook-status');
+    if (!name || !url) { st.textContent = 'need a name and URL'; return; }
+    if (!/^https?:\/\//.test(url)) { st.textContent = 'URL must start with http:// or https://'; return; }
+    st.textContent = '…';
+    try {
+      const r = await (await fetch(`${API}/control/webhook`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, event, url, auth }) })).json();
+      if (r.ok) {
+        st.textContent = 'added · restart to fire';
+        $('webhook-name').value = ''; $('webhook-url').value = ''; $('webhook-auth').value = '';
+        log(`WEBHOOK · ADDED ${name} · RESTART TO APPLY`); loadWebhooks();
       } else st.textContent = r.error || 'failed';
     } catch { st.textContent = 'API offline'; }
   };

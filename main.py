@@ -759,6 +759,18 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     router = Router(settings, registry, llm, bus)
     router.model = select_startup_model(llm, settings)
 
+    # Event webhooks: POST a JSON payload to external URLs when MEDO wakes,
+    # hears, routes, or replies. Subscribed here so it sees every bus event;
+    # fire-and-forget, so a dead endpoint never stalls a turn.
+    webhook_manager = None
+    if settings.webhooks:
+        from core.webhooks import WebhookManager
+
+        webhook_manager = WebhookManager(settings.webhooks)
+        live = webhook_manager.subscribe(bus)
+        if live:
+            console.print(f"[dim]Webhooks: {live} live.[/dim]")
+
     log = LatencyLog()
     # State chips are shown in voice mode; in the REPL they'd clutter the prompt.
     ui = ConsoleUI(console, bus, settings.personality.name, show_states=voice)
@@ -891,6 +903,8 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             await remote.stop()
         if hud_server is not None:
             await hud_server.stop()
+        if webhook_manager is not None:
+            await webhook_manager.stop()
         await mcp_manager.stop()
         # Close the controlled browser if one was ever launched, so Chrome
         # doesn't outlive MEDO holding a lock on the profile directory.
