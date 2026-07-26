@@ -110,5 +110,25 @@ def test_new_semantic_skills_are_indexable(tmp_path):
         assert Router._semantic_safe(skill) is True, skill.name
 
 
+@pytest.mark.asyncio
+async def test_search_documents_derives_query_from_text():
+    from skills.documents import DocumentsSkill
+    captured = []
+
+    class _Idx:
+        def search(self, q, n):
+            captured.append(q)
+            return [{"path": "notes.md", "text": "the budget was five thousand"}]
+
+        def stats(self):
+            return {"enabled": True, "chunks": 1}
+
+    d = DocumentsSkill(_Idx())
+    assert Router._semantic_safe(d) is True
+    res = await d.execute(SkillRequest(text="what did I write about the budget"))
+    assert res.success
+    assert captured == ["what did I write about the budget"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

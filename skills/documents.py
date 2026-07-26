@@ -30,7 +30,13 @@ class DocumentsSkill(Skill):
     routing_phrases = [
         "what do my notes say about", "find it in my documents",
         "search my files for", "look through my pdfs for", "what did I write about",
+        "does my contract mention", "what does my lease say about",
+        "according to my documents", "is there anything in my files about",
     ]
+    # Reached by MEANING, the whole utterance is the RAG query — so "what did I
+    # write about the budget" searches the user's own files instead of letting
+    # the LLM invent what they "wrote".
+    semantic_from_text = True
 
     patterns = [
         re.compile(r"\b(?:search|look\s+in|check)\s+my\s+(?:documents|docs|notes|files)\s+(?:for\s+)?(?P<q>.+)", re.IGNORECASE),
@@ -43,6 +49,9 @@ class DocumentsSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         query = (request.args.get("query") or gd.get("q") or gd.get("q2") or "").strip(" ?.!")
+        if not query and not request.match and not request.args:
+            # Reached by MEANING (semantic tier): the utterance is the query.
+            query = request.text.strip(" ?.!")
         if not query:
             return SkillResult("What should I look for in your documents?", success=False)
 
