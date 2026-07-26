@@ -62,7 +62,12 @@ class WebSearchSkill(Skill):
     ]
 
     patterns = [
-        re.compile(r"\b(?:search|google|look\s+up)\s+(?:the\s+web\s+for\s+|for\s+)?(?P<q>.+)", re.IGNORECASE),
+        # The lookahead keeps the phrasal "look up TO (your heroes)", "look up
+        # WHEN/AT", "google IS a great company", and "search your feelings/heart"
+        # idioms off the fast path — search/google/look-up are otherwise verbs.
+        re.compile(r"\b(?:search|google|look\s+up)\s+(?:the\s+web\s+for\s+|for\s+)?"
+                   r"(?!(?:to|when|at|is|are|was|were)\b|your\s+(?:feelings?|heart|soul)\b)"
+                   r"(?P<q>.+)", re.IGNORECASE),
         re.compile(r"\bwhat\s+is\s+the\s+latest\s+(?:on|about)\s+(?P<q2>.+)", re.IGNORECASE),
         # MK: "барај рецепт за пица", "гугни цена на филамент". Registered last
         # in the registry, so the site/file/app skills have already had their

@@ -104,6 +104,18 @@ def test_news_ignores_the_noun_in_sentences():
         assert n.match(x) is None, x
 
 
+def test_web_search_declines_phrasal_and_idioms():
+    from skills.websearch import WebSearchSkill
+    w = WebSearchSkill()
+    for x in ("look up to your heroes", "look up when you walk",
+              "google is a great company", "search your feelings"):
+        assert w.match(x) is None, x
+    # real searches still route
+    assert w.match("search for the best soldering iron") is not None
+    assert w.match("look up the weather in Tokyo") is not None
+    assert w.match("google the nearest hardware store") is not None
+
+
 def test_circuit_declines_plumbing_travel_calls():
     from skills.circuit import CircuitSkill
     c = CircuitSkill(_settings(), None, None)
