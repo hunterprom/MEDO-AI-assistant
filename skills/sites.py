@@ -586,13 +586,15 @@ class PlaySkill(Skill):
             # "play relaxing jazz on youtube", "put on some lofi on spotify"
             re.compile(rf"\b(?:play|put\s+on|throw\s+on|queue\s+up)\s+(?P<q>.+?)\s+"
                        rf"(?:on|in|from)\s+(?:the\s+)?(?P<site>{alt})\b", re.IGNORECASE),
-            # "put on some relaxing jazz", "throw on lofi hip hop" — no site, so
-            # it defaults to YouTube. Guarded so it never steals MediaSkill's
-            # local "put on some music/song/track" (that noun stays with media).
+            # "put on some relaxing jazz", "throw on a bit of lofi" — no site, so
+            # it defaults to YouTube. The "some / a bit of / a little" quantifier
+            # is REQUIRED: it signals media intent and keeps "put on the kettle"
+            # / "put on your coat" out. The lookahead still hands the words
+            # MediaSkill owns (music/song/track/playback) to local playback.
             re.compile(r"\b(?:put\s+on|throw\s+on)\s+"
-                       r"(?!(?:some\s+|the\s+|my\s+|a\s+|an\s+)?"
-                       r"(?:music|song|tune|track|playback|playlist|album|record)s?\b)"
-                       r"(?:me\s+)?(?P<q>[\w\s'-]{2,60}?)\s*[.!?]*$", re.IGNORECASE),
+                       r"(?:some|a\s+bit\s+of|a\s+little)\s+"
+                       r"(?!(?:music|song|track|playback)s?\b)"
+                       r"(?P<q>[\w\s'-]{2,60}?)\s*[.!?]*$", re.IGNORECASE),
             # "play me a video of drone builds" — no site named, video implies
             # YouTube. MediaSkill keeps "play the music" (local playback).
             re.compile(r"\bplay\s+(?:me\s+)?(?:a\s+|some\s+|the\s+)?videos?\s+"

@@ -136,6 +136,15 @@ def test_put_on_a_topic_defaults_to_youtube():
     assert query.lower() == "relaxing jazz"
 
 
+def test_put_on_does_not_steal_household_phrases():
+    """The no-site 'put on X' must not grab non-media 'put on the kettle' etc.
+    — the media quantifier ('some'/'a bit of') is what signals a play."""
+    p = PlaySkill()
+    for x in ("put on the kettle", "put on your coat", "put on a show",
+              "put on the brakes"):
+        assert p.match(x) is None, x
+
+
 def test_put_on_music_stays_with_local_media():
     """'put on some music' is local playback (MediaSkill), not a YouTube play."""
     from skills.media import MediaSkill
