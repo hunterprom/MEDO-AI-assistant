@@ -89,6 +89,20 @@ class CircuitSkill(Skill):
         "battery, LED, motor, sensor) and write the Arduino sketch to drive "
         "them. Use for 'how do I connect/wire X' build questions."
     )
+    # Reached by MEANING: the whole utterance is the build question, so wiring
+    # questions that don't hit the verb templates still get the electrical-
+    # engineer framing instead of vague electronics prose from the general LLM.
+    semantic_from_text = True
+    routing_phrases = [
+        "how should I hook up a battery, an arduino and an LED",
+        "what pins do I connect this servo motor to",
+        "I'm building a little robot car, how do I wire the motors",
+        "help me build the circuit for a temperature sensor",
+        "wiring diagram for an ultrasonic distance sensor",
+        "write the arduino sketch to blink an LED",
+        "how do you connect an OLED display to an ESP32",
+        "what resistor do I need for this LED",
+    ]
 
     patterns = [
         # Subject is i|you|we ("how do YOU wire up an LED"), and the same
@@ -129,6 +143,9 @@ class CircuitSkill(Skill):
         if not question and gd.get("q2"):
             question = f"{gd['q2']} to {gd.get('q2b', '')}"
         question = question.strip(" ?.!")
+        if not question and not request.match and not request.args:
+            # Reached by MEANING (semantic tier): the utterance IS the question.
+            question = request.text.strip(" ?.!")
         if not question:
             return SkillResult("Што сакаш да поврзеш?" if speak_mk
                                else "What are you trying to wire up?",

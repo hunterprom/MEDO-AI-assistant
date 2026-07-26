@@ -79,6 +79,20 @@ class AskSpecialistSkill(_CouncilBase):
         "analyst, economist and others). Use when the user names a field or "
         "an expert."
     )
+    # Reached by MEANING: the utterance names the expert, so execute() recovers
+    # them (and the question) from request.text. Phrases kept singular/named to
+    # separate this from the collective convene_council.
+    semantic_from_text = True
+    routing_phrases = [
+        "get the physicist's take on this",
+        "I want the lawyer's opinion on this contract",
+        "run this by the electrical engineer",
+        "check with the roboticist about the gait",
+        "have the economist look at these numbers",
+        "let the mechanical engineer weigh in on this bracket",
+        "put this question to the software engineer",
+        "what would the mathematician make of this proof",
+    ]
 
     patterns = [
         re.compile(r"\bask\s+(?:the\s+)?(?P<who>[\w\s]+?)\s+"
@@ -86,6 +100,21 @@ class AskSpecialistSkill(_CouncilBase):
                    re.IGNORECASE),
         re.compile(r"\b(?:what\s+(?:would|does)|ask)\s+(?:the\s+)?(?P<who2>[\w\s]+?)\s+"
                    r"say\s+about\s+(?P<q2>.+)$", re.IGNORECASE),
+        # Natural ways to address one expert — "get X's take on", "what would X
+        # recommend for", "check with X about", "have X weigh in on", "run this
+        # by X". All still funnel through match() so a non-specialist declines.
+        re.compile(r"\bget\s+(?:the\s+)?(?P<who4>[\w\s]+?)'?s\s+"
+                   r"(?:take|opinion|view|read|thoughts?)\s+on\s+(?P<q4>.+)$",
+                   re.IGNORECASE),
+        re.compile(r"\bwhat\s+(?:would|does|will|do)\s+(?:the\s+)?(?P<who5>[\w\s]+?)\s+"
+                   r"(?:think|recommend|suggest|advise)\s+"
+                   r"(?:about|for|on|regarding)\s+(?P<q5>.+)$", re.IGNORECASE),
+        re.compile(r"\bcheck\s+with\s+(?:the\s+)?(?P<who6>[\w\s]+?)\s+"
+                   r"(?:about|on|regarding)\s+(?P<q6>.+)$", re.IGNORECASE),
+        re.compile(r"\bhave\s+(?:the\s+)?(?P<who7>[\w\s]+?)\s+(?:weigh\s+in|look)\s+"
+                   r"(?:on|at)\s+(?P<q7>.+)$", re.IGNORECASE),
+        re.compile(r"\b(?:run|put)\s+(?P<q8>.+?)\s+(?:by|past)\s+(?:the\s+)?"
+                   r"(?P<who8>[\w\s]+?)$", re.IGNORECASE),
         # MK: "прашај го електроинженерот за заземјување"
         re.compile(r"\bпрашај\s+(?:го\s+|ја\s+)?(?P<who3>[\w\s]+?)\s+за\s+(?P<q3>.+)$",
                    re.IGNORECASE),
@@ -108,17 +137,28 @@ class AskSpecialistSkill(_CouncilBase):
         if found is None:
             return None
         gd = found.groupdict()
-        who = (gd.get("who") or gd.get("who2") or gd.get("who3") or "").strip()
+        who = (gd.get("who") or gd.get("who2") or gd.get("who3") or gd.get("who4")
+               or gd.get("who5") or gd.get("who6") or gd.get("who7")
+               or gd.get("who8") or "").strip()
         return found if find_specialist(who, self._council) is not None else None
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
         who = (request.args.get("specialist") or gd.get("who") or gd.get("who2")
-               or gd.get("who3") or "").strip()
+               or gd.get("who3") or gd.get("who4") or gd.get("who5")
+               or gd.get("who6") or gd.get("who7") or gd.get("who8") or "").strip()
         question = (request.args.get("question") or gd.get("q") or gd.get("q2")
-                    or gd.get("q3") or "").strip(" ?.!")
+                    or gd.get("q3") or gd.get("q4") or gd.get("q5") or gd.get("q6")
+                    or gd.get("q7") or gd.get("q8") or "").strip(" ?.!")
         member = find_specialist(who, self._council)
+        if member is None and not request.match and not request.args:
+            # Reached by MEANING (semantic tier): no regex groups, no tool args.
+            # The utterance itself names the expert — recover them from it — and
+            # the whole utterance stands in as the question.
+            member = find_specialist(request.text, self._council)
+            if member is not None and not question:
+                question = request.text.strip(" ?.!")
         if member is None:
             names = ", ".join(s.title.removeprefix("the ") for s in self._council[:6])
             return SkillResult(
@@ -170,6 +210,19 @@ class ConveneCouncilSkill(_CouncilBase):
         "specialists at once and give one combined answer. Use for design "
         "questions that span fields."
     )
+    # Reached by MEANING: the whole utterance is the question to put to the
+    # panel. Phrases kept plural/collective to separate this from ask_specialist.
+    semantic_from_text = True
+    routing_phrases = [
+        "get the whole team to weigh in on this design",
+        "I want everyone's opinion on whether to use a brushless motor",
+        "bring your experts together on this problem",
+        "get a panel of specialists to look at this trade-off",
+        "pull the specialists together for this decision",
+        "get a round-table on this design question",
+        "have the panel look at this cross-discipline problem",
+        "what would a group of experts say about this build",
+    ]
 
     patterns = [
         re.compile(r"\b(?:convene|assemble|gather)\s+(?:the\s+)?council\b"
@@ -178,6 +231,18 @@ class ConveneCouncilSkill(_CouncilBase):
                    re.IGNORECASE),
         re.compile(r"\bwhat\s+does\s+the\s+council\s+(?:think|say)\s+"
                    r"(?:about\s+)?(?P<q3>.+)$", re.IGNORECASE),
+        # The synonyms the description already promises: experts / panel /
+        # specialists / team / round-table — not just the literal "council".
+        re.compile(r"\b(?:convene|assemble|gather|bring\s+in|pull\s+together)\s+"
+                   r"(?:the\s+|your\s+|a\s+)?(?:experts|panel|specialists|team|"
+                   r"round[\s-]?table)\b(?:\s+(?:on|about|for)\s+(?P<q5>.+))?$",
+                   re.IGNORECASE),
+        re.compile(r"\bwhat\s+do\s+(?:the\s+|all\s+(?:the\s+)?|your\s+)?"
+                   r"(?:experts|specialists)\s+(?:think|say)\s+"
+                   r"(?:about\s+)?(?P<q6>.+)$", re.IGNORECASE),
+        re.compile(r"\bget\s+(?:everyone|the\s+(?:whole\s+)?(?:team|panel))\s+"
+                   r"(?:to\s+weigh\s+in|opinion)\b[^.?!]*?(?:on|about)\s+(?P<q7>.+)$",
+                   re.IGNORECASE),
         # MK: "свикај го советот за …"
         re.compile(r"\bсвикај\s+(?:го\s+)?советот\s*(?:за\s+)?(?P<q4>.+)?$",
                    re.IGNORECASE),
@@ -191,7 +256,11 @@ class ConveneCouncilSkill(_CouncilBase):
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
         question = (request.args.get("question") or gd.get("q") or gd.get("q2")
-                    or gd.get("q3") or gd.get("q4") or "").strip(" ?.!")
+                    or gd.get("q3") or gd.get("q4") or gd.get("q5") or gd.get("q6")
+                    or gd.get("q7") or "").strip(" ?.!")
+        if not question and not request.match and not request.args:
+            # Reached by MEANING (semantic tier): the whole utterance is the ask.
+            question = request.text.strip(" ?.!")
         if not question:
             return SkillResult("За што да го свикам советот?" if speak_mk
                                else "What should I put to the council?",
