@@ -391,3 +391,38 @@ Drive similarly needs a one-time OAuth consent before it works.
 
 Verified: the pipeline connects to a real server (`sequential-thinking` loaded
 its tool) — the mechanism works; each server just needs enabling + its secret.
+
+## Tier-2 semantic routing: safe to run, safe to flip LIVE (2026-07-26)
+
+The semantic tier reaches a query skill by MEANING when no regex matched, before
+paying for the LLM. It ships in SHADOW by default and is flipped OFF / SHADOW /
+LIVE from the HUD. Two decisions make LIVE trustworthy.
+
+**Decision: a skill is only indexed if it is safe to reach with no parsed
+match.** The semantic path dispatches a bare `SkillRequest` — no regex `match`,
+no `args`. So `Router._semantic_safe` keeps a skill out of the index unless it
+is (a) not `controls_pc` and not `requires_confirmation` — actuation and
+destructive skills go through the LLM + confirmation gate, never a meaning
+shortcut — AND (b) able to run argument-free: either its tool schema marks
+nothing `required`, or it opts into `Skill.semantic_from_text`. Without this
+gate, flipping LIVE made an arg-hungry query skill deflect ("What should I search
+for?") on a perfectly clear request — a latent trap armed the moment the LIVE
+toggle shipped.
+
+**Decision: `semantic_from_text` is a skill's promise to self-serve from the
+utterance.** A query skill that needs an argument (web_search, search_documents,
+ask_specialist, convene_council, circuit_help, notes) sets it True and, in
+`execute`, falls back to deriving what it needs from `request.text` when there is
+no match and no args. So "who composed the music for X" reaches a real search
+instead of the LLM answering from stale memory — the fabrication class this whole
+tier exists to prevent.
+
+**The over-match lesson (recorded because it recurred):** widening a fast-path
+pattern to catch a natural phrasing repeatedly leaked into everyday speech — "put
+on some coffee", "assemble the team", "I'm feeling under the weather", "that's
+great news", "can you see anything on my screen". The fix pattern is always the
+same: anchor to a request/command frame, gate a broad object on an exact resolve
+(not substring containment), or require a disambiguating cue — and verify by
+RUNNING the skill over a corpus of adversarial everyday utterances, not by
+reasoning. Three verification passes (two workflows + an agent) drove the fences,
+each testing by running `.match()` over ~130 everyday utterances.
