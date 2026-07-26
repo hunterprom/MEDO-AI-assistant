@@ -17,6 +17,15 @@ from skills.base import Skill, SkillRequest, SkillResult
 class NotesSkill(Skill):
     name = "notes"
     description = "Take, read back, or delete voice notes."
+    # Reached by MEANING, the safe action is READING notes back — so a semantic
+    # hit (no match, no args) lists them. Phrases are read-oriented and avoid
+    # the fast-path trigger words, and never a destructive "delete".
+    semantic_from_text = True
+    routing_phrases = [
+        "what have I jotted down", "go over my saved notes",
+        "recap my notes for me", "run through the notes I took",
+        "what's on my note list", "did I write anything down",
+    ]
 
     patterns = [
         re.compile(r"\b(?:take|make|write|jot(?:\s+down)?|add)\s+(?:a\s+)?note\b[:\s]*(?P<body>.*)", re.IGNORECASE),
@@ -56,7 +65,10 @@ class NotesSkill(Skill):
         # instead of stored, because "show" tripped the heuristic below.
         matched_add = bool(m and (m.groupdict().get("body") is not None
                                   or m.groupdict().get("body2") is not None))
-        if action == "list" or (
+        # Reached by MEANING (semantic tier): no regex match, no tool args — the
+        # safe reading of a bare notes intent is to list them.
+        reached_by_meaning = not m and not args
+        if action == "list" or reached_by_meaning or (
                 not matched_add
                 and re.search(r"\b(read|list|show|what)\b", text, re.IGNORECASE)
                 and "note" in text.lower()

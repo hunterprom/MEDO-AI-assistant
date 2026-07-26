@@ -130,5 +130,19 @@ async def test_search_documents_derives_query_from_text():
     assert captured == ["what did I write about the budget"]
 
 
+@pytest.mark.asyncio
+async def test_notes_semantic_reach_lists_them(tmp_path):
+    from core.memory import NoteStore
+    from skills.notes import NotesSkill
+    store = NoteStore(str(tmp_path / "notes.db"))
+    store.add("buy more solder")
+    n = NotesSkill(store)
+    assert Router._semantic_safe(n) is True
+    # bare semantic request (no match, no args) -> read them back, don't deflect
+    res = await n.execute(SkillRequest(text="what have I jotted down"))
+    assert res.success
+    assert "buy more solder" in res.speech
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
