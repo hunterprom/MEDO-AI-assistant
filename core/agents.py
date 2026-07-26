@@ -66,7 +66,7 @@ _DOMAIN: dict[str, str] = {
     # knowledge / files
     "files": "knowledge", "search_documents": "knowledge", "edit_file": "knowledge",
     "open_in_editor": "knowledge", "write_in_app": "knowledge",
-    "import_file": "knowledge", "notes": "knowledge",
+    "import_file": "knowledge", "notes": "knowledge", "resistor_colors": "knowledge",
     # memory
     "remember_fact": "memory", "recall_facts": "memory", "forget_fact": "memory",
     # system / control
@@ -100,7 +100,7 @@ _STAR_LABELS: dict[str, str] = {
     "browser_task": "Browser Agent",
     "files": "Files", "search_documents": "Documents", "edit_file": "Edit File",
     "open_in_editor": "Open In Editor", "write_in_app": "Write In App",
-    "import_file": "Import", "notes": "Notes",
+    "import_file": "Import", "notes": "Notes", "resistor_colors": "Resistor",
     "remember_fact": "Remember", "recall_facts": "Recall", "forget_fact": "Forget",
     "power": "Power", "volume": "Volume", "brightness": "Brightness",
     "screenshot": "Screenshot", "system_info": "System Info", "type_text": "Type",

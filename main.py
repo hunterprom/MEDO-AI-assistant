@@ -249,6 +249,13 @@ def build_registry(
 
     for _sec in build_security_skills(settings, whitelist, explain=expert):
         registry.register(_sec)
+    # Resistor colour-band decoder — deterministic maker arithmetic. Before the
+    # council/circuit block so "what does brown black red gold mean" claims the
+    # fast path instead of falling to the electrical-engineer prose (or the LLM,
+    # which swaps the multiplier and tolerance bands).
+    from skills.resistor import ResistorSkill
+
+    registry.register(ResistorSkill())
     # The specialist council + the wiring helper that borrows its electrical
     # engineer. Before the broad web/search skills, whose "how do I ..." and
     # "ask ..." patterns would otherwise swallow them.
