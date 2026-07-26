@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
@@ -197,6 +198,48 @@ def test_continuous_mode_always_relistens():
 
 def test_default_listen_after_barge_is_off():
     assert load_settings().conversation.listen_after_barge is False
+
+
+@pytest.mark.asyncio
+async def test_fast_path_turn_does_not_hang_on_the_filler():
+    """Regression: a FAST-path voice turn must COMPLETE. It never fires
+    on_llm_start, and the filler task (enabled by default) must not deadlock the
+    finally's `await filler` — which left MEDO stuck in THINKING with the answer
+    shown but never spoken ('still processing after answering')."""
+    from core.events import AssistantState, RoutePath
+    from core.router import RouteResult
+
+    loop = _make_loop()
+    assert loop._filler is not None and loop._filler.enabled   # the deadlock condition
+
+    class _Stt:
+        def transcribe_with_language(self, audio):
+            return ("what time is it", "en")
+    loop._stt = _Stt()
+
+    async def _route(text, context=None, on_delta=None, on_llm_start=None):
+        # FAST path: on_llm_start is NEVER called.
+        return RouteResult(path=RoutePath.FAST, speech="It's 3 PM.",
+                           skill_name="datetime", streamed_reply=False)
+    loop._router.route = _route
+    loop._router.awaiting_confirmation = False
+    loop._modes.continuous = False
+
+    loop._sm.transition = AsyncMock()
+    spoken: list[str] = []
+
+    async def _speak(text):
+        spoken.append(text)
+        return 10.0
+    loop._speak = _speak
+
+    audio = np.full(1600, 50, dtype=np.int16)
+    # OLD code hangs here forever; the timeout turns the deadlock into a failure.
+    await asyncio.wait_for(loop._run_turn(audio, 0.0, True), timeout=5)
+
+    assert spoken == ["It's 3 PM."]                            # reply actually spoken
+    states = [c.args[0] for c in loop._sm.transition.call_args_list]
+    assert AssistantState.SPEAKING in states                  # reached SPEAKING, not stuck
 
 
 def test_wake_requires_sustained_frames_by_default():

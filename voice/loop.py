@@ -701,7 +701,21 @@ class VoiceLoop:
             fill = self._filler
             if fill is None or not fill.enabled:
                 return
-            await llm_started.wait()
+            # Wait for the LLM commit — but the FAST and SEMANTIC paths never
+            # fire on_llm_start, so ALSO wake when the whole turn has already
+            # finished, and bail. Otherwise the finally's `await filler`
+            # deadlocks: the turn hangs in THINKING, its answer shown in the HUD
+            # (via the ROUTED event) but never spoken, and MEDO sits on
+            # "processing" forever after answering.
+            waiters = [asyncio.ensure_future(llm_started.wait()),
+                       asyncio.ensure_future(route_done.wait())]
+            try:
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for w in waiters:
+                    w.cancel()
+            if not llm_started.is_set():
+                return          # turn finished without an LLM — no filler needed
             if await _sleep_or_done(fill.opening_delay(text)):
                 return
             if streamed["count"] or self._barged_in:
