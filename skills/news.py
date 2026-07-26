@@ -26,7 +26,14 @@ class NewsSkill(Skill):
     ]
 
     patterns = [
-        re.compile(r"\b(?:the\s+)?news\b", re.IGNORECASE),
+        # A bare \bnews\b fired on any sentence with the word ("that's great
+        # news", "on the news", "no news is good news"). Require a request frame,
+        # an "<any|latest|today's> news" form, or a bare "news" command.
+        re.compile(r"\b(?:what(?:'?s| is)|give\s+me|read\s+me|tell\s+me|"
+                   r"catch\s+me\s+up\s+on|hear|check|get\s+me|show\s+me|bring\s+me)\s+"
+                   r"(?:the\s+|any\s+|some\s+|in\s+the\s+|on\s+the\s+|me\s+the\s+)?news\b"
+                   r"|\b(?:any|the\s+latest|some|more|today'?s)\s+news\b"
+                   r"|^\s*(?:the\s+)?news\s*[?.!]*$", re.IGNORECASE),
         re.compile(r"\bheadlines?\b", re.IGNORECASE),
         # Bare "what's happening" (a news ask) or "...in the world/news", but
         # NOT "what's happening with my order / at the party tonight".

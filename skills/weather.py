@@ -90,10 +90,14 @@ class WeatherSkill(Skill):
     ]
 
     patterns = [
-        # "what's the weather LIKE in London" — the intervening "like" pushed
-        # the city out of reach, so it silently reported the default city.
-        re.compile(rf"\bweather\b(?:\s+like)?(?:\s+(?:in|for|at)\s+(?P<city>{_CITY}))?",
-                   re.IGNORECASE),
+        # A bare \bweather\b used to fire on any sentence with the word ("I'm
+        # feeling under the weather", "nice weather", "fair-weather friends").
+        # Require a question frame, an "(in|for|at) <city>" location, or a bare
+        # "weather" command. "how's the weather" is covered by its own pattern.
+        re.compile(rf"\bwhat(?:'?s| is)\s+(?:the\s+)?weather(?:\s+like)?"
+                   rf"(?:\s+(?:in|for|at)\s+(?P<city>{_CITY}))?", re.IGNORECASE),
+        re.compile(rf"\bweather(?:\s+like)?\s+(?:in|for|at)\s+(?P<cityb>{_CITY})"
+                   rf"|^\s*(?:the\s+)?weather\s*[?.!]*$", re.IGNORECASE),
         re.compile(rf"\bforecast\b(?:\s+(?:in|for)\s+(?P<city2>{_CITY}))?", re.IGNORECASE),
         re.compile(r"\b(?:how\s+(?:hot|cold)|temperature)\b", re.IGNORECASE),
         # Bare precipitation questions used to fabricate on the LLM path:
@@ -148,9 +152,9 @@ class WeatherSkill(Skill):
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
         city = _strip_time_words(
-            (request.args.get("city") or gd.get("city") or gd.get("city2")
-             or gd.get("city3") or gd.get("city4") or gd.get("city5")
-             or "").strip(" ?.!"))
+            (request.args.get("city") or gd.get("city") or gd.get("cityb")
+             or gd.get("city2") or gd.get("city3") or gd.get("city4")
+             or gd.get("city5") or "").strip(" ?.!"))
         if not city:
             # Several patterns ("how hot is it in Dubai", "is it raining in
             # Paris", "do I need a jacket in London") carry no city GROUP, so

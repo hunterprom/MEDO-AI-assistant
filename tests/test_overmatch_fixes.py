@@ -80,6 +80,40 @@ def test_weather_city_tail_rejects_non_places():
         assert _city_from_tail(x) is None, x
 
 
+def test_weather_ignores_idioms_and_smalltalk():
+    from skills.weather import WeatherSkill
+    w = WeatherSkill(_settings().weather)
+    for x in ("what's the weather", "what's the weather like in London",
+              "weather in Paris", "the weather"):
+        assert w.match(x) is not None, x
+    for x in ("I'm feeling under the weather", "nice weather we're having",
+              "I hate cold weather", "we talked about the weather",
+              "fair-weather friends aren't real friends"):
+        assert w.match(x) is None, x
+
+
+def test_news_ignores_the_noun_in_sentences():
+    from skills.news import NewsSkill
+    n = NewsSkill(_settings().news)
+    for x in ("news", "the news", "what's the news", "give me the news",
+              "any news", "the latest news", "what's in the news"):
+        assert n.match(x) is not None, x
+    for x in ("that's great news", "no news is good news",
+              "she broke the news gently", "I saw it on the news last night",
+              "fake news is a problem"):
+        assert n.match(x) is None, x
+
+
+def test_circuit_declines_plumbing_travel_calls():
+    from skills.circuit import CircuitSkill
+    c = CircuitSkill(_settings(), None, None)
+    for x in ("connect the flight to Paris", "connect the hose to the tap",
+              "connect the trailer to the car",
+              "please connect the call to reception", "connect me to my mother"):
+        assert c.match(x) is None, x
+    assert c.match("connect a battery to an LED") is not None    # real circuit
+
+
 def test_news_happening_and_world_of():
     from skills.news import NewsSkill
     n = NewsSkill(_settings().news)

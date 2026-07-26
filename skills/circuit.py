@@ -115,7 +115,10 @@ class CircuitSkill(Skill):
                    # social / comms / idiom senses of "connect" are not circuits
                    r"people|someone|somebody|anyone|anybody|others|users?|"
                    r"customers?|clients?|colleagues?|humans?|agent|support|"
-                   r"sales|emotionally|dots|deeper)\b)"
+                   r"sales|emotionally|dots|deeper|"
+                   # everyday plumbing / travel / phone-call / towing senses
+                   r"flights?|hoses?|pipes?|trailers?|water|sprinklers?|faucets?|"
+                   r"tap|dishwashers?|reception|call|mother|father)\b)"
                    r"(?P<q>.+)$", re.IGNORECASE),
         # "connect X to Y" is overloaded — decline the everyday networking sense
         # ("connect my phone to the wifi") so it isn't answered as a circuit.
@@ -125,7 +128,10 @@ class CircuitSkill(Skill):
                    # social / comms / idiom senses of "connect" are not circuits
                    r"people|someone|somebody|anyone|anybody|others|users?|"
                    r"customers?|clients?|colleagues?|humans?|agent|support|"
-                   r"sales|emotionally|dots|deeper)\b)"
+                   r"sales|emotionally|dots|deeper|"
+                   # everyday plumbing / travel / phone-call / towing senses
+                   r"flights?|hoses?|pipes?|trailers?|water|sprinklers?|faucets?|"
+                   r"tap|dishwashers?|reception|call|mother|father)\b)"
                    r"(?P<q2>.+?)\s+(?:to|with|and)\s+(?P<q2b>.+)$", re.IGNORECASE),
         re.compile(r"\bhelp\s+me\s+(?:wire|build)\s+(?P<q3>.+)$", re.IGNORECASE),
         # "wiring DIAGRAM for X", "circuit SCHEMATIC for X" — allow the noun.
