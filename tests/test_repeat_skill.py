@@ -17,11 +17,14 @@ def test_match_phrasings():
     s = RepeatSkill()
     for x in ("say that again", "repeat that", "repeat it", "what did you say",
               "what did you just say", "come again", "one more time",
-              "can you repeat that", "повтори", "што рече"):
+              "say that one more time", "can you repeat that",
+              "повтори", "повтори го", "што рече"):
         assert s.match(x) is not None, x
-    # a follow-up asking ABOUT something is not a verbatim replay
-    assert s.match("what did you say about the weather") is None
-    assert s.match("repeat the last step of the recipe") is None
+    # a follow-up / a request to repeat a specific OBJECT is not a verbatim replay
+    for x in ("what did you say about the weather", "repeat the last step of the recipe",
+              "can you repeat the address", "repeat the recipe",
+              "повтори ја лекцијата", "што рече тој за времето", "повтори ја песната"):
+        assert s.match(x) is None, x
 
 
 @pytest.mark.asyncio

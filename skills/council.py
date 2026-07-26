@@ -329,6 +329,24 @@ class ConveneCouncilSkill(_CouncilBase):
         }
 
 
+def _resolves_exactly(spoken: str, council: tuple[Specialist, ...]) -> Specialist | None:
+    """Like find_specialist but WITHOUT the loose trailing-noun containment, so
+    'do you have a legal pad' / 'an electrical outlet' / 'a data analyst' don't
+    resolve to the lawyer / electrical engineer / financial analyst via a
+    substring alias."""
+    want = re.sub(r"\s+", " ", spoken.strip().strip(".,!?")).lower()
+    want = re.sub(r"^(?:the|a|an|our|my)\s+", "", want)
+    if not want:
+        return None
+    for member in council:
+        title = member.title.lower().removeprefix("the ")
+        if want in (member.key, title) or want.rstrip("s") == member.key:
+            return member
+        if any(want == a.lower() for a in member.aliases):
+            return member
+    return None
+
+
 class CouncilRosterSkill(_CouncilBase):
     """Discovery: "who's on the council?" / "do you have a lawyer?"
 
@@ -370,9 +388,10 @@ class CouncilRosterSkill(_CouncilBase):
         if found is None:
             return None
         who = (found.groupdict().get("who") or "").strip()
-        # The broad "do you have a X" only claims when X is a real specialist;
-        # the roster patterns (no 'who' group) always claim.
-        if who and find_specialist(who, self._council) is None:
+        # The broad "do you have a X" only claims when X resolves EXACTLY to a
+        # specialist (not via substring, so 'a legal pad' / 'an electrical
+        # outlet' fall through); the roster patterns (no 'who' group) always claim.
+        if who and _resolves_exactly(who, self._council) is None:
             return None
         return found
 

@@ -236,9 +236,11 @@ class ResistorSkill(Skill):
                    rf".{{0,20}}?\bmean", re.IGNORECASE),
         # "decode / read (these) bands: brown black red".
         re.compile(rf"\b(?:decode|read)\b.{{0,30}}?{_COLOR_RUN}", re.IGNORECASE),
-        # value -> bands, and generic resistor/band context.
-        re.compile(r"\b(?:colou?r\s+bands?|resistor\s+colou?rs?|colou?r\s+code)\b",
-                   re.IGNORECASE),
+        # value -> bands, and generic resistor/band context. NOTE: bare "colour
+        # code" is deliberately absent — it's generic (HTML/CSS hex, dress code).
+        re.compile(r"\b(?:colou?r\s+bands?|resistor\s+colou?rs?)\b", re.IGNORECASE),
+        # "colours for 220 ohms" / "what colours for a 4.7k" — value -> bands.
+        re.compile(r"\bcolou?rs?\s+for\s+(?:a\s+)?\d", re.IGNORECASE),
         re.compile(r"\bresistor\b.*\b(?:band|colou?r|value|ohms?)\b", re.IGNORECASE),
         re.compile(r"\b(?:band|colou?r)s?\b.*\bresistor\b", re.IGNORECASE),
         # MK: "кои бои се за отпорник", "отпорник ... бои/оми"

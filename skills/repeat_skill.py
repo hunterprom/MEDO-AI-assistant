@@ -26,19 +26,24 @@ class RepeatSkill(Skill):
     description = "Repeat MEDO's last spoken reply, word for word."
 
     patterns = [
-        re.compile(r"\b(?:say|repeat)\s+(?:that|it)\s+(?:again|once\s+more)\b",
-                   re.IGNORECASE),
+        re.compile(r"\b(?:say|repeat)\s+(?:that|it)\s+"
+                   r"(?:again|once\s+more|one\s+more\s+time)\b", re.IGNORECASE),
         # "what did you (just) say" — anchored so "what did you say ABOUT X"
         # (a follow-up, not a replay) still reaches the LLM.
         re.compile(r"\bwhat\s+did\s+you\s+(?:just\s+)?say"
                    r"(?:\s+(?:just\s+now|to\s+me|again))?\s*[?.!]*$", re.IGNORECASE),
         re.compile(r"^\s*(?:come\s+again|one\s+more\s+time|again\s+please)\s*[?.!]*$",
                    re.IGNORECASE),
-        re.compile(r"\bcan\s+you\s+repeat\s+(?:that|it|yourself)?\b", re.IGNORECASE),
+        # Object REQUIRED: "can you repeat the address / the number" is a
+        # different ask, not a verbatim replay.
+        re.compile(r"\bcan\s+you\s+repeat\s+(?:that|it|yourself)\b", re.IGNORECASE),
         re.compile(r"\brepeat\s+(?:that|it|yourself)\b", re.IGNORECASE),
-        # MK: "повтори", "повтори го", "што рече", "уште еднаш"
-        re.compile(r"\bповтори(?:\s+го)?\b|\bшто\s+рече\b|\bуште\s+еднаш\b",
-                   re.IGNORECASE),
+        # MK: "повтори", "повтори го/ја/тоа", "што рече", "уште еднаш". Anchored
+        # so "повтори ја лекцијата" / "што рече тој за времето" (a real object /
+        # a follow-up) fall through, mirroring the English guards.
+        re.compile(r"\bповтори(?:\s+(?:го|ја|тоа))?\s*[?.!]*$"
+                   r"|\bшто\s+рече\s*[?.!]*$"
+                   r"|\bуште\s+еднаш\b", re.IGNORECASE),
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:

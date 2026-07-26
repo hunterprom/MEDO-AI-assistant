@@ -95,6 +95,17 @@ def test_colour_run_in_a_sentence_is_not_a_resistor():
         assert s.match(x) is None, x
 
 
+def test_bare_colour_code_is_not_a_resistor():
+    """'colour code' alone is generic (HTML/CSS hex, dress code)."""
+    s = ResistorSkill()
+    for x in ("what's the html colour code for this",
+              "what colour code should I use for the css"):
+        assert s.match(x) is None, x
+    # ...but "colours for <value>" is a value->bands query
+    assert s.match("colours for 220 ohms") is not None
+    assert s.match("resistor colours for 220 ohms") is not None
+
+
 def test_is_semantically_reachable():
     assert ResistorSkill().routing_phrases
     assert Router._semantic_safe(ResistorSkill()) is True

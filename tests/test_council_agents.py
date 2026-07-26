@@ -118,6 +118,10 @@ def test_council_roster_lists_and_probes():
     # "do you have a X" is gated: a non-specialist falls through
     assert s.match("do you have a minute") is None
     assert s.match("do you have a plumber") is None
+    # ...and a trailing-noun substring must NOT resolve via an alias
+    assert s.match("do you have a legal pad") is None
+    assert s.match("do you have an electrical outlet") is None
+    assert s.match("do you have a data analyst") is None
     assert Router._semantic_safe(s) is True
 
 
