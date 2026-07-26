@@ -383,6 +383,17 @@ def clean_query(query: str) -> str:
     return query
 
 
+#: An optional "on Opera / in Chrome / using my browser" naming a browser
+#: between the open-verb and the site. MEDO opens the request in its OWN
+#: controlled browser regardless — it never drives another browser's profile
+#: (the "never touch Opera browser data" rule) — but the phrase must not break
+#: the match and dump the whole multi-step request onto web_search, which then
+#: fabricates an answer instead of searching.
+_BROWSER_PREFIX = (r"(?:(?:on|in|using|with|through)\s+(?:my\s+|the\s+)?"
+                   r"(?:opera|chrome|chromium|firefox|edge|safari|brave|"
+                   r"vivaldi|browser)\s+)?")
+
+
 class SiteSearchSkill(Skill):
     """Open a site's own search results for a spoken query."""
 
@@ -411,7 +422,7 @@ class SiteSearchSkill(Skill):
             # otherwise open the site and silently drop the search. "open up" is
             # the phrasal form people actually say, so the particle is optional.
             re.compile(rf"\b(?:open(?:\s+up)?|go\s+to|visit|pull\s+up|bring\s+up)\s+"
-                       rf"(?:me\s+|for\s+me\s+)?(?:the\s+)?(?P<site4>{alt})\b"
+                       rf"{_BROWSER_PREFIX}(?:me\s+|for\s+me\s+)?(?:the\s+)?(?P<site4>{alt})\b"
                        rf"[\s,]*(?:and|then|to)?[\s,]*"
                        rf"(?:{verbs})\s+(?P<q4>.+)", re.IGNORECASE),
             # MK: "отвори јутјуб и барај релаксирачки џез"
@@ -557,7 +568,8 @@ class PlaySkill(Skill):
             # still falls through to SiteSearchSkill (which leaves you on the
             # results page, the right answer when no play was asked for).
             re.compile(rf"\b(?:open(?:\s+up)?|go\s+to|pull\s+up|bring\s+up)\s+"
-                       rf"(?:the\s+)?(?P<site>{alt})\b[\s,]*(?:and|then)?[\s,]*"
+                       rf"{_BROWSER_PREFIX}(?:the\s+)?(?P<site>{alt})\b"
+                       rf"[\s,]*(?:and|then)?[\s,]*"
                        rf"(?:search|look\s+up|find|play)(?:\s+up|\s+for)?\s+"
                        rf"(?P<q>.+?)\s+(?:and|then)\s+"
                        rf"(?:open|play|watch|start|show)\s+(?:me\s+)?(?:the\s+)?"
@@ -568,7 +580,8 @@ class PlaySkill(Skill):
             # The lookahead keeps the deictic "... and play the first video"
             # (page-already-open) from becoming a literal search for "first".
             re.compile(rf"\b(?:open(?:\s+up)?|go\s+to|pull\s+up|bring\s+up)\s+"
-                       rf"(?:the\s+)?(?P<site>{alt})\b[\s,]*(?:and|then)\s+"
+                       rf"{_BROWSER_PREFIX}(?:the\s+)?(?P<site>{alt})\b"
+                       rf"[\s,]*(?:and|then)\s+"
                        rf"play\s+"
                        rf"(?!(?:the\s+|that\s+|this\s+)?(?:first|top|1st|one)\b)"
                        rf"(?:me\s+)?(?P<q>.+)$", re.IGNORECASE),

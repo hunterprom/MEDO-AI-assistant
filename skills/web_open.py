@@ -107,20 +107,27 @@ class OpenWebsiteSkill(Skill):
         # fabricated an answer about the topic instead of opening the page).
         en_open = (r"(?:open(?:\s+up)?|go\s+to|visit|pull\s+up|bring\s+up|"
                    r"fire\s+up)(?:\s+(?:me|for\s+me|us))?")
+        # An optional browser name ("open ON OPERA youtube") between the verb and
+        # the site — captured but IGNORED: MEDO opens in its own browser, never
+        # another browser's profile (the "never touch Opera browser data" rule).
+        # Without it, "open on opera youtube" matched nothing and fell to the LLM.
+        browser = (r"(?:(?:on|in|using|with|through)\s+(?:my\s+|the\s+)?"
+                   r"(?:opera|chrome|chromium|firefox|edge|safari|brave|"
+                   r"vivaldi)\s+)?")
         mk_open = rf"{mk.OPEN}|{mk.GO_TO}"
         self.patterns = [
             # "open tinkercad.com", "go to docs.python.org/3" — needs a dot.
-            re.compile(rf"\b(?:{en_open})\s+(?:the\s+)?(?P<url>{domain})",
+            re.compile(rf"\b(?:{en_open})\s+{browser}(?:the\s+)?(?P<url>{domain})",
                        re.IGNORECASE),
             # Voice: Whisper transcribes "tinkercad.com" as "tinkercad dot com" —
             # words, not a dot — which used to fall through to the LLM.
-            re.compile(rf"\b(?:{en_open})\s+(?:the\s+)?(?P<spoken>{spoken})\b",
+            re.compile(rf"\b(?:{en_open})\s+{browser}(?:the\s+)?(?P<spoken>{spoken})\b",
                        re.IGNORECASE),
             # "open the website tinkercad" — explicit keyword, no dot needed.
             re.compile(r"\bopen\s+(?:the\s+)?(?:web\s?site|web\s?page)\s+(?P<name>.+)$",
                        re.IGNORECASE),
-            # "open tinkercad" — curated bare names only.
-            re.compile(rf"\b(?:{en_open})\s+(?:the\s+)?(?P<shortcut>{shortcuts})\b",
+            # "open tinkercad" / "open on opera youtube" — curated bare names only.
+            re.compile(rf"\b(?:{en_open})\s+{browser}(?:the\s+)?(?P<shortcut>{shortcuts})\b",
                        re.IGNORECASE),
             # "search for arduino sensors in the browser".
             re.compile(r"\bsearch\s+(?:for\s+)?(?P<query>.+?)\s+in\s+(?:the\s+|my\s+)?browser\b",

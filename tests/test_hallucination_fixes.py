@@ -84,6 +84,25 @@ def test_multi_step_variants_route_to_play():
         assert query.lower() == want_q, (utterance, query)
 
 
+def test_open_on_a_named_browser_still_routes():
+    """A browser name between the verb and the site ('open ON OPERA youtube')
+    must NOT break routing and dump the whole request onto web_search (which
+    then fabricates). MEDO opens in its own browser regardless."""
+    p, s, o = PlaySkill(), SiteSearchSkill(), OpenWebsiteSkill()
+    target = _play_target(p, "open on opera youtube and search up gran turismo "
+                             "and play me the first video that shows up")
+    assert target is not None
+    site, query = target
+    assert resolve_site(site).key == "youtube"
+    assert query.lower() == "gran turismo"
+    # search-only (no play tail) reaches site_search
+    assert s.match("open on opera youtube and search up gran turismo") is not None
+    assert o.match("open on opera youtube") is not None          # bare open
+    assert p.match("open in chrome youtube and play lofi") is not None
+    # "on <non-browser>" is not a browser slot -> no false site match
+    assert o.match("open on the table the manual") is None
+
+
 def test_plain_open_and_search_does_not_go_to_play():
     """No 'play the first' tail => this stays a search (results page), so
     PlaySkill must NOT claim it; SiteSearchSkill will."""
