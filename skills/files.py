@@ -61,9 +61,12 @@ class FilesSkill(Skill):
         # "search my computer for the invoice"
         re.compile(rf"\b(?:search|look)\s+(?:on\s+|in\s+|through\s+)?(?:my|the)\s+"
                    rf"(?:{_EN_DISK})\s+(?:for\s+)?(?P<query>.+)", re.IGNORECASE),
-        # "find the invoice on my computer"
-        re.compile(rf"\b(?:find|locate|search\s+for)\s+(?P<query>.+?)\s+on\s+"
-                   rf"(?:my|the)\s+(?:{_EN_DISK})\b", re.IGNORECASE),
+        # "find the invoice on my computer", "pull up the invoice on my laptop".
+        # The trailing disk hint keeps "pull up"/"bring up" unambiguous here (a
+        # bare "pull up X" is still a website/app, not a file search).
+        re.compile(rf"\b(?:find|locate|search\s+for|pull\s+up|bring\s+up)\s+"
+                   rf"(?P<query>.+?)\s+on\s+(?:my|the)\s+(?:{_EN_DISK})\b",
+                   re.IGNORECASE),
         # MK: "најди ја датотеката извештај", "барај фајл извештај"
         re.compile(rf"\b(?:{mk.SEARCH_OR_FIND}){mk.CLITICS}\s+(?:{_MK_FILE})\s+"
                    rf"(?:со\s+име\s+|со\s+наслов\s+)?(?P<query>.+)", re.IGNORECASE),

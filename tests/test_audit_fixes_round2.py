@@ -105,6 +105,18 @@ def test_import_path_with_spaces():
     assert m2.groupdict().get("path2") == "~/Downloads/holiday photos/beach.jpg"
 
 
+# --- files: "pull up the invoice on my computer" (needs the disk hint) -------
+
+def test_files_pull_up_with_disk_hint():
+    from core.safety import PathWhitelist
+    from skills.files import FilesSkill
+    f = FilesSkill(PathWhitelist(_settings().safety.whitelist_dirs))
+    assert f.match("pull up the invoice on my computer") is not None
+    assert f.match("bring up the budget on my laptop") is not None
+    # a bare "pull up X" (no disk hint) is a website/app, not a file search
+    assert f.match("pull up youtube") is None
+
+
 # --- circuit: 2nd-person + wiring-diagram; networking still declines ----------
 
 def test_circuit_second_person_and_diagram():
