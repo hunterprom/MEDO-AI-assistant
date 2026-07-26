@@ -222,14 +222,20 @@ class ResistorSkill(Skill):
     _COLOR_RE = ("black|brown|red|orange|yellow|green|blue|violet|purple|"
                  "grey|gray|white|gold|silver")
     _MK_COLOR_RE = "|".join(sorted(MK_COLOR, key=len, reverse=True))
+    _COLOR_RUN = rf"(?:{_COLOR_RE})(?:[\s,]+(?:and\s+)?(?:{_COLOR_RE})){{2,}}"
+    _MK_RUN = rf"(?:{_MK_COLOR_RE})(?:[\s,]+(?:и\s+)?(?:{_MK_COLOR_RE})){{2,}}"
 
     patterns = [
-        # A run of 3+ colour words IS a band spec: "brown black red gold",
-        # "red red brown". This is the case with no "resistor"/"band" keyword.
-        re.compile(rf"\b(?:{_COLOR_RE})(?:[\s,]+(?:and\s+)?(?:{_COLOR_RE})){{2,}}\b",
-                   re.IGNORECASE),
-        re.compile(rf"\b(?:{_MK_COLOR_RE})(?:[\s,]+(?:и\s+)?(?:{_MK_COLOR_RE})){{2,}}\b",
-                   re.IGNORECASE),
+        # A BARE band spec — (almost) nothing but 3+ colour words: "brown black
+        # red gold". Whole-utterance anchored so a colour run INSIDE a sentence
+        # ("put the red blue and green wires together") is NOT read as a resistor.
+        re.compile(rf"^\W*{_COLOR_RUN}\W*$", re.IGNORECASE),
+        re.compile(rf"^\W*{_MK_RUN}\W*$", re.IGNORECASE),
+        # "what does brown black red gold mean" — the meaning-query frame.
+        re.compile(rf"\bwhat\s+(?:do|does|is|are)\b.{{0,20}}?{_COLOR_RUN}"
+                   rf".{{0,20}}?\bmean", re.IGNORECASE),
+        # "decode / read (these) bands: brown black red".
+        re.compile(rf"\b(?:decode|read)\b.{{0,30}}?{_COLOR_RUN}", re.IGNORECASE),
         # value -> bands, and generic resistor/band context.
         re.compile(r"\b(?:colou?r\s+bands?|resistor\s+colou?rs?|colou?r\s+code)\b",
                    re.IGNORECASE),

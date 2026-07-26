@@ -80,9 +80,19 @@ def test_decode_then_encode_round_trips():
 
 def test_matches_a_bare_colour_run():
     s = ResistorSkill()
+    assert s.match("brown black red gold") is not None            # bare band spec
     assert s.match("what does brown black red gold mean") is not None
     assert s.match("colour bands for a 4.7k resistor") is not None
     assert s.match("what's the weather like") is None     # not a resistor query
+
+
+def test_colour_run_in_a_sentence_is_not_a_resistor():
+    """A colour run embedded in ordinary speech must not decode as a resistor."""
+    s = ResistorSkill()
+    for x in ("put the red blue and green wires together",
+              "I painted it red white and blue",
+              "the traffic light went red then green then yellow"):
+        assert s.match(x) is None, x
 
 
 def test_is_semantically_reachable():
