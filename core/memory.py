@@ -159,5 +159,9 @@ class ConversationMemory:
             messages.append({"role": "assistant", "content": assistant})
         return messages
 
+    def last_reply(self) -> str | None:
+        """MEDO's most recent spoken reply, for a verbatim 'say that again'."""
+        return self._turns[-1][1] if self._turns else None
+
     def clear(self) -> None:
         self._turns.clear()

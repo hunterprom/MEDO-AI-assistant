@@ -223,6 +223,12 @@ def build_registry(
 
     registry.register(DateTimeSkill())
     registry.register(TimerSkill(announcer, reminder_store))
+    # "say that again" — replays the last reply verbatim from ConversationMemory
+    # (a small LLM would re-generate and drift). Early so its phrases can't be
+    # stolen; it reads context['last_reply'], which the router supplies.
+    from skills.repeat_skill import RepeatSkill
+
+    registry.register(RepeatSkill())
     # Session-mode toggles (continuous conversation / interpreter). Registered
     # early so its phrases can't be stolen; flips the shared SessionModes the
     # voice loop reads. A no-op holder when modes weren't provided (tests).

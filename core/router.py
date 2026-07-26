@@ -459,6 +459,11 @@ class Router:
         if self._pending is not None:
             return await self._resolve_confirmation(text, context)
 
+        # Expose the PREVIOUS spoken reply so a skill can replay it verbatim
+        # ("say that again"). route() calls add_turn() AFTER this, so right now
+        # last_reply() is the prior turn's reply, exactly what should be echoed.
+        context = {**context, "last_reply": self.conversation.last_reply()}
+
         # --- FAST PATH ---
         if self._settings.router.fast_path_enabled:
             match = self._registry.find_match(text)

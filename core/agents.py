@@ -73,7 +73,7 @@ _DOMAIN: dict[str, str] = {
     "power": "system", "volume": "system", "brightness": "system",
     "screenshot": "system", "system_info": "system", "type_text": "system",
     "press_keys": "system", "window_action": "system", "clipboard": "system",
-    "media": "system", "operate_screen": "system",
+    "media": "system", "operate_screen": "system", "repeat": "system",
     # apps
     "apps": "apps", "locate_app": "apps", "install_app": "apps",
     "open_installed_app": "apps", "obsidian_note": "apps",
@@ -105,7 +105,7 @@ _STAR_LABELS: dict[str, str] = {
     "power": "Power", "volume": "Volume", "brightness": "Brightness",
     "screenshot": "Screenshot", "system_info": "System Info", "type_text": "Type",
     "press_keys": "Keys", "window_action": "Windows", "clipboard": "Clipboard",
-    "media": "Media Keys", "operate_screen": "Screen Agent",
+    "media": "Media Keys", "operate_screen": "Screen Agent", "repeat": "Repeat",
     "apps": "Launch", "locate_app": "Locate", "install_app": "Install",
     "open_installed_app": "Open App", "obsidian_note": "Obsidian Note",
     "obsidian_open": "Obsidian Open", "obsidian_search": "Obsidian Search",
