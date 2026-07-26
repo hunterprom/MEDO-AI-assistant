@@ -211,12 +211,19 @@ class SeeCameraSkill(Skill):
         re.compile(r"\blook\s+(?:at\s+(?:me|this)|around)\b", re.IGNORECASE),
         # Deictic "look at what I'm showing you" phrasings that name no camera —
         # they reached the LLM, which fabricated or claimed it couldn't see.
-        re.compile(r"\bwhat\s+am\s+i\s+holding(?:\s+up)?\b", re.IGNORECASE),
+        # End-anchored so "what am I holding YOU TO / holding out for" (idioms)
+        # don't become a webcam capture.
+        re.compile(r"\bwhat\s+am\s+i\s+holding(?:\s+up)?"
+                   r"(?:\s+(?:right\s+now|now|here))?[\s?.!]*$", re.IGNORECASE),
         re.compile(r"\bwhat(?:'?s| is)\s+in\s+front\s+of\s+me\b", re.IGNORECASE),
         # Modal expansion (mirrors see_screen): "could/would/will you see me",
         # "do you see anything", "tell me what you see" reached the LLM before.
+        # End-anchored + screen-guarded: "can you see me" is the camera, but
+        # "can you see anything ON MY SCREEN" is see_screen, and "will you see
+        # me TOMORROW" / "do you see anything WRONG with that" aren't the webcam.
         re.compile(r"\b(?:can|could|would|will|do)\s+(?:you|yuo|u)\s+see\s+"
-                   r"(?:me|anything|this|us)\b", re.IGNORECASE),
+                   r"(?:me|anything|this|us)\b(?!.*\b(?:screen|monitor|display)\b)"
+                   r"(?:\s+please)?[\s?.!]*$", re.IGNORECASE),
         re.compile(r"\btell\s+me\s+what\s+(?:you|yuo|u)\s+see\b"
                    r"(?!.*\b(?:screen|monitor|display)\b)", re.IGNORECASE),
         # Camera-oriented phrasings (never 'screen' — that's the see_screen skill).
@@ -289,6 +296,12 @@ class SeeScreenSkill(Skill):
         # "what do you see on the screen" — a see-query that names the screen.
         re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b"
                    r"(?=.*\b(?:screen|monitor|display)\b)", re.IGNORECASE),
+        # "can/do you see anything on my screen/monitor" — a screen question
+        # phrased as a 'see' request; the see_camera modal pattern declines
+        # these (it carries the screen/monitor/display negative lookahead), so
+        # catch them here rather than letting them fall to the LLM.
+        re.compile(r"\b(?:can|could|would|will|do)\s+(?:you|yuo|u)\s+see\b"
+                   r".*\b(?:screen|monitor|display)\b", re.IGNORECASE),
         # "can/could/would you see/view/look at my/the/your screen" — these went
         # to the LLM, which claims it can't see screens instead of calling this
         # tool. Cover the modal (can/could/would) AND the possessive (my/the/
@@ -299,7 +312,10 @@ class SeeScreenSkill(Skill):
         re.compile(r"\bwhat\s+am\s+i\s+looking\s+at\b", re.IGNORECASE),
         # Bare "see screen" — and the "C screen" Whisper produces for it, which
         # otherwise fell to the LLM and got a "no screen tool" hallucination.
-        re.compile(r"\b(?:see|c)\s+(?:the\s+|my\s+|your\s+)?screen\b", re.IGNORECASE),
+        # The lookbehinds keep an ability STATEMENT/complaint ("I can't see the
+        # screen", "I can see the screen fine") from triggering a screen read.
+        re.compile(r"(?<!can )(?<!can't )(?<!cannot )(?<!could )"
+                   r"\b(?:see|c)\s+(?:the\s+|my\s+|your\s+)?screen\b", re.IGNORECASE),
         # MK: "што гледаш на екранот", "што има на мојот екран". One optional
         # word before "екран" absorbs the possessive, which Whisper spells
         # several ways (мојот / твојот / твоот).

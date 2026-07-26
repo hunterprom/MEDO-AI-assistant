@@ -140,7 +140,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "information and not legal advice for a specific situation.",
         ("legal", "law", "contract", "liability", "licence", "license",
          "copyright", "gdpr", "правн", "закон", "договор"),
-        aliases=("адвокат", "правник", "attorney", "solicitor"),
+        aliases=("адвокат", "правник", "attorney", "solicitor", "legal"),
     ),
     Specialist(
         "finance", "the financial analyst",

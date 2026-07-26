@@ -127,13 +127,16 @@ def test_put_on_a_topic_on_a_site():
     assert "lofi" in query.lower()
 
 
-def test_put_on_a_topic_defaults_to_youtube():
+def test_put_on_topic_requires_a_named_site():
+    """The bare no-site 'put on some X' was removed — it grabbed 'put on some
+    coffee / clothes / weight'. A named site is now required for a 'put on' play."""
     p = PlaySkill()
-    target = _play_target(p, "put on some relaxing jazz")
+    assert p.match("put on some relaxing jazz") is None        # no site -> not a play
+    target = _play_target(p, "put on some relaxing jazz on youtube")
     assert target is not None
     site, query = target
-    assert site == ""                       # no site named -> execute() -> youtube
-    assert query.lower() == "relaxing jazz"
+    assert resolve_site(site).key == "youtube"
+    assert "relaxing jazz" in query.lower()
 
 
 def test_put_on_does_not_steal_household_phrases():

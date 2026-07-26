@@ -46,7 +46,11 @@ class DateTimeSkill(Skill):
         # from its training cutoff (a stale year), not the real clock.
         re.compile(r"\bwhat\s+(?:year|month)\s+(?:is\s+it|are\s+we\s+in)\b",
                    re.IGNORECASE),
-        re.compile(r"\bwhat\s+day\s+of\s+the\s+week\b", re.IGNORECASE),
+        # Anchor to the clock sense like the year/month pattern above: bare
+        # "what day of the week" hijacked "...does the pharmacy close",
+        # "...is my flight", "...works best for you".
+        re.compile(r"\bwhat\s+day\s+of\s+the\s+week\s+(?:is\s+it\b|"
+                   r"are\s+we\s+(?:on|in)\b)", re.IGNORECASE),
         # MK: "колку е часот", "кој датум е денес", "кој ден е денес".
         re.compile(r"\bколку\s+е\s+часот\b", re.IGNORECASE),
         re.compile(r"\bкое\s+време\s+е\b", re.IGNORECASE),

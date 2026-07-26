@@ -231,18 +231,21 @@ class ConveneCouncilSkill(_CouncilBase):
                    re.IGNORECASE),
         re.compile(r"\bwhat\s+does\s+the\s+council\s+(?:think|say)\s+"
                    r"(?:about\s+)?(?P<q3>.+)$", re.IGNORECASE),
-        # The synonyms the description already promises: experts / panel /
-        # specialists / team / round-table — not just the literal "council".
+        # The synonyms the description promises — but "experts / specialists /
+        # round-table" only, and "panel / team" ONLY when qualified ("panel of
+        # experts"). Bare "assemble the team" / "gather the panel" is everyday
+        # talk, not MEDO's council. The broader collective phrasings still reach
+        # the council by MEANING via routing_phrases.
         re.compile(r"\b(?:convene|assemble|gather|bring\s+in|pull\s+together)\s+"
-                   r"(?:the\s+|your\s+|a\s+)?(?:experts|panel|specialists|team|"
-                   r"round[\s-]?table)\b(?:\s+(?:on|about|for)\s+(?P<q5>.+))?$",
-                   re.IGNORECASE),
-        re.compile(r"\bwhat\s+do\s+(?:the\s+|all\s+(?:the\s+)?|your\s+)?"
-                   r"(?:experts|specialists)\s+(?:think|say)\s+"
-                   r"(?:about\s+)?(?P<q6>.+)$", re.IGNORECASE),
-        re.compile(r"\bget\s+(?:everyone|the\s+(?:whole\s+)?(?:team|panel))\s+"
-                   r"(?:to\s+weigh\s+in|opinion)\b[^.?!]*?(?:on|about)\s+(?P<q7>.+)$",
-                   re.IGNORECASE),
+                   r"(?:the\s+|your\s+|a\s+)?"
+                   r"(?:experts|specialists|round[\s-]?table|"
+                   r"(?:panel|team)\s+of\s+(?:experts|specialists))\b"
+                   r"(?:\s+(?:on|about|for)\s+(?P<q5>.+))?$", re.IGNORECASE),
+        # "what do YOUR experts think about X" — the possessive ties it to
+        # MEDO's council, so generic "what do the experts think about climate
+        # change" (external authority) falls through to the web/LLM.
+        re.compile(r"\bwhat\s+do\s+your\s+(?:experts|specialists)\s+"
+                   r"(?:think|say)\s+(?:about\s+)?(?P<q6>.+)$", re.IGNORECASE),
         # MK: "свикај го советот за …"
         re.compile(r"\bсвикај\s+(?:го\s+)?советот\s*(?:за\s+)?(?P<q4>.+)?$",
                    re.IGNORECASE),

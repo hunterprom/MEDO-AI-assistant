@@ -99,7 +99,8 @@ class AppsSkill(Skill):
     #: tool-chaining path) can carry out the whole request.
     _ALSO_ACTS = re.compile(
         r"\band\s+(?:then\s+)?(?:play|search|look\s+up|pull\s+up|find|"
-        r"put\s+on|throw\s+on)\b", re.IGNORECASE)
+        r"put\s+on|throw\s+on|go\s+to|navigate(?:\s+to)?|visit|bring\s+up)\b",
+        re.IGNORECASE)
 
     def match(self, text: str):
         if self._ALSO_WRITES.search(text) or self._ALSO_ACTS.search(text):

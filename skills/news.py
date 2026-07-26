@@ -28,11 +28,16 @@ class NewsSkill(Skill):
     patterns = [
         re.compile(r"\b(?:the\s+)?news\b", re.IGNORECASE),
         re.compile(r"\bheadlines?\b", re.IGNORECASE),
-        re.compile(r"\bwhat(?:'?s| is)\s+happening\b", re.IGNORECASE),
+        # Bare "what's happening" (a news ask) or "...in the world/news", but
+        # NOT "what's happening with my order / at the party tonight".
+        re.compile(r"\bwhat(?:'?s| is)\s+happening\b"
+                   r"(?:\s+in\s+the\s+(?:world|news)\b|[\s?.!]*$)", re.IGNORECASE),
         # Natural ways people ask for general/world headlines (no topic named —
         # a named topic is a web search, which WebSearchSkill owns).
         re.compile(r"\b(?:world|worldwide|global|international)\s+news\b", re.IGNORECASE),
-        re.compile(r"\btell\s+me\s+about\s+(?:the\s+)?(?:world|worldwide|current\s+events?)\b", re.IGNORECASE),
+        # "tell me about the world" (news) but NOT "the world OF warcraft".
+        re.compile(r"\btell\s+me\s+about\s+(?:the\s+)?"
+                   r"(?:world|worldwide|current\s+events?)\b(?!\s+of\b)", re.IGNORECASE),
         re.compile(r"\bwhat(?:'?s| is)\s+going\s+on\s+in\s+the\s+world\b", re.IGNORECASE),
         re.compile(r"\bcurrent\s+events\b", re.IGNORECASE),
         # MK: "вести", "најсвежи вести за Скопје", "наслови", "што има ново".

@@ -58,9 +58,27 @@ def _strip_time_words(city: str) -> str:
 
 
 #: A trailing "in/for/at <X>" that is plainly not a place, so the city fallback
-#: in execute() doesn't geocode "the moment" and report it can't find it.
+#: doesn't geocode "the moment" and report it can't find it.
 _NOT_A_CITY = {"the moment", "the minute", "now", "home", "work",
                "the weekend", "the week", "the day", "school"}
+
+
+def _city_from_tail(text: str) -> str | None:
+    """A trailing 'in/for/at <place>' -> the place, when it looks like a real
+    city, else None. A real city is a proper noun with no leading determiner —
+    so 'in Dubai' yields 'Dubai' but 'in the office' / 'at the wedding' yield
+    None (those are valid weather questions about the default location)."""
+    tail = re.search(r"\b(?:in|for|at)\s+(?P<c>[\w .'-]+?)\s*[?.!]*$",
+                     _strip_time_words(text), re.IGNORECASE)
+    if not tail:
+        return None
+    candidate = tail.group("c").strip(" ?.!")
+    if not candidate or candidate.lower() in _NOT_A_CITY:
+        return None
+    if re.match(r"(?:the|this|that|a|an|my|your|our|his|her|their)\b",
+                candidate, re.IGNORECASE):
+        return None
+    return candidate
 
 
 class WeatherSkill(Skill):
@@ -137,12 +155,7 @@ class WeatherSkill(Skill):
             # Several patterns ("how hot is it in Dubai", "is it raining in
             # Paris", "do I need a jacket in London") carry no city GROUP, so
             # honour a trailing "in/for/at <place>" before defaulting to Skopje.
-            tail = re.search(r"\b(?:in|for|at)\s+(?P<c>[\w .'-]+?)\s*[?.!]*$",
-                             _strip_time_words(request.text), re.IGNORECASE)
-            if tail:
-                candidate = tail.group("c").strip(" ?.!")
-                if candidate and candidate.lower() not in _NOT_A_CITY:
-                    city = candidate
+            city = _city_from_tail(request.text) or ""
         when = (request.args.get("when") or "").lower()
         if "tomorrow" in request.text.lower() or "утре" in request.text.lower():
             when = "tomorrow"

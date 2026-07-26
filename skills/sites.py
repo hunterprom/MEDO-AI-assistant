@@ -533,6 +533,16 @@ class PlaySkill(Skill):
         self._session = session          # BrowserSession, or None when disabled
         self._sites = load_sites(extra_sites)
         alt = alias_alternation(self._sites)
+        # Everyday-word aliases ("drive", "maps", "mail"...) are fine as a NAMED
+        # site ("open drive") but treacherous as a TRAILING "on <site>": "play
+        # some music on the drive" is a car journey, not Google Drive. Drop them
+        # from the alternation used after "on", so those utterances fall to
+        # MediaSkill (local playback) instead of opening a site.
+        _ambiguous = {"drive", "maps", "mail", "email", "e-mail", "inbox",
+                      "images", "photos", "x", "steam", "docs", "slides"}
+        _names = {n for s in self._sites for n in s.spoken_names()} - _ambiguous
+        alt_trailing = "|".join(re.escape(n) for n in
+                                sorted(_names, key=len, reverse=True))
         self.patterns = [
             # ORDER MATTERS. The three multi-step / named-first patterns come
             # FIRST, ahead of the deictic ones: match() returns the first
@@ -552,23 +562,29 @@ class PlaySkill(Skill):
                        rf"(?P<q>.+?)\s+(?:and|then)\s+"
                        rf"(?:open|play|watch|start|show)\s+(?:me\s+)?(?:the\s+)?"
                        rf"(?:first|top|1st)\b.*$", re.IGNORECASE),
-            # "open spotify and play some jazz", "go to youtube and put on lofi"
-            # — open a site and play in one go. The lookahead keeps the deictic
-            # "... and play the first video" (page-already-open) out of here so
-            # it can't be turned into a literal search for "first video".
+            # "open spotify and play some jazz", "go to youtube and play lofi" —
+            # open a site and play in one go. Second verb is "play" only: "put
+            # on" here invited idioms ("open reddit and put on a happy face").
+            # The lookahead keeps the deictic "... and play the first video"
+            # (page-already-open) from becoming a literal search for "first".
             re.compile(rf"\b(?:open(?:\s+up)?|go\s+to|pull\s+up|bring\s+up)\s+"
                        rf"(?:the\s+)?(?P<site>{alt})\b[\s,]*(?:and|then)\s+"
-                       rf"(?:play|put\s+on|throw\s+on)\s+"
+                       rf"play\s+"
                        rf"(?!(?:the\s+|that\s+|this\s+)?(?:first|top|1st|one)\b)"
                        rf"(?:me\s+)?(?P<q>.+)$", re.IGNORECASE),
             # "play the first video for gran turismo music [on youtube]" — a
             # first-result play named by its query, distinct from the deictic
             # "play the first video" (which needs a page already open below).
+            # "one" is NOT in the noun set (it belongs to the deictic branch,
+            # and "open the first one for now" is a list-pick, not a search),
+            # and a bare filler tail ("for now", "for the day") is rejected.
             re.compile(rf"\b(?:open|play|watch|start|show\s+me)\s+(?:me\s+)?"
                        rf"(?:the\s+)?(?:first|top|1st)\s+"
-                       rf"(?:video|result|one|hit|clip|song|track)\s+"
-                       rf"(?:for|of|about)\s+(?P<q>.+?)"
-                       rf"(?:\s+(?:on|in|from)\s+(?P<site>{alt}))?\s*[.!?]*$",
+                       rf"(?:video|result|hit|clip|song|track)\s+"
+                       rf"(?:for|of|about)\s+"
+                       rf"(?!(?:now|later|the\s+(?:day|moment|meeting|week|month))\b)"
+                       rf"(?P<q>.+?)"
+                       rf"(?:\s+(?:on|in|from)\s+(?P<site>{alt_trailing}))?\s*[.!?]*$",
                        re.IGNORECASE),
             # "play the first video" / "play the top result" / "play that" —
             # deictic: it means the page already on screen, NOT a search for
@@ -583,18 +599,16 @@ class PlaySkill(Skill):
                        r"(?:прв(?:ото|иот|ата|о)?|горнот[оа])\s+(?:видео|резултат|песна)\b"
                        r"|\b(?:пушти|свири)\s+(?:го\s+|ја\s+)?(?:тоа|ова)\s*[.!?]*$",
                        re.IGNORECASE),
-            # "play relaxing jazz on youtube", "put on some lofi on spotify"
+            # "play relaxing jazz on youtube", "put on some lofi on spotify".
+            # alt_trailing (not alt): a trailing "on the drive/maps/x" is an
+            # everyday phrase, not a site to search.
             re.compile(rf"\b(?:play|put\s+on|throw\s+on|queue\s+up)\s+(?P<q>.+?)\s+"
-                       rf"(?:on|in|from)\s+(?:the\s+)?(?P<site>{alt})\b", re.IGNORECASE),
-            # "put on some relaxing jazz", "throw on a bit of lofi" — no site, so
-            # it defaults to YouTube. The "some / a bit of / a little" quantifier
-            # is REQUIRED: it signals media intent and keeps "put on the kettle"
-            # / "put on your coat" out. The lookahead still hands the words
-            # MediaSkill owns (music/song/track/playback) to local playback.
-            re.compile(r"\b(?:put\s+on|throw\s+on)\s+"
-                       r"(?:some|a\s+bit\s+of|a\s+little)\s+"
-                       r"(?!(?:music|song|track|playback)s?\b)"
-                       r"(?P<q>[\w\s'-]{2,60}?)\s*[.!?]*$", re.IGNORECASE),
+                       rf"(?:on|in|from)\s+(?:the\s+)?(?P<site>{alt_trailing})\b",
+                       re.IGNORECASE),
+            # NOTE: there is deliberately NO bare no-site "put on some X" pattern.
+            # "some/a bit of" does not distinguish media from "put on some
+            # coffee / clothes / weight", so it stays a site-scoped play ("put on
+            # lofi ON youtube") or a "play X" — see the video/mood patterns below.
             # "play me a video of drone builds" — no site named, video implies
             # YouTube. MediaSkill keeps "play the music" (local playback).
             re.compile(r"\bplay\s+(?:me\s+)?(?:a\s+|some\s+|the\s+)?videos?\s+"

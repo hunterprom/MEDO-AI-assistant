@@ -63,12 +63,22 @@ def test_ask_specialist_still_declines_a_non_specialist():
 def test_convene_council_synonyms():
     s = _convene()
     for text in ("convene the experts on the motor choice",
-                 "what do the experts think about brushless motors",
-                 "gather the panel about this trade-off",
-                 "get the whole team to weigh in on the design"):
+                 "assemble your specialists on this trade-off",
+                 "what do your experts think about brushless motors",
+                 "convene the panel of experts on the frame",
+                 "gather a round-table on this design question"):
         assert s.match(text) is not None, text
     # the original "council" phrasings still work
     assert s.match("convene the council on the frame") is not None
+
+
+def test_convene_does_not_grab_everyday_team_talk():
+    """Bare 'team'/'panel' and generic 'the experts' are not the council."""
+    s = _convene()
+    for text in ("assemble the team", "gather the team for lunch",
+                 "gather the panel for the interview",
+                 "what do the experts think about climate change"):
+        assert s.match(text) is None, text
 
 
 # --- reachable by MEANING, and safe to be ------------------------------------
