@@ -243,7 +243,13 @@ def rank_specialists(question: str, council: tuple[Specialist, ...] = COUNCIL,
     text = question.lower()
     scored: list[tuple[int, int, Specialist]] = []
     for index, member in enumerate(council):
-        hits = sum(1 for trigger in member.triggers if trigger in text)
+        # Leading word boundary, not bare containment: "amp" was matching inside
+        # "example", "led" inside "pulled", "law" inside "flawless", pulling the
+        # wrong specialist into a convene. \b is Unicode-aware, so the Cyrillic
+        # STEM triggers ("инфлациј", "економ") still prefix-match their inflected
+        # forms, and multi-word triggers ("power supply") are unaffected.
+        hits = sum(1 for trigger in member.triggers
+                   if re.search(rf"\b{re.escape(trigger)}", text))
         if hits:
             scored.append((-hits, index, member))
     scored.sort()

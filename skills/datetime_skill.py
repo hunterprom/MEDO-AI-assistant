@@ -42,6 +42,11 @@ class DateTimeSkill(Skill):
         re.compile(r"\bwhat(?:'?s| is)?\s+(?:today'?s\s+)?(?:the\s+)?date\b", re.IGNORECASE),
         re.compile(r"\bwhat\s+day\s+is\s+it\b", re.IGNORECASE),
         re.compile(r"\btoday'?s\s+date\b", re.IGNORECASE),
+        # "what year is it" in particular must never reach the LLM: it answers
+        # from its training cutoff (a stale year), not the real clock.
+        re.compile(r"\bwhat\s+(?:year|month)\s+(?:is\s+it|are\s+we\s+in)\b",
+                   re.IGNORECASE),
+        re.compile(r"\bwhat\s+day\s+of\s+the\s+week\b", re.IGNORECASE),
         # MK: "колку е часот", "кој датум е денес", "кој ден е денес".
         re.compile(r"\bколку\s+е\s+часот\b", re.IGNORECASE),
         re.compile(r"\bкое\s+време\s+е\b", re.IGNORECASE),
@@ -50,7 +55,8 @@ class DateTimeSkill(Skill):
     ]
 
     def _wants_date(self, text: str) -> bool:
-        return bool(re.search(r"\b(date|day|датум|ден|денешниот)\b", text, re.IGNORECASE))
+        return bool(re.search(r"\b(date|day|year|month|week|датум|ден|денешниот|"
+                              r"година|месец)\b", text, re.IGNORECASE))
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         now = datetime.now()

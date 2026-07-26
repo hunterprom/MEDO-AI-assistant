@@ -50,9 +50,15 @@ class NotesSkill(Skill):
                 success=ok,
             )
 
-        # read / list
+        # read / list. Branch on which pattern actually matched, not on a
+        # re-scan of the raw text: a dictated note whose BODY contains a
+        # list-verb ("note that Bob will show up at 5") used to be read back
+        # instead of stored, because "show" tripped the heuristic below.
+        matched_add = bool(m and (m.groupdict().get("body") is not None
+                                  or m.groupdict().get("body2") is not None))
         if action == "list" or (
-                re.search(r"\b(read|list|show|what)\b", text, re.IGNORECASE)
+                not matched_add
+                and re.search(r"\b(read|list|show|what)\b", text, re.IGNORECASE)
                 and "note" in text.lower()
                 and not re.search(r"\b(take|make|write|jot|add)\b", text, re.IGNORECASE)):
             notes = self._store.list()

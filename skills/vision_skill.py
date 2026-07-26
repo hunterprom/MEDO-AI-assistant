@@ -197,16 +197,20 @@ class SeeCameraSkill(Skill):
         # answers from memory instead of actually looking).
         # ...but a "see" query that names the SCREEN belongs to see_screen
         # (registered after this), so exclude it here.
-        re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b(?!.*\bscreen\b)",
-                   re.IGNORECASE),
+        re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b"
+                   r"(?!.*\b(?:screen|monitor|display)\b)", re.IGNORECASE),
         re.compile(r"\bdescribe\s+(?:what\s+you\s+see|the\s+(?:camera|room|view))\b", re.IGNORECASE),
         re.compile(r"\blook\s+(?:at\s+(?:me|this)|around)\b", re.IGNORECASE),
+        # Deictic "look at what I'm showing you" phrasings that name no camera —
+        # they reached the LLM, which fabricated or claimed it couldn't see.
+        re.compile(r"\bwhat\s+am\s+i\s+holding(?:\s+up)?\b", re.IGNORECASE),
+        re.compile(r"\bwhat(?:'?s| is)\s+in\s+front\s+of\s+me\b", re.IGNORECASE),
         # Modal expansion (mirrors see_screen): "could/would/will you see me",
         # "do you see anything", "tell me what you see" reached the LLM before.
         re.compile(r"\b(?:can|could|would|will|do)\s+(?:you|yuo|u)\s+see\s+"
                    r"(?:me|anything|this|us)\b", re.IGNORECASE),
-        re.compile(r"\btell\s+me\s+what\s+(?:you|yuo|u)\s+see\b(?!.*\bscreen\b)",
-                   re.IGNORECASE),
+        re.compile(r"\btell\s+me\s+what\s+(?:you|yuo|u)\s+see\b"
+                   r"(?!.*\b(?:screen|monitor|display)\b)", re.IGNORECASE),
         # Camera-oriented phrasings (never 'screen' — that's the see_screen skill).
         re.compile(r"\b(?:see|look\s+at|check|use|through)\s+(?:the\s+|your\s+|my\s+)?"
                    r"(?:camera|webcam)\b", re.IGNORECASE),
@@ -262,11 +266,13 @@ class SeeScreenSkill(Skill):
     description = "Describe what's on the screen, or read its text aloud."
 
     patterns = [
-        re.compile(r"\bwhat(?:'?s| is)\s+on\s+(?:my|the)\s+screen\b", re.IGNORECASE),
-        re.compile(r"\b(?:read|describe)\s+(?:my|the)\s+screen\b", re.IGNORECASE),
-        # "what do you see on the screen" — a see-query that names the screen.
-        re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b(?=.*\bscreen\b)",
+        re.compile(r"\bwhat(?:'?s| is)\s+on\s+(?:my|the)\s+(?:screen|monitor|display)\b",
                    re.IGNORECASE),
+        re.compile(r"\b(?:read|describe)\s+(?:my|the)\s+(?:screen|monitor|display)\b",
+                   re.IGNORECASE),
+        # "what do you see on the screen" — a see-query that names the screen.
+        re.compile(r"\bwhat\s+(?:do|can|are)\s+(?:you|yuo|u)\s+see(?:ing)?\b"
+                   r"(?=.*\b(?:screen|monitor|display)\b)", re.IGNORECASE),
         # "can/could/would you see/view/look at my/the/your screen" — these went
         # to the LLM, which claims it can't see screens instead of calling this
         # tool. Cover the modal (can/could/would) AND the possessive (my/the/
@@ -294,7 +300,11 @@ class SeeScreenSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         text = request.text.lower()
         wants_read = (
-            request.args.get("mode") == "read" or "read" in text
+            request.args.get("mode") == "read"
+            # whole word only: "already", "ready", "spread", "thread" all
+            # contain "read" and silently flipped describe -> read (transcribe),
+            # a different answer to "what's on my screen already".
+            or bool(re.search(r"\bread\b", text))
             or "прочитај" in text          # "прочитај го екранот" = read it out
         )
         try:

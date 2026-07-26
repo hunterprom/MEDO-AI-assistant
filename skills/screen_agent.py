@@ -100,10 +100,24 @@ class ScreenAgentSkill(Skill):
     def _task_from(request: SkillRequest) -> str:
         if request.args.get("task"):
             return str(request.args["task"]).strip()
-        text = request.text
+        text = request.text.strip()
+        # "open my email for me on the screen" — the task is BEFORE the wrapper.
+        # The old after-the-first-keyword capture returned "on the screen" here
+        # and the agent then pursued that as the task.
+        trailing = re.search(r"^(.*?)\s+for\s+me\s+on\s+(?:my\s+|the\s+)?screen\b.*$",
+                             text, re.IGNORECASE)
+        if trailing and trailing.group(1).strip(" .?!,"):
+            return trailing.group(1).strip(" .?!,")
         # "do this for me: open notepad" / "operate my screen and open notepad"
-        m = re.search(r"(?:for\s+me|screen|computer|pc)\b[:,]?\s*(?:and\s+|to\s+|please\s+)?(.+)$",
-                      text, re.IGNORECASE)
+        # — strip the leading wrapper; the task is what follows.
+        lead = re.sub(r"^(?:do\s+(?:this|it|that)\s+for\s+me|"
+                      r"operate\s+(?:my\s+)?(?:screen|computer|pc))\b[:,]?\s*"
+                      r"(?:and\s+|to\s+|please\s+)?", "", text, flags=re.IGNORECASE)
+        if lead != text and lead.strip(" .?!,"):
+            return lead.strip(" .?!,")
+        # Fallback: the original after-the-first-keyword capture.
+        m = re.search(r"(?:for\s+me|screen|computer|pc)\b[:,]?\s*"
+                      r"(?:and\s+|to\s+|please\s+)?(.+)$", text, re.IGNORECASE)
         return (m.group(1).strip(" .?!") if m else text.strip())
 
     # -- the agent loop -------------------------------------------------------

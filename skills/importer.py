@@ -118,7 +118,9 @@ class ImportFileSkill(Skill):
     patterns = [
         re.compile(r"\bimport\s+(?:this\s+|the\s+)?(?:file|document|image|picture|photo)"
                    r"(?:\s+(?P<path>.+))?$", re.IGNORECASE),
-        re.compile(r"\bimport\s+(?P<path2>[A-Za-z]:[\\/][^\s]+|[~./][^\s]+)", re.IGNORECASE),
+        # ".+$" not "[^\s]+": a real path has spaces ("My Documents", "Program
+        # Files"), and stopping at the first space imported "C:\Users\Me\My".
+        re.compile(r"\bimport\s+(?P<path2>[A-Za-z]:[\\/].+|[~./].+)$", re.IGNORECASE),
         # "learn" only. "read this file" belongs to notes, and "remember this
         # file" to remember_fact — both are registered earlier and both are
         # right to claim their own verb. Anyone who wants those phrasings for
@@ -130,7 +132,7 @@ class ImportFileSkill(Skill):
         # no other skill claims it — so no verb-stealing here.
         re.compile(r"\bвнеси\s+(?:(?:го|ја)\s+)?(?:документ(?:от)?|датотека(?:та)?|"
                    r"фајл(?:от)?|слика(?:та)?)(?:\s+(?P<pathm>.+))?$", re.IGNORECASE),
-        re.compile(r"\bвнеси\s+(?P<pathm2>[A-Za-z]:[\\/][^\s]+|[~./][^\s]+)",
+        re.compile(r"\bвнеси\s+(?P<pathm2>[A-Za-z]:[\\/].+|[~./].+)$",
                    re.IGNORECASE),
     ]
 

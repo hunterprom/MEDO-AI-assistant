@@ -57,6 +57,12 @@ def _strip_time_words(city: str) -> str:
     return _TRAILING_TIME.sub("", city).strip()
 
 
+#: A trailing "in/for/at <X>" that is plainly not a place, so the city fallback
+#: in execute() doesn't geocode "the moment" and report it can't find it.
+_NOT_A_CITY = {"the moment", "the minute", "now", "home", "work",
+               "the weekend", "the week", "the day", "school"}
+
+
 class WeatherSkill(Skill):
     name = "weather"
     description = "Report current weather or tomorrow's forecast for a city."
@@ -66,10 +72,16 @@ class WeatherSkill(Skill):
     ]
 
     patterns = [
-        re.compile(rf"\bweather\b(?:\s+(?:in|for|at)\s+(?P<city>{_CITY}))?", re.IGNORECASE),
+        # "what's the weather LIKE in London" — the intervening "like" pushed
+        # the city out of reach, so it silently reported the default city.
+        re.compile(rf"\bweather\b(?:\s+like)?(?:\s+(?:in|for|at)\s+(?P<city>{_CITY}))?",
+                   re.IGNORECASE),
         re.compile(rf"\bforecast\b(?:\s+(?:in|for)\s+(?P<city2>{_CITY}))?", re.IGNORECASE),
         re.compile(r"\b(?:how\s+(?:hot|cold)|temperature)\b", re.IGNORECASE),
-        re.compile(r"\b(?:will\s+it|is\s+it\s+going\s+to)\s+rain\b", re.IGNORECASE),
+        # Bare precipitation questions used to fabricate on the LLM path:
+        # "will it snow", "is it going to rain", plain "is it raining/snowing".
+        re.compile(r"\b(?:will\s+it|is\s+it\s+going\s+to)\s+(?:rain|snow)\b", re.IGNORECASE),
+        re.compile(r"\bis\s+it\s+(?:raining|snowing)\b", re.IGNORECASE),
         # Everyday phrasings that mean "give me the weather".
         re.compile(r"\bdo\s+i\s+need\s+(?:a|an|my)\s+(?:jacket|coat|umbrella|"
                    r"raincoat|sweater)\b", re.IGNORECASE),
@@ -121,6 +133,16 @@ class WeatherSkill(Skill):
             (request.args.get("city") or gd.get("city") or gd.get("city2")
              or gd.get("city3") or gd.get("city4") or gd.get("city5")
              or "").strip(" ?.!"))
+        if not city:
+            # Several patterns ("how hot is it in Dubai", "is it raining in
+            # Paris", "do I need a jacket in London") carry no city GROUP, so
+            # honour a trailing "in/for/at <place>" before defaulting to Skopje.
+            tail = re.search(r"\b(?:in|for|at)\s+(?P<c>[\w .'-]+?)\s*[?.!]*$",
+                             _strip_time_words(request.text), re.IGNORECASE)
+            if tail:
+                candidate = tail.group("c").strip(" ?.!")
+                if candidate and candidate.lower() not in _NOT_A_CITY:
+                    city = candidate
         when = (request.args.get("when") or "").lower()
         if "tomorrow" in request.text.lower() or "утре" in request.text.lower():
             when = "tomorrow"

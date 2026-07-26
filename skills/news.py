@@ -38,7 +38,9 @@ class NewsSkill(Skill):
         # MK: "вести", "најсвежи вести за Скопје", "наслови", "што има ново".
         # Deliberately NOT "што е ново за X" — naming a topic is a web search,
         # and WebSearchSkill owns that one.
-        re.compile(r"\bвест(?:и|ите|ите)\b|\bновост(?:и|ите)\b", re.IGNORECASE),
+        # Suffix optional so the singular "вест"/"веста" matches too; the old
+        # "(?:и|ите|ите)" both duplicated a branch and required a suffix.
+        re.compile(r"\bвест(?:а|и|ите)?\b|\bновост(?:а|и|ите)?\b", re.IGNORECASE),
         re.compile(r"\bнаслови(?:те)?\b", re.IGNORECASE),
         re.compile(r"\bшто\s+има\s+ново\b|\bшто\s+се\s+случува\b", re.IGNORECASE),
         re.compile(r"\bшто\s+се\s+случува\s+во\s+светот\b|\bсветски\s+вести\b", re.IGNORECASE),
