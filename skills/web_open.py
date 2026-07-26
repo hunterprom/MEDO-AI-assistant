@@ -101,7 +101,12 @@ class OpenWebsiteSkill(Skill):
         spoken = r"[\w-]+(?:\s+(?:dot|точка)\s+[\w-]+)+"
         # "open ME youtube" — the spoken dative. Without it the site name never
         # lines up and the whole request falls through to a web search.
-        en_open = r"(?:open|go\s+to|visit|pull\s+up|bring\s+up)(?:\s+(?:me|for\s+me|us))?"
+        # "open up youtube" is the phrasal form people actually say — the bare
+        # "open" left the particle "up" stranded between verb and site, so every
+        # pattern below failed and the whole request fell to the LLM (which then
+        # fabricated an answer about the topic instead of opening the page).
+        en_open = (r"(?:open(?:\s+up)?|go\s+to|visit|pull\s+up|bring\s+up|"
+                   r"fire\s+up)(?:\s+(?:me|for\s+me|us))?")
         mk_open = rf"{mk.OPEN}|{mk.GO_TO}"
         self.patterns = [
             # "open tinkercad.com", "go to docs.python.org/3" — needs a dot.

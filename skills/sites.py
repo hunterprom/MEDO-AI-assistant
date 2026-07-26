@@ -408,8 +408,9 @@ class SiteSearchSkill(Skill):
             # "open youtube and search for relaxing jazz" — the site is named
             # first and the query second. Listed before everything else because
             # it is the most specific shape, and because OpenWebsiteSkill would
-            # otherwise open the site and silently drop the search.
-            re.compile(rf"\b(?:open|go\s+to|visit|pull\s+up|bring\s+up)\s+"
+            # otherwise open the site and silently drop the search. "open up" is
+            # the phrasal form people actually say, so the particle is optional.
+            re.compile(rf"\b(?:open(?:\s+up)?|go\s+to|visit|pull\s+up|bring\s+up)\s+"
                        rf"(?:me\s+|for\s+me\s+)?(?:the\s+)?(?P<site4>{alt})\b"
                        rf"[\s,]*(?:and|then|to)?[\s,]*"
                        rf"(?:{verbs})\s+(?P<q4>.+)", re.IGNORECASE),
@@ -533,10 +534,46 @@ class PlaySkill(Skill):
         self._sites = load_sites(extra_sites)
         alt = alias_alternation(self._sites)
         self.patterns = [
+            # ORDER MATTERS. The three multi-step / named-first patterns come
+            # FIRST, ahead of the deictic ones: match() returns the first
+            # pattern that hits ANYWHERE, and the deictic "play the first
+            # result" would otherwise match the tail of "...and play the first
+            # result" and drop the query it was really about.
+            #
+            # THE Gran Turismo fix. Three asks in one breath — "open up youtube
+            # and search up gran turismo music and open the first video" —
+            # search a site then play its top hit. The trailing "and (open|play)
+            # the first" is required, so a plain "open youtube and search X"
+            # still falls through to SiteSearchSkill (which leaves you on the
+            # results page, the right answer when no play was asked for).
+            re.compile(rf"\b(?:open(?:\s+up)?|go\s+to|pull\s+up|bring\s+up)\s+"
+                       rf"(?:the\s+)?(?P<site>{alt})\b[\s,]*(?:and|then)?[\s,]*"
+                       rf"(?:search|look\s+up|find|play)(?:\s+up|\s+for)?\s+"
+                       rf"(?P<q>.+?)\s+(?:and|then)\s+"
+                       rf"(?:open|play|watch|start|show)\s+(?:me\s+)?(?:the\s+)?"
+                       rf"(?:first|top|1st)\b.*$", re.IGNORECASE),
+            # "open spotify and play some jazz", "go to youtube and put on lofi"
+            # — open a site and play in one go. The lookahead keeps the deictic
+            # "... and play the first video" (page-already-open) out of here so
+            # it can't be turned into a literal search for "first video".
+            re.compile(rf"\b(?:open(?:\s+up)?|go\s+to|pull\s+up|bring\s+up)\s+"
+                       rf"(?:the\s+)?(?P<site>{alt})\b[\s,]*(?:and|then)\s+"
+                       rf"(?:play|put\s+on|throw\s+on)\s+"
+                       rf"(?!(?:the\s+|that\s+|this\s+)?(?:first|top|1st|one)\b)"
+                       rf"(?:me\s+)?(?P<q>.+)$", re.IGNORECASE),
+            # "play the first video for gran turismo music [on youtube]" — a
+            # first-result play named by its query, distinct from the deictic
+            # "play the first video" (which needs a page already open below).
+            re.compile(rf"\b(?:open|play|watch|start|show\s+me)\s+(?:me\s+)?"
+                       rf"(?:the\s+)?(?:first|top|1st)\s+"
+                       rf"(?:video|result|one|hit|clip|song|track)\s+"
+                       rf"(?:for|of|about)\s+(?P<q>.+?)"
+                       rf"(?:\s+(?:on|in|from)\s+(?P<site>{alt}))?\s*[.!?]*$",
+                       re.IGNORECASE),
             # "play the first video" / "play the top result" / "play that" —
             # deictic: it means the page already on screen, NOT a search for
-            # the words "first video". Listed first so the search patterns
-            # below can't swallow it.
+            # the words "first video". After the named-first patterns above so
+            # "play the first video FOR X" keeps its query.
             re.compile(r"\bplay\s+(?:the\s+|that\s+|this\s+)?"
                        r"(?:first|top|1st)\s+(?:one|video|result|hit|song|track)\b"
                        r"|\bplay\s+(?:that|this|it)\s*[.!?]*$",
@@ -546,9 +583,16 @@ class PlaySkill(Skill):
                        r"(?:прв(?:ото|иот|ата|о)?|горнот[оа])\s+(?:видео|резултат|песна)\b"
                        r"|\b(?:пушти|свири)\s+(?:го\s+|ја\s+)?(?:тоа|ова)\s*[.!?]*$",
                        re.IGNORECASE),
-            # "play relaxing jazz on youtube", "play me some lofi on spotify"
-            re.compile(rf"\bplay\s+(?P<q>.+?)\s+(?:on|in|from)\s+(?:the\s+)?"
-                       rf"(?P<site>{alt})\b", re.IGNORECASE),
+            # "play relaxing jazz on youtube", "put on some lofi on spotify"
+            re.compile(rf"\b(?:play|put\s+on|throw\s+on|queue\s+up)\s+(?P<q>.+?)\s+"
+                       rf"(?:on|in|from)\s+(?:the\s+)?(?P<site>{alt})\b", re.IGNORECASE),
+            # "put on some relaxing jazz", "throw on lofi hip hop" — no site, so
+            # it defaults to YouTube. Guarded so it never steals MediaSkill's
+            # local "put on some music/song/track" (that noun stays with media).
+            re.compile(r"\b(?:put\s+on|throw\s+on)\s+"
+                       r"(?!(?:some\s+|the\s+|my\s+|a\s+|an\s+)?"
+                       r"(?:music|song|tune|track|playback|playlist|album|record)s?\b)"
+                       r"(?:me\s+)?(?P<q>[\w\s'-]{2,60}?)\s*[.!?]*$", re.IGNORECASE),
             # "play me a video of drone builds" — no site named, video implies
             # YouTube. MediaSkill keeps "play the music" (local playback).
             re.compile(r"\bplay\s+(?:me\s+)?(?:a\s+|some\s+|the\s+)?videos?\s+"

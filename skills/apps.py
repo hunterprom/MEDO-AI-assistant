@@ -61,7 +61,10 @@ class AppsSkill(Skill):
         self.patterns = [
             re.compile(
                 rf"\b(?P<action>open|launch|start|run|close|quit|kill|exit)\s+"
-                rf"(?:the\s+|my\s+)?(?P<app>{alternation})\b",
+                # "open UP spotify", "start UP chrome" — the launch particle sat
+                # between the verb and the app name and broke the match, sending
+                # a plain launch to the LLM (which narrates instead of opening).
+                rf"(?:up\s+)?(?:the\s+|my\s+)?(?P<app>{alternation})\b",
                 re.IGNORECASE,
             ),
             # MK "отвори ми го хром" / "стартувај спотифај". The clitics
@@ -89,8 +92,17 @@ class AppsSkill(Skill):
         r"translate|compose|draft|paraphrase"
         r"|напиши|искуцај|запиши|сумирај)\b", re.IGNORECASE)
 
+    #: The launch-and-then-do-something sibling of _ALSO_WRITES. "open spotify
+    #: and play some jazz" / "open chrome and search for cats" is not a plain
+    #: launch — matching it here answers "Opening spotify." and silently drops
+    #: the play/search half. Decline, so PlaySkill / SiteSearchSkill (or the LLM
+    #: tool-chaining path) can carry out the whole request.
+    _ALSO_ACTS = re.compile(
+        r"\band\s+(?:then\s+)?(?:play|search|look\s+up|pull\s+up|find|"
+        r"put\s+on|throw\s+on)\b", re.IGNORECASE)
+
     def match(self, text: str):
-        if self._ALSO_WRITES.search(text):
+        if self._ALSO_WRITES.search(text) or self._ALSO_ACTS.search(text):
             return None
         return super().match(text)
 

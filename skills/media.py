@@ -56,6 +56,17 @@ class MediaSkill(Skill):
         re.compile(r"\b(?:put|turn)\s+on\s+(?:some\s+|my\s+|the\s+)?music\b", re.IGNORECASE),
         re.compile(r"\b(?:next|skip(?:\s+(?:this|the))?)\s+(?:track|song)\b", re.IGNORECASE),
         re.compile(r"\b(?:previous|last)\s+(?:track|song)\b", re.IGNORECASE),
+        # Bare transport verbs issued while something is already playing —
+        # "next", "skip this one", "pause it", "resume". They carry no music
+        # noun, so they missed every pattern above and fell to the LLM (which,
+        # with PC control off, just chats "Okay" and never skips). Anchored to
+        # the whole utterance so a stray "next"/"pause" inside a longer sentence
+        # still defers to whoever owns it.
+        re.compile(r"^\s*(?:next|skip)(?:\s+(?:it|this|this\s+one|please|track|song))?"
+                   r"\s*[.!?]*$", re.IGNORECASE),
+        re.compile(r"^\s*(?:previous(?:\s+track)?|go\s+back\s+a\s+track)\s*[.!?]*$",
+                   re.IGNORECASE),
+        re.compile(r"^\s*(?:pause|resume|unpause)(?:\s+it)?\s*[.!?]*$", re.IGNORECASE),
         # MK: "пушти музика", "паузирај ја песната", "следна песна"
         re.compile(r"\b(?:пушти|пуштиј|паузирај|запри|стопирај|продолжи)\s+"
                    r"(?:ја\s+|го\s+)?(?:музика(?:та)?|песна(?:та)?|нумера(?:та)?)\b",
