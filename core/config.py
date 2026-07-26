@@ -763,6 +763,11 @@ class BrowserConfig(BaseModel):
     #: installed on the machine (no 150 MB Chromium download, and it looks like
     #: the browser the user knows); "" falls back to Playwright's own Chromium.
     channel: str = "chrome"
+    #: Path to a custom Chromium-based browser executable (e.g. Opera). When set
+    #: it WINS over ``channel``: Playwright launches that binary — but always on
+    #: MEDO's OWN ``profile_dir``, never the browser's real profile, so it never
+    #: touches (say) your Opera logins/history. Empty => use ``channel``.
+    executable_path: str = ""
     #: Headless hides the window. Default off on purpose — when MEDO clicks
     #: things on your behalf you should be able to watch it happen.
     headless: bool = False
@@ -1061,6 +1066,11 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
     control = data.get("control", {}) or {}
     if "pc" in control:  # the HUD's PC CONTROL switch, remembered per machine
         settings.safety.pc_control_enabled = bool(control["pc"])
+    browser = data.get("browser", {}) or {}  # the HUD's controlled-browser picker
+    if "channel" in browser:
+        settings.browser.channel = str(browser["channel"])
+    if "executable_path" in browser:
+        settings.browser.executable_path = str(browser["executable_path"])
     router = data.get("router", {}) or {}  # the HUD's SEMANTIC TIER selector
     if "semantic_enabled" in router:
         settings.router.semantic_enabled = bool(router["semantic_enabled"])
@@ -1172,6 +1182,81 @@ def save_audio_input(device: int | str | None, path: Path = SECRETS_PATH) -> Non
         _write_local(data, path)
     except Exception:
         logging.getLogger(__name__).exception("could not persist audio input device")
+
+
+def find_browser_executable(name: str) -> str | None:
+    """Locate a Chromium-based browser's executable by short name (e.g. 'opera').
+
+    Windows-focused (where MEDO runs). Opera installs into a versioned folder,
+    so those are globbed and the newest is preferred. Returns the path or None.
+    MEDO drives it on its OWN profile_dir, so which install it is doesn't matter.
+    """
+    import glob
+
+    key = (name or "").strip().lower()
+    la = os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))
+    pf = os.environ.get("PROGRAMFILES", r"C:\Program Files")
+    pfx = os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)")
+    if key in ("opera", "opera gx", "operagx", "opera-gx"):
+        folder = "Opera GX" if "gx" in key else "Opera"
+        bases = [f"{la}\\Programs\\{folder}", f"{pf}\\{folder}", f"{pfx}\\{folder}"]
+        found: list[str] = []
+        for base in bases:
+            found.append(f"{base}\\opera.exe")           # the launcher stub
+            found += sorted(glob.glob(f"{base}\\*\\opera.exe"), reverse=True)  # versioned
+        for c in found:
+            if Path(c).is_file():
+                return c
+    return None
+
+
+#: The choices the HUD browser picker offers.
+BROWSER_CHOICES = ("chrome", "msedge", "chromium", "opera")
+
+
+def browser_choice(browser: "BrowserConfig") -> str:
+    """The picker label for the CURRENT controlled-browser config."""
+    if browser.executable_path:
+        low = browser.executable_path.lower()
+        if "opera gx" in low or "opera_gx" in low:
+            return "opera gx"
+        return "opera" if "opera" in low else "custom"
+    return browser.channel or "chromium"
+
+
+def resolve_browser(choice: str) -> dict:
+    """Validate a controlled-browser choice -> ``{choice, channel,
+    executable_path}``. chrome/msedge -> a Playwright channel; chromium ->
+    bundled; opera -> the detected Opera executable (driven on MEDO's own
+    profile, never Opera's). Raises ValueError on an unknown choice, or when the
+    named browser isn't installed. No file is written."""
+    c = (choice or "").strip().lower()
+    if c in ("chrome", "msedge"):
+        channel, exe = c, ""
+    elif c in ("chromium", "default", ""):
+        channel, exe = "", ""
+    elif c in ("opera", "opera gx", "operagx"):
+        exe = find_browser_executable(c)
+        if not exe:
+            raise ValueError(f"couldn't find {choice} installed on this machine")
+        channel = ""
+    else:
+        raise ValueError(
+            f"unknown browser {choice!r}; use chrome, msedge, chromium, or opera")
+    return {"choice": c, "channel": channel, "executable_path": exe}
+
+
+def save_browser(choice: str, path: Path = SECRETS_PATH) -> dict:
+    """Validate (:func:`resolve_browser`) + persist the browser choice."""
+    resolved = resolve_browser(choice)              # raises on bad/missing
+    try:
+        data = _read_local(path)
+        data["browser"] = {"channel": resolved["channel"],
+                           "executable_path": resolved["executable_path"]}
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist the browser choice")
+    return resolved
 
 
 def save_languages(active: list[str], primary: str | None = None,

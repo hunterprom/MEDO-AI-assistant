@@ -210,6 +210,7 @@ class RemoteServer:
         app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_post("/control/pc", self._handle_pc_control)
         app.router.add_post("/control/semantic", self._handle_semantic)
+        app.router.add_post("/control/browser", self._handle_browser)
         app.router.add_post("/control/modes", self._handle_modes)
         app.router.add_post("/control/lion", self._handle_lion)
         app.router.add_get("/council", self._handle_council)
@@ -413,6 +414,8 @@ class RemoteServer:
                 "pc_control": self._settings.safety.pc_control_enabled,
                 # The Tier-2 semantic router: off | shadow | live.
                 "semantic": self._settings.router.semantic_mode(),
+                # The controlled browser MEDO drives (chrome/msedge/chromium/opera).
+                "browser": _browser_label(self._settings.browser),
                 # Session modes (continuous conversation, interpreter).
                 "continuous": self._modes.continuous,
                 "interpreter": self._modes.interpreter,
@@ -794,6 +797,28 @@ class RemoteServer:
         logger.info("semantic tier set to %s via companion API", resolved)
         return web.json_response({"ok": True, "mode": resolved})
 
+    async def _handle_browser(self, request: web.Request) -> web.Response:
+        """The HUD's controlled-browser picker: chrome | msedge | chromium | opera.
+
+        Which browser MEDO drives (Playwright) to open/read/click pages. Opera
+        (or any Chromium-based browser) runs on MEDO's OWN profile, never your
+        real one. Persisted per machine; takes effect on the next browser launch
+        (restart if a window is already open).
+        """
+        from core.config import browser_choice, resolve_browser, save_browser
+        body = await _json_dict(request)
+        try:
+            resolved = resolve_browser(str(body.get("browser") or ""))
+        except ValueError as exc:
+            return _error(400, str(exc))
+        self._settings.browser.channel = resolved["channel"]
+        self._settings.browser.executable_path = resolved["executable_path"]
+        if self._persist_secrets:
+            save_browser(resolved["choice"])
+        logger.info("controlled browser set to %s via companion API", resolved["choice"])
+        return web.json_response({"ok": True, "browser": browser_choice(self._settings.browser),
+                                  "restart": True})
+
     async def _handle_lion(self, request: web.Request) -> web.Response:
         """MEDO LION MODE (the defensive-security profile) from the HUD.
 
@@ -1071,6 +1096,12 @@ def _web_search(query: str, max_results: int = 8) -> list[dict] | None:
         }
         for r in results
     ]
+
+
+def _browser_label(browser) -> str:
+    """The controlled-browser picker label for /status (chrome/opera/…)."""
+    from core.config import browser_choice
+    return browser_choice(browser)
 
 
 def _error(status: int, message: str) -> web.Response:

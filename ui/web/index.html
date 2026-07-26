@@ -825,6 +825,15 @@
           <button data-sem="live">LIVE</button>
         </div>
       </div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">Controlled browser</span><span class="desc">WHICH BROWSER MEDO OPENS, READS &amp; CLICKS · OPERA RUNS ON MEDO'S OWN PROFILE, SO YOUR OPERA DATA IS UNTOUCHED · TAKES A RESTART</span></div>
+        <div class="seg" id="browser-seg">
+          <button data-browser="chrome">CHROME</button>
+          <button data-browser="msedge">EDGE</button>
+          <button data-browser="chromium">CHROMIUM</button>
+          <button data-browser="opera">OPERA</button>
+        </div>
+      </div>
       <div class="setting">
         <div class="info"><span class="name" data-i18n="camera_feed">Camera feed</span><span class="desc">SHOW THE OPTICAL FEED PANEL ON CORE</span></div>
         <button class="toggle on" id="cfg-cam"><span class="knob"></span></button>
@@ -1473,6 +1482,25 @@
     };
   }
   (async () => { try { const d = await (await fetch(`${API}/status`)).json(); if ('semantic' in d) setSemanticUI(d.semantic); } catch { } })();
+
+  /* ---- controlled-browser picker (chrome/edge/chromium/opera) ---- */
+  function setBrowserUI(name) {
+    for (const b of document.querySelectorAll('#browser-seg button'))
+      b.classList.toggle('active', b.dataset.browser === name);
+  }
+  for (const b of document.querySelectorAll('#browser-seg button')) {
+    b.onclick = async () => {
+      try {
+        const r = await (await fetch(`${API}/control/browser`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ browser: b.dataset.browser }),
+        })).json();
+        if (r.ok) { setBrowserUI(r.browser); log(`BROWSER · ${r.browser.toUpperCase()} · RESTART TO APPLY`); }
+        else log(`BROWSER — ${r.error || 'failed'}`);
+      } catch { log('BROWSER — API offline'); }
+    };
+  }
+  (async () => { try { const d = await (await fetch(`${API}/status`)).json(); if ('browser' in d) setBrowserUI(d.browser); } catch { } })();
 
   /* ---- interface language (HUD only; independent of what you speak) ----
      Only the visible LABELS are translated. The all-caps description lines

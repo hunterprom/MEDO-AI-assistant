@@ -205,19 +205,26 @@ class BrowserSession:
                 # and the element list would then not match what the user sees.
                 "viewport": {"width": 1366, "height": 900},
             }
-            if self._config.channel:
+            # A custom executable (e.g. Opera) WINS over the named channel —
+            # Playwright drives that Chromium-based binary, but always on MEDO's
+            # OWN profile dir, so it never touches the browser's real profile.
+            picked = self._config.executable_path or self._config.channel
+            if self._config.executable_path:
+                launch["executable_path"] = self._config.executable_path
+            elif self._config.channel:
                 launch["channel"] = self._config.channel
             try:
                 self._context = await self._pw.chromium.launch_persistent_context(**launch)
             except Exception as exc:
-                # Named channel missing (no Chrome installed) -> bundled Chromium.
-                if not self._config.channel:
+                # Nothing custom set -> no fallback; otherwise retry on bundled Chromium.
+                if not picked:
                     await self._shutdown()
                     raise BrowserUnavailable(
                         f"I couldn't start the browser: {exc}") from exc
-                logger.warning("channel %r failed (%s) — falling back to chromium",
-                               self._config.channel, exc)
-                launch.pop("channel")
+                logger.warning("browser %r failed (%s) — falling back to chromium",
+                               picked, exc)
+                launch.pop("channel", None)
+                launch.pop("executable_path", None)
                 try:
                     self._context = await self._pw.chromium.launch_persistent_context(**launch)
                 except Exception as exc2:
