@@ -327,3 +327,96 @@ class ConveneCouncilSkill(_CouncilBase):
                 },
             },
         }
+
+
+class CouncilRosterSkill(_CouncilBase):
+    """Discovery: "who's on the council?" / "do you have a lawyer?"
+
+    The council only works if you know who's in it. This lists the enabled
+    specialists (read from config each call, like the other council skills) and
+    answers a yes/no "do you have a <field>?". No LLM — it's a registry read.
+    """
+
+    name = "list_council"
+    description = (
+        "List the specialists on MEDO's council, or say whether a particular "
+        "expert (lawyer, electrical engineer, physicist...) is available."
+    )
+    routing_phrases = [
+        "who's on your council", "which experts do you have",
+        "what specialists can I ask", "who can I consult on this",
+        "list the experts you have", "what kind of expert do you have",
+    ]
+
+    patterns = [
+        re.compile(r"\bwho(?:'?s| is| are)\s+(?:on\s+)?"
+                   r"(?:the\s+council|your\s+(?:experts|specialists|panel|council))\b",
+                   re.IGNORECASE),
+        re.compile(r"\b(?:list|name)\s+(?:your\s+|the\s+)?"
+                   r"(?:experts|specialists|council(?:\s+members)?)\b", re.IGNORECASE),
+        re.compile(r"\bwhich\s+(?:experts|specialists)\s+"
+                   r"(?:do\s+you\s+have|are\s+(?:there|available))\b", re.IGNORECASE),
+        # "do you have a lawyer" — gated in match() so "do you have a minute"
+        # (not a specialist) falls through.
+        re.compile(r"\bdo\s+you\s+have\s+(?:an?\s+)?(?P<who>[\w\s]+?)"
+                   r"(?:\s+on\s+(?:the\s+)?council)?\s*[?.!]*$", re.IGNORECASE),
+        # MK: "кој е во советот", "кои специјалисти ги имаш"
+        re.compile(r"\bкој\s+е\s+во\s+советот\b|\bкои\s+специјалисти\b",
+                   re.IGNORECASE),
+    ]
+
+    def match(self, text: str):
+        found = super().match(text)
+        if found is None:
+            return None
+        who = (found.groupdict().get("who") or "").strip()
+        # The broad "do you have a X" only claims when X is a real specialist;
+        # the roster patterns (no 'who' group) always claim.
+        if who and find_specialist(who, self._council) is None:
+            return None
+        return found
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        speak_mk = mk.is_cyrillic(request.text)
+        gd = request.match.groupdict() if request.match else {}
+        who = (request.args.get("specialist") or gd.get("who") or "").strip()
+        members = self._council
+        if not members:
+            return SkillResult("Советот е празен." if speak_mk
+                               else "The council is empty.", success=False)
+        names = ", ".join(m.title.removeprefix("the ") for m in members)
+
+        if who:
+            member = find_specialist(who, members)
+            if member is not None:
+                return SkillResult(
+                    f"Да, го имам {member.title} на советот." if speak_mk
+                    else f"Yes — I have {member.title} on the council.",
+                    data={"specialist": member.key})
+            return SkillResult(
+                f"Немам таков специјалист. Имам: {names}." if speak_mk
+                else f"I don't have that one. I have: {names}.", success=False)
+
+        return SkillResult(
+            f"На советот се: {names}." if speak_mk
+            else f"On the council I have: {names}.",
+            data={"members": [m.key for m in members]})
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "specialist": {
+                            "type": "string",
+                            "description": "Optional: check for one field/expert.",
+                        }
+                    },
+                    "required": [],
+                },
+            },
+        }

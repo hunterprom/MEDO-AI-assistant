@@ -267,10 +267,16 @@ def build_registry(
     # "ask ..." patterns would otherwise swallow them.
     if settings.council.enabled:
         from skills.circuit import CircuitSkill
-        from skills.council import AskSpecialistSkill, ConveneCouncilSkill
+        from skills.council import (
+            AskSpecialistSkill,
+            ConveneCouncilSkill,
+            CouncilRosterSkill,
+        )
 
         registry.register(ConveneCouncilSkill(settings, expert, synthesize_council))
         registry.register(AskSpecialistSkill(settings, expert))
+        # "who's on the council" / "do you have a lawyer" — discovery, no LLM.
+        registry.register(CouncilRosterSkill(settings))
         registry.register(CircuitSkill(settings, expert, expert))
     # Morning briefing (M8): chains weather/news/reminders/facts; registered
     # early so "brief me" can't be stolen by broader patterns.

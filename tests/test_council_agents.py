@@ -105,6 +105,34 @@ async def test_ask_specialist_semantic_fallback_recovers_expert():
     assert res.data.get("specialist") == "physics"
 
 
+def _roster():
+    from skills.council import CouncilRosterSkill
+    return CouncilRosterSkill(load_settings())
+
+
+def test_council_roster_lists_and_probes():
+    s = _roster()
+    assert s.match("who's on the council") is not None
+    assert s.match("which experts do you have") is not None
+    assert s.match("do you have a lawyer") is not None
+    # "do you have a X" is gated: a non-specialist falls through
+    assert s.match("do you have a minute") is None
+    assert s.match("do you have a plumber") is None
+    assert Router._semantic_safe(s) is True
+
+
+@pytest.mark.asyncio
+async def test_council_roster_execute():
+    s = _roster()
+    listed = await s.execute(SkillRequest(text="who's on the council",
+                                          match=s.match("who's on the council")))
+    assert listed.success
+    assert "engineer" in listed.speech.lower()          # names real specialists
+    probe = await s.execute(SkillRequest(text="do you have a lawyer",
+                                         match=s.match("do you have a lawyer")))
+    assert probe.success and "lawyer" in probe.speech.lower()
+
+
 @pytest.mark.asyncio
 async def test_convene_semantic_fallback_uses_text_as_question():
     async def fake_ask(system, user):

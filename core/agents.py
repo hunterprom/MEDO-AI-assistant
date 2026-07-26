@@ -58,7 +58,7 @@ _DOMAIN: dict[str, str] = {
     "see_bench": "vision", "pointer_control": "vision",
     # council: the skills route here; the visible stars are the specialists.
     "ask_specialist": "experts", "convene_council": "experts",
-    "circuit_help": "experts",
+    "circuit_help": "experts", "list_council": "experts",
     # web
     "web_search": "web", "web_fetch": "web", "open_website": "web",
     "site_search": "web", "play_media": "web", "browser_control": "web",
