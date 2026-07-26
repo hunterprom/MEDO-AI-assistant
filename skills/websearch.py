@@ -45,6 +45,21 @@ def ddg_text_search(query: str, max_results: int = _MAX_RESULTS) -> list[dict[st
 class WebSearchSkill(Skill):
     name = "web_search"
     description = "Search the web and summarize the results for a query."
+    # Reached by MEANING for factual/current-info questions that trip no
+    # search verb ("who composed the music for Gran Turismo", "how much is a
+    # Raspberry Pi 5") — exactly the questions a small LLM answers from stale
+    # memory or invents. semantic_from_text: the whole utterance is the query.
+    semantic_from_text = True
+    routing_phrases = [
+        "who composed the music for that game",
+        "how much does a raspberry pi cost right now",
+        "when is the next spacex launch",
+        "find out who won the match last night",
+        "look into the best beginner soldering iron",
+        "what year did the first arduino come out",
+        "what's the current price of a spool of filament",
+        "find out what's going on with the new graphics cards",
+    ]
 
     patterns = [
         re.compile(r"\b(?:search|google|look\s+up)\s+(?:the\s+web\s+for\s+|for\s+)?(?P<q>.+)", re.IGNORECASE),
@@ -68,6 +83,10 @@ class WebSearchSkill(Skill):
         speak_mk = mk.is_cyrillic(request.text)
         query = (request.args.get("query") or gd.get("q") or gd.get("q2")
                  or gd.get("q3") or gd.get("q4") or "").strip(" ?.!")
+        if not query and not request.match and not request.args:
+            # Reached by MEANING (semantic tier): no regex groups and no tool
+            # args, so the whole utterance IS the query.
+            query = request.text.strip(" ?.!")
         if not query:
             return SkillResult(
                 "Што да пребарам?" if speak_mk else "What should I search for?",

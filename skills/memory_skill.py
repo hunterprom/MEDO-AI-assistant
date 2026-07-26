@@ -24,6 +24,12 @@ class RecallFactsSkill(Skill):
 
     name = "recall_facts"
     description = "List the facts MEDO has remembered about the user."
+    routing_phrases = [
+        "tell me what you know about me", "what have I told you about myself",
+        "remind me what you've stored about me",
+        "what personal details do you have on me",
+        "go over what you remember about me", "what do you recall about me",
+    ]
 
     patterns = [
         re.compile(r"\bwhat\s+do\s+you\s+(?:remember|know)\s+about\s+me\b", re.IGNORECASE),

@@ -235,6 +235,16 @@ def summarize_ports(ports: list[dict]) -> dict:
 class SecurityCheckSkill(_LionSkill):
     name = "security_check"
     controls_pc = False
+    # Off-lion a semantic hit gives the honest "say lion mode on" reply (its
+    # _preamble), never a fabricated port list — which is the whole point.
+    routing_phrases = [
+        "is anything suspicious listening on my computer",
+        "what programs are accepting network connections",
+        "are there any open ports I should worry about",
+        "how secure is my computer",
+        "check whether my machine is exposed to the network",
+        "audit my network exposure",
+    ]
     description = (
         "Lion mode: list the listening network ports on THIS machine, name the "
         "owning process, explain common ones, and flag anything unexpected for "
@@ -435,6 +445,11 @@ def _default_read_firewall() -> str:
 class FirewallAuditSkill(_LionSkill):
     name = "firewall_audit"
     controls_pc = False
+    routing_phrases = [
+        "is my firewall on", "is my firewall actually protecting me",
+        "are all my firewall profiles enabled", "how's my firewall looking",
+        "is my computer's firewall active", "review my firewall settings",
+    ]
     description = (
         "Lion mode: read (never modify) the local firewall profile and "
         "summarize it, with hardening suggestions as advice. Read-only."
@@ -525,6 +540,12 @@ HYGIENE = [
 class UpdateCheckSkill(_LionSkill):
     name = "security_updates"
     controls_pc = False
+    routing_phrases = [
+        "do any of my apps need updating", "is my software out of date",
+        "what should I update to stay secure", "am I keeping my system patched",
+        "which programs have updates waiting",
+        "give me a security hygiene checklist",
+    ]
     description = (
         "Lion mode: read-only report of installed apps with updates available, "
         "plus a short password-hygiene checklist. Advisory."

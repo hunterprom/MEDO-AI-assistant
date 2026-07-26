@@ -190,6 +190,14 @@ async def _describe(settings: Settings, image_b64: str, prompt: str,
 class SeeCameraSkill(Skill):
     name = "see_camera"
     description = "Describe what the webcam currently sees."
+    routing_phrases = [
+        "what am I holding up right now",
+        "take a look through the webcam and tell me what's there",
+        "what's in front of me",
+        "describe what I'm showing you",
+        "look through the camera and tell me what you notice",
+        "what's sitting on my desk in view",
+    ]
 
     patterns = [
         # "you" is tolerated as the common Whisper mishears (yuo/u) so a small
@@ -264,6 +272,14 @@ class SeeCameraSkill(Skill):
 class SeeScreenSkill(Skill):
     name = "see_screen"
     description = "Describe what's on the screen, or read its text aloud."
+    routing_phrases = [
+        "can you tell what's on my monitor",
+        "have a look at my display and tell me what it shows",
+        "what does it say on the screen right now",
+        "summarize whatever is open on my screen",
+        "which window is this that's open",
+        "tell me what's showing on my computer",
+    ]
 
     patterns = [
         re.compile(r"\bwhat(?:'?s| is)\s+on\s+(?:my|the)\s+(?:screen|monitor|display)\b",
@@ -360,6 +376,13 @@ class PointAtSkill(Skill):
         "Identify what the mouse cursor is currently pointing at on screen "
         "(a close-up look at the region around the cursor)."
     )
+    routing_phrases = [
+        "identify what my cursor is on",
+        "what's the thing I'm hovering over",
+        "what's under the pointer right now",
+        "what is the item my cursor is sitting on",
+        "name whatever the mouse is pointing to",
+    ]
 
     patterns = [
         re.compile(r"^\s*what(?:'?s|\s+is)\s+(?:this|that)\b[\s?.!]*$", re.IGNORECASE),

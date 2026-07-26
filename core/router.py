@@ -225,7 +225,8 @@ class Router:
         # bare description is too vague to route on, and actuation skills that
         # need extracted parameters belong on the LLM path, not here.
         sources = [s for s in self._registry.all()
-                   if getattr(s, "routing_phrases", None)]
+                   if getattr(s, "routing_phrases", None)
+                   and self._semantic_safe(s)]
         try:
             await asyncio.to_thread(idx.build, sources)
         except Exception:
@@ -238,6 +239,32 @@ class Router:
         self._route_index = idx
         logger.info("semantic route index ready: %d skill(s)", len(idx))
         return idx
+
+    @staticmethod
+    def _semantic_safe(skill: "Skill") -> bool:
+        """Can this skill be REACHED BY MEANING without a parsed match?
+
+        On the semantic tier a skill is dispatched with a bare SkillRequest — no
+        regex ``match``, no ``args``. That is only safe when the skill is not
+        destructive/gated (``controls_pc`` / ``requires_confirmation`` go through
+        the LLM+confirmation path, never a meaning shortcut) AND it can actually
+        run argument-free: either its tool schema marks nothing required, or it
+        promises via ``semantic_from_text`` to derive what it needs from
+        ``request.text``. Without this gate, flipping the HUD SEMANTIC TIER to
+        LIVE would make an arg-hungry query skill deflect ("What should I search
+        for?") on a perfectly clear request.
+        """
+        if getattr(skill, "controls_pc", False) or \
+                getattr(skill, "requires_confirmation", False):
+            return False
+        if getattr(skill, "semantic_from_text", False):
+            return True
+        try:
+            required = (skill.tool_schema().get("function", {})
+                        .get("parameters", {}).get("required") or [])
+        except Exception:      # a broken tool_schema shouldn't crash index build
+            return False
+        return not required
 
     @staticmethod
     def _is_learnable(skill: "Skill") -> bool:

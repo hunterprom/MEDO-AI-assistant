@@ -67,6 +67,15 @@ class Skill(ABC):
     #: so populating it can never change what the fast path routes. Empty is
     #: fine; the router then falls back to ``description``.
     routing_phrases: list[str] = []
+    #: Opt-in for the SEMANTIC tier when the skill needs an argument. Reached by
+    #: MEANING, a skill gets a bare ``SkillRequest`` — no regex ``match``, no
+    #: ``args`` — so one that reads a query from the match would deflect ("What
+    #: should I search for?"). Setting this True is a promise that ``execute``
+    #: falls back to deriving what it needs from ``request.text``; the router
+    #: then treats the skill as safe to index even though its tool schema marks
+    #: a parameter required. Query skills that need NO argument leave this False
+    #: and are indexed automatically.
+    semantic_from_text: bool = False
 
     def routing_surface(self) -> list[str]:
         """The phrases the semantic router embeds to represent this skill.
