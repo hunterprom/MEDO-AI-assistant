@@ -208,6 +208,8 @@ class RemoteServer:
         app.router.add_get("/docs/stats", self._handle_docs_stats)
         app.router.add_post("/docs/reindex", self._handle_docs_reindex)
         app.router.add_get("/mcp", self._handle_mcp_status)
+        app.router.add_post("/control/mcp", self._handle_mcp_add)
+        app.router.add_post("/control/mcp/remove", self._handle_mcp_remove)
         app.router.add_post("/control/pc", self._handle_pc_control)
         app.router.add_post("/control/semantic", self._handle_semantic)
         app.router.add_post("/control/browser", self._handle_browser)
@@ -507,6 +509,45 @@ class RemoteServer:
             {"ok": True, "enabled": self._settings.mcp.enabled,
              "configured": configured, "servers": servers}
         )
+
+    async def _handle_mcp_add(self, request: web.Request) -> web.Response:
+        """Add/update an MCP server from the HUD: name + URL (+ optional bearer
+        auth) for an HTTP server, or a command for a local one. The token is a
+        secret, so it's persisted to the git-ignored overrides — never
+        config.yaml. Connects on the next restart."""
+        from core.config import MCPServerConfig, save_mcp_server
+        body = await _json_dict(request)
+        name = str(body.get("name") or "").strip()
+        url = str(body.get("url") or "").strip()
+        command = str(body.get("command") or "").strip()
+        auth = str(body.get("auth") or body.get("auth_token") or "").strip()
+        args = list(body.get("args") or [])
+        if not name:
+            return _error(400, "a server name is required")
+        if not url and not command:
+            return _error(400, "give a URL (HTTP server) or a command (local server)")
+        try:
+            spec = MCPServerConfig(url=url, command=command, auth_token=auth, args=args)
+        except Exception:
+            return _error(400, "invalid server spec")
+        self._settings.mcp.servers[name] = spec        # reflected in GET /mcp now
+        if self._persist_secrets:
+            save_mcp_server(name, url=url, auth_token=auth, command=command, args=args)
+        logger.info("MCP server %r added via companion API", name)
+        return web.json_response({"ok": True, "name": name, "restart": True})
+
+    async def _handle_mcp_remove(self, request: web.Request) -> web.Response:
+        """Remove an HUD-added MCP server. Disconnects on the next restart."""
+        from core.config import remove_mcp_server
+        body = await _json_dict(request)
+        name = str(body.get("name") or "").strip()
+        if not name:
+            return _error(400, "a server name is required")
+        self._settings.mcp.servers.pop(name, None)
+        removed = remove_mcp_server(name) if self._persist_secrets else True
+        logger.info("MCP server %r removed via companion API", name)
+        return web.json_response(
+            {"ok": True, "name": name, "removed": bool(removed), "restart": True})
 
     async def _handle_models(self, request: web.Request) -> web.Response:
         """Models offered by the active provider (empty list when offline)."""

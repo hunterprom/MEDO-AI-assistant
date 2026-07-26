@@ -192,8 +192,11 @@ class MCPManager:
         else:
             from mcp.client.streamable_http import streamablehttp_client
 
+            # Optional bearer auth for a protected HTTP server.
+            headers = ({"Authorization": f"Bearer {cfg.auth_token}"}
+                       if cfg.auth_token else None)
             read, write, _ = await self._stack.enter_async_context(
-                streamablehttp_client(cfg.url)
+                streamablehttp_client(cfg.url, headers=headers)
             )
         session = await self._stack.enter_async_context(ClientSession(read, write))
         await session.initialize()

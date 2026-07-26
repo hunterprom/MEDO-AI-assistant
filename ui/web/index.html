@@ -930,8 +930,12 @@
       <div class="setting col-layout">
         <div class="info"><span class="name">MCP servers</span><span class="desc" id="mcp-desc">PLUG ANY APP INTO MEDO · LOADING…</span></div>
         <div id="mcp-list" class="sr-list"></div>
+        <div class="field"><label>NAME</label><input id="mcp-name" placeholder="home-assistant" autocomplete="off" spellcheck="false" /></div>
+        <div class="field"><label>URL — an HTTP MCP endpoint</label><input id="mcp-url" placeholder="http://localhost:3000/mcp" autocomplete="off" spellcheck="false" /></div>
+        <div class="field"><label>AUTH TOKEN — optional bearer, stored locally on this machine, never committed</label><input id="mcp-auth" type="password" placeholder="(optional)" autocomplete="off" spellcheck="false" /></div>
+        <div class="rowbtns"><button class="btn-sm" id="mcp-add">ADD SERVER</button><span id="mcp-add-status"></span></div>
         <div id="mcp-hint" style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.06em">
-          ADD SERVERS IN config.yaml → mcp.servers (COMMAND OR URL) · THEIR TOOLS BECOME SKILLS THE BRAIN CAN CALL · DROP-IN PYTHON SKILLS GO IN plugins/
+          THEIR TOOLS BECOME SKILLS THE BRAIN CAN CALL · CONNECTS ON RESTART · LOCAL (COMMAND) SERVERS STILL GO IN config.yaml → mcp.servers · DROP-IN PYTHON SKILLS GO IN plugins/
         </div>
       </div>
     </div>
@@ -1998,12 +2002,34 @@
         row.style.cssText = 'display:flex;gap:10px;align-items:baseline;padding:4px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
         const b = document.createElement('span'); b.textContent = dot; b.style.color = color;
         const n = document.createElement('span'); n.textContent = s.name; n.style.color = '#c9e6ff';
-        const t = document.createElement('span'); t.textContent = info; t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-        row.append(b, n, t);
+        const t = document.createElement('span'); t.textContent = info; t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
+        const rm = document.createElement('button'); rm.textContent = '×'; rm.className = 'btn-sm';
+        rm.style.cssText = 'margin-left:auto;padding:0 8px'; rm.title = 'remove this server';
+        rm.onclick = async () => {
+          try {
+            await fetch(`${API}/control/mcp/remove`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: s.name }) });
+            log(`MCP · REMOVED ${s.name} · RESTART TO APPLY`); loadMcp();
+          } catch { log('MCP — API offline'); }
+        };
+        row.append(b, n, t, rm);
         list.appendChild(row);
       }
     } catch { desc.textContent = 'PLUG ANY APP INTO MEDO · API OFFLINE'; }
   }
+  $('mcp-add').onclick = async () => {
+    const name = $('mcp-name').value.trim(), url = $('mcp-url').value.trim(), auth = $('mcp-auth').value.trim();
+    const st = $('mcp-add-status');
+    if (!name || !url) { st.textContent = 'need a name and URL'; return; }
+    st.textContent = '…';
+    try {
+      const r = await (await fetch(`${API}/control/mcp`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, url, auth }) })).json();
+      if (r.ok) {
+        st.textContent = 'added · restart to connect';
+        $('mcp-name').value = ''; $('mcp-url').value = ''; $('mcp-auth').value = '';
+        log(`MCP · ADDED ${name} · RESTART TO APPLY`); loadMcp();
+      } else st.textContent = r.error || 'failed';
+    } catch { st.textContent = 'API offline'; }
+  };
 
   /* ---- microphone picker ---- */
   const micSel = $('cfg-mic');

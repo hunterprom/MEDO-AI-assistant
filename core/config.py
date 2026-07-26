@@ -870,6 +870,10 @@ class MCPServerConfig(BaseModel):
     args: list[str] = Field(default_factory=list)  # e.g. ["-y", "@modelcontextprotocol/server-filesystem", "~"]
     env: dict[str, str] = Field(default_factory=dict)
     url: str = ""                       # e.g. "http://localhost:3000/mcp" (HTTP transport)
+    #: Optional bearer token for an HTTP server — sent as "Authorization: Bearer
+    #: <token>". A secret, so servers added from the HUD are persisted to the
+    #: git-ignored secrets file, never config.yaml.
+    auth_token: str = ""
 
 
 class MCPConfig(BaseModel):
@@ -1071,6 +1075,16 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
         settings.browser.channel = str(browser["channel"])
     if "executable_path" in browser:
         settings.browser.executable_path = str(browser["executable_path"])
+    for name, spec in (data.get("mcp_servers", {}) or {}).items():
+        # MCP servers added from the HUD (their auth tokens are secret, so they
+        # live here, never in config.yaml). Merged onto any config.yaml servers.
+        if not isinstance(spec, dict):
+            continue
+        try:
+            settings.mcp.servers[str(name)] = MCPServerConfig(**spec)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "ignoring invalid saved MCP server %r", name)
     router = data.get("router", {}) or {}  # the HUD's SEMANTIC TIER selector
     if "semantic_enabled" in router:
         settings.router.semantic_enabled = bool(router["semantic_enabled"])
@@ -1257,6 +1271,49 @@ def save_browser(choice: str, path: Path = SECRETS_PATH) -> dict:
     except Exception:
         logging.getLogger(__name__).exception("could not persist the browser choice")
     return resolved
+
+
+def save_mcp_server(name: str, url: str = "", auth_token: str = "",
+                    command: str = "", args: list | None = None,
+                    path: Path = SECRETS_PATH) -> dict:
+    """Add/update an MCP server in the git-ignored overrides (its auth token is a
+    secret). Validates via :class:`MCPServerConfig`; needs a url OR a command.
+    Returns a token-free summary. The server connects on the next startup."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("a server name is required")
+    spec = MCPServerConfig(url=(url or "").strip(), auth_token=(auth_token or "").strip(),
+                           command=(command or "").strip(), args=list(args or []))
+    if not spec.url and not spec.command:
+        raise ValueError("give a URL (HTTP server) or a command (local server)")
+    stored: dict = {"enabled": True}
+    for k in ("url", "auth_token", "command"):
+        if getattr(spec, k):
+            stored[k] = getattr(spec, k)
+    if spec.args:
+        stored["args"] = spec.args
+    try:
+        data = _read_local(path)
+        data.setdefault("mcp_servers", {})[name] = stored
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception("could not persist the MCP server")
+    return {"name": name, "url": spec.url, "command": spec.command,
+            "has_auth": bool(spec.auth_token)}
+
+
+def remove_mcp_server(name: str, path: Path = SECRETS_PATH) -> bool:
+    """Remove an HUD-added MCP server from the overrides. True if it existed."""
+    try:
+        data = _read_local(path)
+        servers = data.get("mcp_servers", {}) or {}
+        if name in servers:
+            del servers[name]
+            _write_local(data, path)
+            return True
+    except Exception:
+        logging.getLogger(__name__).exception("could not remove the MCP server")
+    return False
 
 
 def save_languages(active: list[str], primary: str | None = None,
