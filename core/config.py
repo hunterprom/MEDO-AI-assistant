@@ -38,6 +38,10 @@ _SECRET_LLM_FIELDS = (
     "anthropic_api_key",
     "anthropic_base_url",
     "default_model",
+    # Per-machine tool-brain override: a VRAM-limited box borrowing the local
+    # brain for live-info/council (when the main provider is a CLI agent) may
+    # need a small model that fits, without editing the tracked config.yaml.
+    "tool_brain_model",
 )
 
 
