@@ -385,14 +385,19 @@ wakeword:                           # M1
   # than TTS) voice extra head-room to trigger without letting normal talk in.
   # Watch your live score with `.venv\Scripts\python -m voice.wakeword`; nudge
   # up toward 0.5 if it ever false-fires, down toward 0.3 if it under-triggers.
-  threshold: 0.4
+  # 0.3: tuned MORE SENSITIVE (was 0.4) — real "medo" scores ~1.0 so there's
+  # ample head-room, and stt_confirm (below) rejects anything that isn't speech.
+  threshold: 0.3
   # WAKING ON RANDOM SOUNDS? This is the main fix, no retraining needed. MEDO
   # only wakes when the score stays above `threshold` for this many consecutive
   # ~80 ms frames. A clap or a stray word spikes for ONE frame; a real
   # "hey medo" holds for several. 1 = the old twitchy single-frame trigger.
   # Raise to 3-4 if it still wakes to noise; lower toward 1 if it starts
   # missing a genuine "hey medo".
-  trigger_frames: 3
+  # 2: tuned MORE SENSITIVE (was 3) — catches a shorter/quieter "medo" while
+  # still needing the score to hold for two frames, so a one-frame spike (clap,
+  # door) doesn't wake it. Raise back to 3 if noise starts getting through.
+  trigger_frames: 2
   # Speech gate (0 = off). Set ~0.5 to make MEDO ignore anything that isn't
   # SPEECH — music, door bangs, keyboard clatter never even get scored. Uses
   # openWakeWord's VAD model; if it can't load, MEDO warns and runs without it.
