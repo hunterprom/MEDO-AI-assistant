@@ -355,20 +355,26 @@ async def test_provider_rejects_unknown_provider(api):
 
 
 @pytest.mark.asyncio
-async def test_cors_headers_on_ping_and_errors(api):
+async def test_cors_echoes_an_allowed_origin_not_wildcard(api):
+    # CORS now echoes only the request's OWN (same-site/allowed) origin, never a
+    # wildcard — so a drive-by page can't read this API's responses.
     client, _, _ = api
-    resp = await client.get("/ping")
-    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    hdr = {"Origin": "http://127.0.0.1:8730"}
+    resp = await client.get("/ping", headers=hdr)
+    assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:8730"
 
-    resp = await client.post("/model", json={})  # 400 must still carry CORS
+    resp = await client.post("/model", json={}, headers=hdr)  # 400 still carries CORS
     assert resp.status == 400
-    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:8730"
+    # A request with NO Origin (non-browser) simply gets no Allow-Origin header.
+    bare = await client.get("/ping")
+    assert "Access-Control-Allow-Origin" not in bare.headers
 
 
 @pytest.mark.asyncio
 async def test_options_preflight_returns_204(api):
     client, _, _ = api
-    resp = await client.options("/provider")
+    resp = await client.options("/provider", headers={"Origin": "http://127.0.0.1:8730"})
     assert resp.status == 204
-    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    assert resp.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:8730"
     assert "POST" in resp.headers["Access-Control-Allow-Methods"]
