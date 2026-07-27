@@ -327,7 +327,12 @@ class VoiceLoop:
         mode = getattr(audio_cfg, "barge_mode", "wake")
         wake_enabled = mode in ("wake", "voice")
         voice_enabled = mode == "voice"
-        need = getattr(wake, "trigger_frames", 1)   # same anti-noise gate as standby
+        # A barge-in needs its OWN sustained-frame count, NOT the idle
+        # trigger_frames: standby can be single-frame twitchy without harm, but
+        # that same twitchiness while MEDO speaks lets its speaker-leakage / a
+        # stray blip cut the reply off. barge_wake_frames keeps interruption
+        # deliberate even when waking is hyper-sensitive.
+        need = max(1, getattr(audio_cfg, "barge_wake_frames", 3))
         baseline: float | None = None   # EMA of mic RMS incl. TTS leakage
         loud_run = 0
         wake_run = 0

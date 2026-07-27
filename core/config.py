@@ -705,6 +705,13 @@ class AudioConfig(BaseModel):
     #: Wake-word score that interrupts a reply. Lower than the idle threshold —
     #: you're speaking over MEDO's own voice, so the model scores lower.
     barge_wake_threshold: float = 0.25
+    #: Consecutive over-threshold frames before a wake-word barge-in fires.
+    #: DECOUPLED from the idle wakeword.trigger_frames on purpose: waking from
+    #: standby can be twitchy (1 frame) without cost, but the SAME twitchiness
+    #: while MEDO is speaking makes its own speaker-leakage / a stray blip cut the
+    #: reply off. Needing a few SUSTAINED frames means only a real "medo" spoken
+    #: over the reply interrupts it. Raise if MEDO still cuts itself off.
+    barge_wake_frames: int = 3
     #: How far above MEDO's own speaker-leakage your voice must sit. Measured on
     #: this machine: leakage ~0.011 rms median, 0.035 peak, so 3.0 put the bar
     #: above MEDO's own loud moments and barge-in effectively never fired.

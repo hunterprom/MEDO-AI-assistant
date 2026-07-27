@@ -460,6 +460,12 @@ audio:                              # M1
   # barge_wake_threshold if saying "medo" over MEDO doesn't stop it; raise it
   # if MEDO cuts itself off. Run: .venv\Scripts\python -m voice.bargecheck
   barge_wake_threshold: 0.25
+  # Consecutive "medo" frames needed to interrupt a reply — DECOUPLED from the
+  # idle wakeword.trigger_frames (which is 1 for hyper-sensitive waking). Keeping
+  # this at 3 means MEDO's own speaker-leakage / a one-frame blip can't cut its
+  # reply off; only a real, sustained "medo" over the reply does. Raise if it
+  # still cuts itself off; lower toward 1 if it's hard to interrupt on purpose.
+  barge_wake_frames: 3
   barge_rms_ratio: 2.0
   barge_min_rms: 0.02
   barge_hold_frames: 3

@@ -113,7 +113,8 @@ def test_wake_mode_ignores_loud_noise():
 
 
 def test_wake_mode_interrupts_on_the_wake_word():
-    frames = [_quiet_frame(), _quiet_frame(), _WakeFrame(), _quiet_frame()]
+    # A real "medo" over the reply sustains several frames (barge_wake_frames).
+    frames = ([_quiet_frame()] + [_WakeFrame()] * 3 + [_quiet_frame()])
     why = VoiceLoop.watch_for_barge(iter(frames), _FakeWake(), _cfg("wake"))
     assert why == "wake word over playback"
 
@@ -132,15 +133,17 @@ def test_off_mode_ignores_both_wake_and_noise():
     assert why is None
 
 
-def test_barge_needs_sustained_wake_frames_when_configured():
-    # A single wake-scoring frame (a transient) must not interrupt when the
-    # wake word requires several consecutive frames.
-    wake = _FakeWake()
-    wake.trigger_frames = 2
+def test_barge_needs_sustained_wake_frames_not_the_idle_trigger():
+    # A single wake-scoring frame (a transient, or MEDO's own speaker-leakage)
+    # must not cut the reply off. barge_wake_frames — NOT the idle
+    # wakeword.trigger_frames — controls this, so hyper-sensitive waking doesn't
+    # make MEDO barge in on itself.
+    cfg = _cfg("wake")
+    cfg.barge_wake_frames = 2
     one = [_quiet_frame(), _WakeFrame(), _quiet_frame(), _quiet_frame()]
-    assert VoiceLoop.watch_for_barge(iter(one), wake, _cfg("wake")) is None
+    assert VoiceLoop.watch_for_barge(iter(one), _FakeWake(), cfg) is None
     two = [_WakeFrame(), _WakeFrame(), _quiet_frame()]
-    assert VoiceLoop.watch_for_barge(iter(two), wake, _cfg("wake")) \
+    assert VoiceLoop.watch_for_barge(iter(two), _FakeWake(), cfg) \
         == "wake word over playback"
 
 
@@ -242,9 +245,12 @@ async def test_fast_path_turn_does_not_hang_on_the_filler():
     assert AssistantState.SPEAKING in states                  # reached SPEAKING, not stuck
 
 
-def test_wake_requires_sustained_frames_by_default():
-    # The anti-false-wake default: more than one frame must clear the threshold.
-    assert load_settings().wakeword.trigger_frames >= 2
+def test_wake_has_an_anti_false_wake_guard_by_default():
+    # A single-frame idle trigger is only safe with stt_confirm to reject a
+    # non-"medo" spike; the shipped config must keep at least one of the two
+    # guards (sustained frames OR the STT confirmation pass).
+    w = load_settings().wakeword
+    assert w.trigger_frames >= 2 or w.stt_confirm
 
 
 def test_missing_custom_model_falls_back_to_bundled(tmp_path, monkeypatch):
