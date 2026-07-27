@@ -44,6 +44,15 @@ _DISCARD = re.compile(
     re.IGNORECASE)
 
 
+_CANCEL = re.compile(
+    r"^\s*(?:never\s*mind|nevermind|cancel|forget\s+it|forget\s+that|stop|"
+    r"nothing|no|leave\s+it)\s*[.!]*$", re.IGNORECASE)
+
+
+def _is_cancel(text: str) -> bool:
+    return bool(_CANCEL.match(text or ""))
+
+
 def _strip_trigger(text: str) -> str:
     """Reduce "fix your code so <X>" to the underlying ask "<X>"."""
     t = _START.sub("", text, count=1).strip(" ,:;.-—")
@@ -78,25 +87,33 @@ class SelfDevSkill(Skill):
         # The "yes" confirming an apply comes back through here with confirmed set.
         if request.context.get("confirmed"):
             return await self._apply_now()
+        # A follow-up answering "what should I fix?" — the whole utterance is the
+        # task (no trigger phrase to strip).
+        if request.context.get("captured_reply"):
+            return self._begin(request.text)
         text = request.text
         if _APPLY.search(text):
             return self._apply_prompt()
         if _DISCARD.search(text):
             return await self._discard()
-        return self._start(request)
+        return self._begin(_strip_trigger(text))
 
     # -- start a proposal (background) --------------------------------------
 
-    def _start(self, request: SkillRequest) -> SkillResult:
+    def _begin(self, dev_request: str) -> SkillResult:
+        dev_request = " ".join((dev_request or "").split()).strip(" .")
+        if _is_cancel(dev_request):
+            return SkillResult("Okay, never mind — I'll leave my code as it is.")
+        if len(dev_request) < 4:
+            # Ask, and CAPTURE the next utterance as the answer (await_reply), so
+            # a bare "fix your code" can be followed by the task on the next turn.
+            return SkillResult(
+                "Tell me what to fix or add — for example, 'fix your code so the "
+                "weather skill handles an empty city'.", await_reply=True)
         if self._busy:
             return SkillResult(
                 "I'm already working on a change — let me finish that one first.",
                 success=False)
-        dev_request = _strip_trigger(request.text)
-        if len(dev_request) < 4:
-            return SkillResult(
-                "Tell me what to fix or add — for example, 'fix your code so the "
-                "weather skill handles an empty city'.", success=False)
         self._busy = True
         self._task = asyncio.ensure_future(self._work(dev_request))
         return SkillResult(

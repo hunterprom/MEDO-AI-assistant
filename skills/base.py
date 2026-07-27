@@ -38,6 +38,11 @@ class SkillResult:
     # True when the skill wants a spoken confirmation before it actually runs
     # (wired through core/safety.py in M2).
     needs_confirmation: bool = False
+    # True when the skill asked a question and wants to CAPTURE the user's next
+    # utterance as free-text input (e.g. self-dev's "what should I fix?"). The
+    # router routes that reply back to this skill with context['captured_reply'],
+    # unless it matches another command — see Router._route_inner.
+    await_reply: bool = False
 
 
 class Skill(ABC):

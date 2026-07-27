@@ -93,10 +93,31 @@ async def test_start_runs_in_background_and_announces_a_ready_proposal():
 
 
 @pytest.mark.asyncio
-async def test_bare_trigger_asks_what_to_do():
+async def test_bare_trigger_asks_and_awaits_the_answer():
     skill = SelfDevSkill(_FakeEngine(), None)
     result = await skill.execute(SkillRequest(text="program yourself"))
-    assert result.success is False and "tell me" in result.speech.lower()
+    assert result.await_reply is True and "tell me" in result.speech.lower()
+
+
+@pytest.mark.asyncio
+async def test_captured_reply_becomes_the_task():
+    engine = _FakeEngine(proposal=_proposal(ok=True))
+    skill = SelfDevSkill(engine, None)
+    # simulate the router handing back the follow-up utterance
+    result = await skill.execute(SkillRequest(
+        text="make the weather skill handle an empty city",
+        context={"captured_reply": True}))
+    assert result.success and result.data.get("self_dev") == "started"
+    await skill._task
+
+
+@pytest.mark.asyncio
+async def test_captured_reply_can_cancel():
+    skill = SelfDevSkill(_FakeEngine(), None)
+    result = await skill.execute(SkillRequest(
+        text="never mind", context={"captured_reply": True}))
+    assert result.success and "never mind" in result.speech.lower()
+    assert skill._task is None
 
 
 @pytest.mark.asyncio

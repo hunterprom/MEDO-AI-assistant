@@ -167,6 +167,9 @@ class Router:
         )
         #: A destructive action awaiting a spoken yes/no, if any.
         self._pending: tuple[Skill, SkillRequest] | None = None
+        #: A skill awaiting a free-text follow-up (e.g. self-dev's "what should I
+        #: fix?"), so the NEXT utterance is captured as its answer.
+        self._pending_reply: tuple[Skill, SkillRequest] | None = None
         #: Rolling context so follow-ups ("and tomorrow?") resolve.
         self.conversation = ConversationMemory(settings.memory.max_turns)
         #: Long-term user facts, injected into the system prompt each LLM turn.
@@ -476,6 +479,23 @@ class Router:
                 == context.get("source")):
             return await self._resolve_confirmation(text, context)
 
+        # --- REPLY CAPTURE ---
+        # A skill asked a question and wants this utterance as its answer (e.g.
+        # self-dev's "what should I fix?"). Same-source scoped, like confirmation.
+        # If the user instead said another COMMAND (it matches a fast-path skill),
+        # honour that and drop the capture — so "never mind, what time is it"
+        # isn't fed back as a bogus answer.
+        if (self._pending_reply is not None
+                and self._pending_reply[1].context.get("source")
+                == context.get("source")):
+            reply_skill = self._pending_reply[0]
+            self._pending_reply = None
+            other = self._registry.find_match(text)
+            if other is None or other[0] is reply_skill:
+                captured = SkillRequest(
+                    text=text, context={**context, "captured_reply": True})
+                return await self._run_skill(reply_skill, captured)
+
         # Expose the PREVIOUS spoken reply so a skill can replay it verbatim
         # ("say that again"). route() calls add_turn() AFTER this, so right now
         # last_reply() is the prior turn's reply, exactly what should be echoed.
@@ -532,6 +552,9 @@ class Router:
             return RouteResult(path=path, speech=PC_CONTROL_OFF_REPLY,
                               skill_name=skill.name)
         outcome = await self._safe_execute(skill, request)
+        if outcome.await_reply:
+            # The skill asked a question; capture the NEXT utterance as its answer.
+            self._pending_reply = (skill, request)
         if (outcome.needs_confirmation and self._settings.safety.confirm_destructive):
             # Stash the request; the next utterance is treated as the yes/no.
             self._pending = (skill, request)
