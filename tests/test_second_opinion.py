@@ -73,6 +73,32 @@ async def test_unsupported_claim_is_flagged_and_offers_breakdown():
     assert "2.5 newton-metre" in r.speech
 
 
+def test_tag_word_inside_the_claim_text_cannot_flip_the_verdict():
+    from core.council import COUNCIL
+    # A claim summary that echoes the answer's wording ("...supported by...") must
+    # NOT be read as the tag — the real WRONG in the delimited slot has to win, or
+    # the whole fail-safe promise breaks (a WRONG claim reported as "solid").
+    claims = _parse_audit(
+        "CLAIM: bracket supported by FEA | WRONG | no FEA was actually run", COUNCIL[0])
+    assert claims[0]["tag"] == "WRONG"
+    assert _verdict(claims) == "wrong"
+    # And with no delimiters, the MOST SEVERE tag on the line wins (over-flag).
+    c2 = _parse_audit("the 2.5 figure is UNSUPPORTED though partly SUPPORTED", COUNCIL[0])
+    assert c2[0]["tag"] == "UNSUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_all_cannot_verify_does_not_arm_reply_capture():
+    # An all-CANNOT_VERIFY audit is "unverified" with claims, but its headline
+    # offers no breakdown — so it must NOT set await_reply, or it would swallow
+    # the user's next free-form utterance.
+    skill = _skill("CLAIM: melting point of alloy X | CANNOT_VERIFY | outside my field")
+    r = await _run(skill, ctx=_ctx("The alloy melts at 1400 C."))
+    assert r.data["second_opinion"] == "unverified"
+    assert r.await_reply is False
+    assert "breakdown" not in r.speech.lower()
+
+
 @pytest.mark.asyncio
 async def test_a_wrong_claim_dominates_the_verdict():
     skill = _skill("CLAIM: x | SUPPORTED | fine\nCLAIM: y | WRONG | actually false")

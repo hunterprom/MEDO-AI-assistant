@@ -63,6 +63,13 @@ _TAG = re.compile(
     r"CANNOT[\s_-]?VERIFY|UNVERIFIABLE|UNKNOWN)\b", re.IGNORECASE)
 
 
+#: Tag severity, most-severe-first. Used as the fail-safe tie-break: when a line
+#: carries more than one tag word, the most severe wins so a tag word embedded in
+#: the CLAIM TEXT (e.g. a claim that reads "...supported by...") can never mask a
+#: real flag. The parser over-flags, never under-flags.
+_SEVERITY = {"WRONG": 3, "UNSUPPORTED": 2, "CANNOT_VERIFY": 1, "SUPPORTED": 0}
+
+
 def _norm_tag(raw: str) -> str:
     t = raw.upper().replace(" ", "_").replace("-", "_")
     if t in ("INCORRECT", "FALSE"):
@@ -87,16 +94,37 @@ def _parse_audit(reply: str, member: Specialist) -> list[dict[str, str]]:
     """
     claims: list[dict[str, str]] = []
     for line in reply.splitlines():
-        m = _TAG.search(line)
-        if m is None:
+        if _TAG.search(line) is None:
             continue
-        claim = _clean(line[:m.start()])
-        reason = _clean(line[m.end():])
+        fields = [f.strip() for f in line.split("|")]
+        tag: str | None = None
+        claim = ""
+        reason = ""
+        if len(fields) >= 2:
+            # Well-formed "CLAIM: <claim> | <TAG> | <reason>": read the tag from
+            # its DELIMITED field, so a tag word inside the claim summary can't be
+            # mistaken for the verdict. The claim is field 0; the tag is the first
+            # later field that carries a tag word; the rest is the reason.
+            claim = _clean(fields[0])
+            tag_idx = next((i for i in range(1, len(fields))
+                            if _TAG.search(fields[i])), None)
+            if tag_idx is not None:
+                tag = _norm_tag(_TAG.search(fields[tag_idx]).group(1))
+                reason = _clean(" | ".join(fields[tag_idx + 1:]))
+        if tag is None:
+            # No usable delimiters — fall back to the MOST SEVERE tag on the line
+            # (over-flag, never under-flag) with the text before the first tag as
+            # the claim.
+            hits = list(_TAG.finditer(line))
+            tag = max((_norm_tag(m.group(1)) for m in hits),
+                      key=lambda t: _SEVERITY[t])
+            claim = _clean(line[:hits[0].start()])
+            reason = _clean(line[hits[-1].end():])
         if not claim:                       # a bare tag with no claim text -> skip
             continue
         claims.append({
             "claim": claim,
-            "tag": _norm_tag(m.group(1)),
+            "tag": tag,
             "reason": reason,
             "specialist": member.key,
             "specialist_title": member.title,
@@ -228,8 +256,11 @@ class SecondOpinionSkill(_CouncilBase):
                        "names": names}
 
         headline = self._headline(status, names, claims, speak_mk)
-        # Offer the per-claim detail only when there IS something to break down.
-        offer = bool(claims)
+        # Offer the per-claim detail only when the headline actually asks for it.
+        # The "unverified" headline has no "want the breakdown?" tail, so it must
+        # NOT arm reply-capture — otherwise the next free-form utterance is
+        # silently swallowed into the (empty) breakdown branch.
+        offer = bool(claims) and status != "unverified"
         return SkillResult(
             headline, success=True, await_reply=offer,
             data={"second_opinion": status, "members": [m.key for m in answered],

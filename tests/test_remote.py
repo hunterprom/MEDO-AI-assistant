@@ -190,6 +190,28 @@ async def test_allowed_origins_whitelist(server_client):
 
 
 @pytest.mark.asyncio
+async def test_no_origin_domain_host_is_refused_dns_rebinding(client: TestClient):
+    # A same-origin GET (browsers omit Origin) whose Host is an attacker DOMAIN is
+    # a DNS-rebinding READ attempt — refuse it even from a loopback, auth-exempt
+    # peer, so /dirs, /facts, /search/files can't leak.
+    resp = await client.get("/dirs", headers={"Host": "evil.example"})
+    assert resp.status == 403
+    # ...but a loopback/IP Host with no Origin is a normal client → allowed.
+    ok = await client.get("/ping", headers={"Host": "127.0.0.1"})
+    assert ok.status == 200
+
+
+@pytest.mark.asyncio
+async def test_whitelisted_hostname_host_is_allowed(server_client):
+    # Listing a remote-HUD origin also whitelists its hostname for the Host check,
+    # so an mDNS/NetBIOS HUD works once its origin is in remote.allowed_origins.
+    tc, server = server_client
+    server._settings.remote.allowed_origins = ["http://medo.local:8730"]
+    resp = await tc.get("/ping", headers={"Host": "medo.local"})
+    assert resp.status == 200
+
+
+@pytest.mark.asyncio
 async def test_provider_base_url_change_requires_api_key(server_client):
     # Redirecting a cloud provider to a NEW base URL without re-supplying the key
     # must be refused, so the stored key is never sent to an attacker URL.

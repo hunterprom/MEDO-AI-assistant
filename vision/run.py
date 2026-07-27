@@ -188,6 +188,13 @@ def load_api_token(config_path: Path) -> str:
         return ""
 
 
+def _host_is_loopback(host_header: str) -> bool:
+    """True when a ``Host`` header targets loopback (or is absent). A domain Host
+    means a DNS-rebinding attempt against the loopback-bound sidecar → refuse."""
+    host = (host_header or "").rsplit(":", 1)[0].strip("[]").lower()
+    return host in ("", "127.0.0.1", "localhost", "::1")
+
+
 def _make_video_handler(holder: dict, cfg: VisionRunConfig):
     """An HTTP handler: MJPEG stream, latest-frame JPEG, pointer toggle, bench.
 
@@ -220,12 +227,17 @@ def _make_video_handler(holder: dict, cfg: VisionRunConfig):
         def _reject_cross_site(self) -> bool:
             # Block a browser drive-by — a page on another origin loading the
             # webcam via <img>, or POSTing /pointer to switch on mouse control.
-            # Modern browsers tag such a request Sec-Fetch-Site: cross-site; the
-            # same-origin HUD (same-site) and native local clients (no header)
-            # are allowed, and the loopback bind covers everything else.
+            # Modern browsers tag such a request Sec-Fetch-Site: cross-site.
             site = self.headers.get("Sec-Fetch-Site", "")
             if site in ("cross-site", "cross-origin"):
                 self._send_json(403, {"ok": False, "error": "cross-site refused"})
+                return True
+            # AND refuse a non-loopback Host: a DNS-rebinding attack resolves the
+            # attacker's OWN hostname to 127.0.0.1, so Sec-Fetch-Site reads
+            # "same-origin" and only the Host header reveals it. The sidecar binds
+            # loopback, so a legitimate Host is always 127.0.0.1/localhost.
+            if not _host_is_loopback(self.headers.get("Host", "")):
+                self._send_json(403, {"ok": False, "error": "bad host"})
                 return True
             return False
 

@@ -147,8 +147,11 @@ COUNCIL: tuple[Specialist, ...] = (
         "You are a financial analyst. You reason about cash flow, unit "
         "economics, risk and time value of money. You show the arithmetic. "
         "You note that this is analysis, not investment advice.",
-        ("investment", "investing", "cash flow", "profit", "margin", "loan",
-         "interest rate", "valuation", "budget", "финанс", "камата", "буџет"),
+        # "invest" is safe as a WHOLE word now — it matches invest/invests but
+        # not "investigate" — so keep it alongside the derived nouns.
+        ("invest", "investment", "investing", "investor", "cash flow", "profit",
+         "margin", "loan", "interest rate", "valuation", "budget",
+         "финанс", "камата", "буџет"),
         aliases=("финансиски аналитичар", "финансиер", "financial adviser",
                  "financial advisor", "analyst"),
     ),
@@ -172,7 +175,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "target audience, messaging, channels, funnels and the one sentence that "
         "makes someone care. You are concrete: you name the segment, the hook and "
         "the metric, and you call out hype that will not convert.",
-        ("marketing", "brand", "branding", "positioning", "campaign", "audience",
+        ("marketing", "branding", "positioning", "campaign", "audience",
          "customer", "go to market", "advertis*", "headline", "seo", "funnel",
          "conversion", "landing page", "маркетинг", "бренд", "реклам"),
         aliases=("marketer", "the marketer", "growth strategist", "brand strategist",
@@ -221,8 +224,9 @@ COUNCIL: tuple[Specialist, ...] = (
         "solvents, adhesives, battery chemistry and safety. You give quantities "
         "and you flag anything that is toxic, flammable or otherwise about to ruin "
         "someone's day.",
-        ("chemical", "chemistry", "reaction", "molecule", "solvent", "adhesive",
-         "epoxy", "corrosion", "electrolyte", "polymer", "хемија", "реакција"),
+        ("chemical", "chemistry", "chemical reaction", "molecule", "solvent",
+         "adhesive", "epoxy", "corrosion", "electrolyte", "polymer",
+         "хемија", "реакција"),
         aliases=("chemist", "the chemist", "хемичар"),
     ),
     Specialist(

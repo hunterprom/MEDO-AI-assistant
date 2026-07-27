@@ -286,27 +286,35 @@ class RemoteServer:
         """True when the request comes from this machine (auth-exempt)."""
         return request.remote in _LOCAL_PEERS
 
+    def _allowed_origin_hosts(self) -> set[str]:
+        """The bare hosts of ``remote.allowed_origins`` — the hostnames (e.g. an
+        mDNS ``medo.local``) the operator has explicitly trusted for a remote HUD."""
+        return {_host_only(o) for o in self._settings.remote.allowed_origins}
+
     def _origin_allowed(self, request: web.Request) -> bool:
         """CSRF / DNS-rebinding gate for BROWSER requests.
 
-        No ``Origin`` header → a non-browser client (the watch app, curl); allow,
-        the token gate still applies. With an ``Origin``, allow only SAME-SITE: a
-        loopback origin, an explicitly whitelisted one (``remote.allowed_origins``),
-        or an ``Origin`` whose host equals the request's ``Host`` header host AND
-        that host is an IP/localhost — a domain ``Host`` is a DNS-rebinding attempt,
-        so it is refused. This is what stops a page on the open web from driving
-        the API even though the browser connects to it over 127.0.0.1.
+        The DNS-rebinding check runs FIRST and applies even with NO ``Origin``
+        header — browsers omit Origin on a same-origin GET, which is exactly how a
+        rebinding *read* attack arrives — so the request's ``Host`` must be an
+        IP/localhost or a hostname whitelisted via ``remote.allowed_origins``; a
+        stray domain ``Host`` is refused. Then, with an ``Origin`` present, allow
+        only SAME-SITE: a loopback origin, an explicitly whitelisted one, or an
+        Origin whose host equals the (already-validated) Host. This is what stops
+        a page on the open web from driving — or reading — the API even though the
+        browser connects to it over 127.0.0.1.
         """
+        rhost = _host_only(request.host or "")
+        host_ok = _is_ip_or_localhost(rhost) or rhost in self._allowed_origin_hosts()
         origin = request.headers.get("Origin")
         if not origin:
-            return True
+            return host_ok                      # non-browser, or same-origin GET
         if origin in self._settings.remote.allowed_origins:
             return True
         ohost = _host_only(origin)
         if ohost in ("127.0.0.1", "localhost", "::1"):
             return True
-        rhost = _host_only(request.host or "")
-        if not _is_ip_or_localhost(rhost):
+        if not host_ok:
             return False                        # domain Host header → rebinding
         return bool(ohost) and ohost == rhost
 

@@ -167,6 +167,27 @@ def test_rank_specialists_stem_triggers_still_inflect():
     assert "medicine" in [s.key for s in rank_specialists("what are the symptoms")]
 
 
+def test_finance_routes_on_invest_and_investor_but_not_investigate():
+    # "invest" is safe as a whole word (matches invest/invests, not "investigate"),
+    # so it and "investor" route to finance again.
+    assert "finance" in [s.key for s in rank_specialists("should I invest in stocks")]
+    assert "finance" in [s.key for s in rank_specialists("is he a good investor")]
+    assert "finance" not in [s.key for s in
+                             rank_specialists("we should investigate the lawn")]
+
+
+def test_tightened_triggers_do_not_fire_on_everyday_phrases():
+    # "reaction"->"chemical reaction" and dropping bare "brand" stop the two
+    # worst everyday false positives.
+    assert "chemistry" not in [s.key for s in
+                               rank_specialists("what was the reaction to our launch")]
+    assert "marketing" not in [s.key for s in
+                               rank_specialists("should I buy a brand new servo")]
+    # ...while the intended terms still route.
+    assert "chemistry" in [s.key for s in rank_specialists("explain this chemical reaction")]
+    assert "marketing" in [s.key for s in rank_specialists("help with our branding")]
+
+
 def test_broadened_bench_keeps_the_roster_deterministic():
     # New majors must not perturb the two rank invariants the router relies on.
     assert rank_specialists("what is the weather in Skopje") == []

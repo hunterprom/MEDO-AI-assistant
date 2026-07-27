@@ -220,10 +220,12 @@ class RemoteConfig(BaseModel):
     # machine and start pairing without typing an IP (same port, UDP).
     discovery_enabled: bool = True
     # Browser origins allowed to call the API cross-origin, IN ADDITION to
-    # same-site (loopback / the HUD served from this host). A page from any other
+    # same-site (loopback / the HUD served over an IP). A page from any other
     # origin is refused (CSRF/DNS-rebinding defense) even from 127.0.0.1, so a
-    # website you visit can't drive MEDO. Add an entry only for a trusted remote
-    # HUD, e.g. ["https://medo.example"].
+    # website you visit can't drive MEDO. Add an entry for a trusted remote HUD —
+    # this ALSO whitelists its hostname for the rebinding Host check, so a HUD
+    # reached over a name (mDNS "medo.local", a NetBIOS/computer name) needs its
+    # origin listed here, e.g. ["http://medo.local:8730"].
     allowed_origins: list[str] = Field(default_factory=list)
 
 
