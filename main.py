@@ -408,6 +408,13 @@ def build_registry(
     from skills.documents_gen import MakeDocumentSkill
 
     registry.register(MakeDocumentSkill(compose))   # saves to ~/Documents/MEDO
+    # Build a standalone app from a description (core/app_builder.py). Opt-in, in
+    # its own folder — the outward sibling of self-dev.
+    if settings.app_builder.enabled:
+        from core.app_builder import AppBuilder
+        from skills.app_builder_skill import MakeAppSkill
+
+        registry.register(MakeAppSkill(AppBuilder(settings.app_builder), announcer))
     # Application discovery. LocateApp answers "do I have X" (it only looks);
     # InstallApp is gated on a spoken yes AFTER naming the resolved package.
     from skills.appfinder import (

@@ -515,6 +515,14 @@ self_dev:
   # approval. Turn off to remove the capability entirely.
   enabled: true
 
+app_builder:
+  # MEDO building standalone apps ("make an app that ...") with the coding agent.
+  # Unlike self_dev, it never touches MEDO's own code — it scaffolds a NEW,
+  # self-contained project in its own folder under apps_dir. The agent runs on
+  # this machine (writing files only, no shell), so this is opt-in.
+  enabled: true
+  apps_dir: "~/MEDO-apps"
+
 skills:
   # Your own wording for any skill, without touching Python. Each phrase below
   # becomes one more fast-path trigger for that skill — matched literally (not

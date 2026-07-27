@@ -986,6 +986,27 @@ class SelfDevConfig(BaseModel):
     ])
 
 
+class AppBuilderConfig(BaseModel):
+    """MEDO building standalone apps with the coding agent (core/app_builder.py).
+
+    Unlike self-dev (which edits MEDO's OWN code under review), this scaffolds a
+    NEW, self-contained project in its own directory under ``apps_dir`` — the
+    blast radius is that folder, nothing here touches MEDO's code. Off by default;
+    the agent runs on this machine, so turning it on opts into that.
+    """
+
+    enabled: bool = False
+    #: Which installed coding agent builds the app ("claude-code" or "codex").
+    engine: str = "claude-code"
+    #: Where built apps land, each in its own subfolder.
+    apps_dir: str = "~/MEDO-apps"
+    #: Hard bound on the coding agent.
+    agent_timeout_s: float = 1200.0
+    #: Claude Code permission mode. "acceptEdits" lets it write files (all a fresh
+    #: app needs) without prompting; it does not run shell commands.
+    permission_mode: str = "acceptEdits"
+
+
 class Settings(BaseSettings):
     """Root settings object — one instance per process."""
 
@@ -1024,6 +1045,7 @@ class Settings(BaseSettings):
     routines: list[RoutineItem] = Field(default_factory=list)
     webhooks: list[WebhookConfig] = Field(default_factory=list)
     self_dev: SelfDevConfig = Field(default_factory=SelfDevConfig)
+    app_builder: AppBuilderConfig = Field(default_factory=AppBuilderConfig)
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
