@@ -23,21 +23,26 @@ logger = logging.getLogger(__name__)
 
 _KINDS = (
     r"presentation|slide\s*deck|slideshow|slides|power\s*point|powerpoint|pptx|deck|"
+    r"spread\s*sheet|spreadsheet|worksheet|excel|xlsx|table|"
     r"word\s+document|word\s+doc|document|report|essay|letter|memo|article|"
     r"web\s*page|html\s+page|doc")
 _MAKE = re.compile(
     r"\b(?:make|create|write|generate|draft|produce|build|prepare)\s+(?:me\s+)?"
     r"(?:a|an|the)\s+(?P<kind>" + _KINDS + r")\b"
-    r"(?:\s+(?:about|on|for|titled|called|regarding|covering)\s+(?P<topic>.+))?",
+    r"(?:\s+(?:about|on|for|of|titled|called|regarding|covering|listing|showing)"
+    r"\s+(?P<topic>.+))?",
     re.IGNORECASE)
 _TOPIC_TAIL = re.compile(
-    r"\b(?:about|on|for|titled|called|regarding|covering)\s+(.+)", re.IGNORECASE)
+    r"\b(?:about|on|for|of|titled|called|regarding|covering|listing|showing)"
+    r"\s+(.+)", re.IGNORECASE)
 _PRES_WORDS = ("presentation", "slide", "deck", "slideshow", "power point",
                "powerpoint", "pptx")
+_SHEET_WORDS = ("spreadsheet", "spread sheet", "excel", "xlsx", "worksheet",
+                "table")
 _TRAILING_FORMAT = re.compile(
     r"\s+(?:as|in|to)\s+(?:an?\s+)?(?:pdf|html|web\s*page|webpage|"
-    r"word(?:\s+doc(?:ument)?)?|power\s*point|powerpoint|pptx|docx|"
-    r"slides?|deck|presentation|document)\s*$", re.IGNORECASE)
+    r"word(?:\s+doc(?:ument)?)?|power\s*point|powerpoint|pptx|docx|xlsx|excel|"
+    r"spread\s*sheet|slides?|deck|presentation|document)\s*$", re.IGNORECASE)
 
 
 def _slug(text: str, limit: int = 48) -> str:
@@ -104,17 +109,22 @@ class MakeDocumentSkill(Skill):
 
         kind_word = str(args.get("kind") or gd.get("kind") or "").lower()
         low = request.text.lower()
-        is_pres = (args.get("kind") == "presentation"
-                   or any(w in kind_word or w in low for w in _PRES_WORDS))
-        fmt = self._choose_format(low, args.get("format"), is_pres)
-        noun = "presentation" if is_pres else "document"
+        if any(w in kind_word or w in low for w in _SHEET_WORDS):
+            kind = "spreadsheet"
+        elif (args.get("kind") == "presentation"
+              or any(w in kind_word or w in low for w in _PRES_WORDS)):
+            kind = "presentation"
+        else:
+            kind = "document"
+        fmt = self._choose_format(low, args.get("format"), kind)
+        noun = kind
 
         if self._compose is None:
             return SkillResult(
                 "I need my language model to write the content, and it's offline "
                 "right now.", success=False)
         try:
-            markdown = await self._compose(self._instruction(topic, is_pres))
+            markdown = await self._compose(self._instruction(topic, kind))
         except Exception:                       # a model failure must not crash the turn
             logger.exception("make_document: compose failed for %r", topic)
             markdown = ""
@@ -138,26 +148,36 @@ class MakeDocumentSkill(Skill):
 
     # -- helpers ------------------------------------------------------------
 
-    def _choose_format(self, text: str, explicit, is_pres: bool) -> str:
+    def _choose_format(self, text: str, explicit, kind: str) -> str:
         usable = documents.available_formats()
+        fallback = {"spreadsheet": "md", "presentation": "slides"}.get(kind, "html")
         if explicit and str(explicit).lower() in documents.ALL_FORMATS:
             fmt = str(explicit).lower()
-            return fmt if fmt in usable else ("slides" if is_pres else "html")
+            return fmt if fmt in usable else fallback
+        if kind == "spreadsheet" or any(
+                w in text for w in ("excel", "xlsx", "spreadsheet")):
+            return "xlsx" if "xlsx" in usable else "md"
         if "pdf" in text:
             # no PDF renderer bundled — a web page the user can print to PDF.
-            return "slides" if is_pres else "html"
+            return "slides" if kind == "presentation" else "html"
         if any(w in text for w in ("powerpoint", "power point", "pptx", "keynote")):
             return "pptx" if "pptx" in usable else "slides"
         if "word" in text or ".docx" in text:
             return "docx" if "docx" in usable else "html"
         if "web page" in text or "webpage" in text or "html" in text:
-            return "slides" if is_pres else "html"
-        if is_pres:
+            return "slides" if kind == "presentation" else "html"
+        if kind == "presentation":
             return "pptx" if "pptx" in usable else "slides"
         return "docx" if "docx" in usable else "html"
 
-    def _instruction(self, topic: str, is_pres: bool) -> str:
-        if is_pres:
+    def _instruction(self, topic: str, kind: str) -> str:
+        if kind == "spreadsheet":
+            return (
+                f"Produce a data table for {topic} as a GitHub-style Markdown "
+                "table: a header row of column names, then one row per item, with "
+                "a |---|---| separator after the header. Keep it concise and "
+                "factual. Output ONLY the table — no prose, no code fences.")
+        if kind == "presentation":
             return (
                 f"Create the content for a slide presentation about {topic}. "
                 "Use '## ' for each slide's title and '- ' bullets for the points "

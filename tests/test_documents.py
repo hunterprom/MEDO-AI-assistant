@@ -15,8 +15,11 @@ from core.documents import (
     DocumentError,
     available_formats,
     parse_markdown,
+    parse_table,
     write,
 )
+
+TABLE = "| Name | Role |\n|---|---|\n| Ada | Engineer |\n| Bob | Designer |\n"
 
 SAMPLE = """\
 ## Introduction
@@ -95,6 +98,23 @@ def test_pptx_has_a_slide_per_heading(tmp_path):
         shape.text_frame.text for s in prs.slides
         for shape in s.shapes if shape.has_text_frame)
     assert "point one" in all_text and "step one" in all_text
+
+
+def test_parse_table_extracts_rows_without_the_separator():
+    rows = parse_table(TABLE)
+    assert rows == [["Name", "Role"], ["Ada", "Engineer"], ["Bob", "Designer"]]
+    assert parse_table("no table here") is None
+
+
+def test_xlsx_is_a_valid_workbook_with_the_table(tmp_path):
+    assert "xlsx" in available_formats()
+    out = write(TABLE, tmp_path / "d.xlsx", "xlsx", title="Roster")
+    assert zipfile.is_zipfile(out)
+    with zipfile.ZipFile(out) as z:
+        names = z.namelist()
+        assert any("worksheets/sheet1.xml" in n for n in names)
+        strings = z.read("xl/sharedStrings.xml").decode("utf-8")
+        assert "Ada" in strings and "Role" in strings
 
 
 def test_unknown_format_is_a_clean_error(tmp_path):

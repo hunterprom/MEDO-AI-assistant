@@ -51,6 +51,16 @@ async def test_document_request_writes_a_docx(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_spreadsheet_request_writes_an_xlsx(tmp_path):
+    async def table_compose(_instruction):
+        return "| Name | Role |\n|---|---|\n| Ada | Engineer |\n"
+    skill = MakeDocumentSkill(table_compose, out_dir=tmp_path)
+    result = await _run(skill, "make a spreadsheet of the team roster")
+    assert result.success and result.data["kind"] == "spreadsheet"
+    assert Path(result.data["path"]).suffix == ".xlsx"
+
+
+@pytest.mark.asyncio
 async def test_format_override_to_html(tmp_path):
     result = await _run(_skill(tmp_path), "write a report about cats as html")
     assert Path(result.data["path"]).suffix == ".html"

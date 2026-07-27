@@ -28,9 +28,9 @@ import re
 from pathlib import Path
 
 #: Every format the renderer knows how to emit.
-ALL_FORMATS = ("docx", "pptx", "html", "slides", "md", "txt")
+ALL_FORMATS = ("docx", "pptx", "xlsx", "html", "slides", "md", "txt")
 #: These need an office library; the rest are stdlib-only.
-_LIB_FORMATS = {"docx": "docx", "pptx": "pptx"}
+_LIB_FORMATS = {"docx": "docx", "pptx": "pptx", "xlsx": "xlsxwriter"}
 
 
 class DocumentError(Exception):
@@ -100,6 +100,25 @@ def _strip_markup(text: str) -> str:
     return _BOLD.sub(r"\1", text)
 
 
+_TABLE_SEP = re.compile(r"^:?-{2,}:?$")
+
+
+def parse_table(md: str) -> list[list[str]] | None:
+    """The first GitHub-style Markdown table as rows of cells, or None."""
+    rows: list[list[str]] = []
+    for raw in md.splitlines():
+        line = raw.strip()
+        if not line.startswith("|"):
+            if rows:
+                break                       # the table ended
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if cells and all(_TABLE_SEP.match(c) for c in cells if c):
+            continue                        # the |---|---| separator row
+        rows.append([_strip_markup(c) for c in cells])
+    return rows or None
+
+
 # --- public entry point ------------------------------------------------------
 
 def available_formats() -> list[str]:
@@ -132,7 +151,7 @@ def write(markdown: str, out_path: str | Path, fmt: str,
     out.parent.mkdir(parents=True, exist_ok=True)
     blocks = parse_markdown(markdown)
     renderer = {
-        "docx": _to_docx, "pptx": _to_pptx, "html": _to_html,
+        "docx": _to_docx, "pptx": _to_pptx, "xlsx": _to_xlsx, "html": _to_html,
         "slides": _to_slides, "md": _to_md, "txt": _to_txt,
     }[fmt]
     renderer(blocks, out, title, markdown)
@@ -301,3 +320,29 @@ def _to_pptx(blocks, out: Path, title, markdown: str) -> None:
                     para.level = 1
                 first = False
     prs.save(str(out))
+
+
+def _to_xlsx(blocks, out: Path, title, markdown: str) -> None:
+    try:
+        import xlsxwriter
+    except ImportError as exc:
+        raise DocumentError("xlsxwriter isn't installed — pip install xlsxwriter") from exc
+    rows = parse_table(markdown)
+    if rows is None:
+        # No table in the content — fall back to one column of the block text, so
+        # a spreadsheet request never produces an empty file.
+        rows = [[_strip_markup(v)] for k, v in blocks
+                if k in ("h1", "h2", "h3", "p")]
+        rows += [[_strip_markup(it)]
+                 for k, v in blocks if k in ("bullets", "numbered") for it in v]
+    wb = xlsxwriter.Workbook(str(out))
+    ws = wb.add_worksheet((title or "Sheet")[:31])
+    header = wb.add_format({"bold": True})
+    widths: dict[int, int] = {}
+    for r, row in enumerate(rows):
+        for c, cell in enumerate(row):
+            ws.write(r, c, cell, header if r == 0 else None)
+            widths[c] = max(widths.get(c, 10), min(len(cell) + 2, 60))
+    for c, w in widths.items():
+        ws.set_column(c, c, w)
+    wb.close()
