@@ -274,8 +274,8 @@ class SystemInfoSkill(Skill):
                    r"charge|status)\b|\bhow\s+much\s+battery\b", re.IGNORECASE),
         re.compile(r"\b(?:cpu|processor)\s*(?:usage|load)?\b", re.IGNORECASE),
         re.compile(r"\bram\b|\bmemory\s+(?:usage|used|free|available|left)\b|"
-                   r"\b(?:system|physical)\s+memory\b|\bhow\s+much\s+memory\b",
-                   re.IGNORECASE),
+                   r"\b(?:system|physical|free|available|used)\s+memory\b|"
+                   r"\bhow\s+much\s+memory\b", re.IGNORECASE),
         re.compile(r"\bsystem\s+(?:status|stats|info)\b", re.IGNORECASE),
         # Disk / storage. Deliberately broad on the words people actually use
         # for it ("how much space do I have", "free space", "storage left").
@@ -420,7 +420,7 @@ class PowerSkill(Skill):
                    re.IGNORECASE),
         # "shut down" is unambiguous enough to keep bare; "shut off" needs the
         # machine named so "shut off the music/lights" doesn't offer a shutdown.
-        re.compile(rf"\bshut\s+down\b|\bshut\s*off\s+(?:the\s+|my\s+)?{_PC}\b",
+        re.compile(rf"\bshut\s*down\b|\bshut\s*off\s+(?:the\s+|my\s+)?{_PC}\b",
                    re.IGNORECASE),
         re.compile(rf"\breboot\b|\brestart\s+(?:the\s+|my\s+)?{_PC}\b", re.IGNORECASE),
     ]

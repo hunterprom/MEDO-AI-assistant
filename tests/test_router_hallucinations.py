@@ -31,7 +31,7 @@ def test_power_ignores_everyday_speech(text):
 
 @pytest.mark.parametrize("text", [
     "put the computer to sleep", "sleep the pc", "restart the computer",
-    "reboot", "shut down", "lock the screen",
+    "reboot", "shut down", "shutdown", "shutdown the pc", "lock the screen",
 ])
 def test_power_still_matches_real_commands(text):
     assert _matches(PowerSkill, text)
@@ -48,6 +48,7 @@ def test_systeminfo_ignores_unrelated(text):
 @pytest.mark.parametrize("text", [
     "how much battery do I have", "what's my battery percentage",
     "how much memory am I using", "what's my cpu usage", "system memory",
+    "free memory", "available memory", "how much free memory do I have",
 ])
 def test_systeminfo_still_matches_real_questions(text):
     assert _matches(SystemInfoSkill, text)
@@ -65,6 +66,8 @@ def test_weather_ignores_non_weather(text):
 
 @pytest.mark.parametrize("text", [
     "what's the temperature", "what's the temperature outside",
+    "what's the temperature tomorrow", "what will the temperature be tomorrow",
+    "what's the temperature for tomorrow",
     "how hot is it", "how cold will it be", "what's the forecast",
     "weather forecast",
 ])

@@ -107,10 +107,14 @@ class WeatherSkill(Skill):
         # temperature to cook chicken", "GPU temperature") with the outdoor temp.
         # Require a weather frame.
         re.compile(r"\bhow\s+(?:hot|cold)\b(?!\s+(?:should|to|do|does|can|would|is\s+the))|"
-                   r"\btemperature\s+(?:outside|out\s+there|today|tonight|right\s+now|"
-                   r"this\s+(?:morning|afternoon|evening)|in|for|at)\b|"
-                   r"\bwhat(?:'?s| is)\s+the\s+temperature\b"
-                   r"(?!\s+(?:to|for|of|inside|when|should|at\s+which))", re.IGNORECASE),
+                   # bare "temperature" is weather UNLESS a hardware/body word is
+                   # named right before it (GPU/body temperature) or it's a
+                   # cooking/instruction frame right after ("temperature to cook",
+                   # "...should be"). Keeps "temperature tomorrow / for tomorrow /
+                   # be tomorrow" as weather.
+                   r"(?<!gpu )(?<!cpu )(?<!body )(?<!oven )(?<!water )(?<!engine )"
+                   r"(?<!cooking )\btemperature\b"
+                   r"(?!\s+(?:to|should|of|inside|when|at\s+which)\b)", re.IGNORECASE),
         # Bare precipitation questions used to fabricate on the LLM path:
         # "will it snow", "is it going to rain", plain "is it raining/snowing".
         re.compile(r"\b(?:will\s+it|is\s+it\s+going\s+to)\s+(?:rain|snow)\b", re.IGNORECASE),
