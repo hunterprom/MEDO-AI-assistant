@@ -215,6 +215,9 @@ class RemoteServer:
         app.router.add_get("/webhooks", self._handle_webhooks_status)
         app.router.add_post("/control/webhook", self._handle_webhook_add)
         app.router.add_post("/control/webhook/remove", self._handle_webhook_remove)
+        app.router.add_get("/selfdev", self._handle_selfdev_status)
+        app.router.add_post("/control/selfdev/apply", self._handle_selfdev_apply)
+        app.router.add_post("/control/selfdev/discard", self._handle_selfdev_discard)
         app.router.add_post("/control/pc", self._handle_pc_control)
         app.router.add_post("/control/semantic", self._handle_semantic)
         app.router.add_post("/control/browser", self._handle_browser)
@@ -642,6 +645,39 @@ class RemoteServer:
         logger.info("webhook %r removed via companion API", name)
         return web.json_response(
             {"ok": True, "name": name, "removed": bool(removed), "restart": True})
+
+    def _self_dev_skill(self):
+        """The self_dev skill if it's registered (self_dev.enabled), else None."""
+        try:
+            return self._router.registry.get("self_dev")
+        except Exception:
+            return None
+
+    async def _handle_selfdev_status(self, request: web.Request) -> web.Response:
+        """The pending self-programming proposal for the HUD panel (diff + gate)."""
+        skill = self._self_dev_skill()
+        if skill is None:
+            return web.json_response({"ok": True, "enabled": False, "proposal": None})
+        return web.json_response({
+            "ok": True, "enabled": True, "busy": skill.is_busy(),
+            "proposal": skill.proposal_status()})
+
+    async def _handle_selfdev_apply(self, request: web.Request) -> web.Response:
+        """Apply the pending proposal — the HUD's APPLY button IS the approval."""
+        skill = self._self_dev_skill()
+        if skill is None:
+            return _error(409, "self-dev is not enabled")
+        res = await skill.apply_pending()
+        return web.json_response({"ok": bool(res.get("ok")),
+                                  "message": res.get("message", "")})
+
+    async def _handle_selfdev_discard(self, request: web.Request) -> web.Response:
+        skill = self._self_dev_skill()
+        if skill is None:
+            return _error(409, "self-dev is not enabled")
+        res = await skill.discard_pending()
+        return web.json_response({"ok": bool(res.get("ok")),
+                                  "message": res.get("message", "")})
 
     async def _handle_models(self, request: web.Request) -> web.Response:
         """Models offered by the active provider (empty list when offline)."""

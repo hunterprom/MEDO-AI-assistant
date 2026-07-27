@@ -389,6 +389,11 @@ class Router:
         return self._llm
 
     @property
+    def registry(self) -> SkillRegistry:
+        """The live skill registry (the companion API reads skills through this)."""
+        return self._registry
+
+    @property
     def awaiting_confirmation(self) -> bool:
         """True when the last reply asked for confirmation (UI should re-listen)."""
         return self._pending is not None

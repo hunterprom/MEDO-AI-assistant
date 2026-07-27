@@ -984,6 +984,13 @@
         <div class="field"><label>AUTH TOKEN — optional bearer, stored locally, never committed</label><input id="webhook-auth" type="password" placeholder="(optional)" autocomplete="off" spellcheck="false" /></div>
         <div class="rowbtns"><button class="btn-sm" id="webhook-add">ADD WEBHOOK</button><span id="webhook-status"></span></div>
       </div>
+      <div class="head" style="margin-top:8px">SELF-DEV · CODE PROPOSALS</div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">MEDO's own code</span><span class="desc" id="selfdev-desc">WHEN MEDO PROPOSES A CHANGE TO ITSELF, REVIEW THE DIFF + TEST GATE HERE · APPLY MERGES IT · OFF UNLESS self_dev.enabled</span></div>
+        <div id="selfdev-summary" class="mono" style="font-size:12px;color:#c9e6ff;margin:4px 0"></div>
+        <pre id="selfdev-diff" style="display:none;max-height:320px;overflow:auto;background:#0a1420;border:1px solid #1e3a54;border-radius:6px;padding:10px;font-family:'Share Tech Mono',monospace;font-size:11px;color:#9fd0ff;white-space:pre"></pre>
+        <div class="rowbtns"><button class="btn-sm" id="selfdev-apply">APPLY</button><button class="btn-sm" id="selfdev-discard">DISCARD</button><button class="btn-sm" id="selfdev-refresh">REFRESH</button><span id="selfdev-status"></span></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1085,7 +1092,7 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'core') scrollChat();    // the chat panel lives here now
-    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadRoutines(); loadWebhooks(); loadLinkDevices(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadRoutines(); loadWebhooks(); loadSelfDev(); loadLinkDevices(); }
     clusterOnShow(screen === 'cluster');   // start/stop the animation loop
   }
   $('tab-core').onclick = () => go('core');
@@ -2160,6 +2167,47 @@
         $('webhook-name').value = ''; $('webhook-url').value = ''; $('webhook-auth').value = '';
         log(`WEBHOOK · ADDED ${name} · RESTART TO APPLY`); loadWebhooks();
       } else st.textContent = r.error || 'failed';
+    } catch { st.textContent = 'API offline'; }
+  };
+
+  /* ---- self-dev proposals ---- */
+  async function loadSelfDev() {
+    const summary = $('selfdev-summary'), diff = $('selfdev-diff');
+    const apply = $('selfdev-apply'), discard = $('selfdev-discard');
+    try {
+      const d = await (await fetch(`${API}/selfdev`)).json();
+      if (!d.enabled) {
+        summary.textContent = 'self-dev is off (set self_dev.enabled in config.yaml)';
+        diff.style.display = 'none'; apply.disabled = discard.disabled = true;
+        return;
+      }
+      const p = d.proposal;
+      if (!p) {
+        summary.textContent = d.busy ? 'working on a change…' : 'no proposal pending';
+        diff.style.display = 'none'; apply.disabled = discard.disabled = true;
+        return;
+      }
+      const gate = p.ok ? '✓ passed tests + lint' : (p.tests_ok ? '✕ lint failed' : '✕ tests failed');
+      summary.innerHTML = `<span style="color:#c9e6ff">“${p.request}”</span> · ${p.files.length} file(s) · <span style="color:${p.ok ? '#6ee7a8' : '#ff7a6b'}">${gate}</span>`;
+      diff.textContent = p.diff || '(no diff)'; diff.style.display = 'block';
+      apply.disabled = !p.ok; discard.disabled = false;
+    } catch { summary.textContent = 'API OFFLINE'; }
+  }
+  $('selfdev-refresh').onclick = loadSelfDev;
+  $('selfdev-apply').onclick = async () => {
+    const st = $('selfdev-status'); st.textContent = 'applying…';
+    try {
+      const r = await (await fetch(`${API}/control/selfdev/apply`, { method: 'POST' })).json();
+      st.textContent = r.message || (r.ok ? 'applied' : 'failed');
+      if (r.ok) log('SELF-DEV · APPLIED · RESTART TO RUN THE NEW CODE');
+      loadSelfDev();
+    } catch { st.textContent = 'API offline'; }
+  };
+  $('selfdev-discard').onclick = async () => {
+    const st = $('selfdev-status'); st.textContent = 'discarding…';
+    try {
+      const r = await (await fetch(`${API}/control/selfdev/discard`, { method: 'POST' })).json();
+      st.textContent = r.message || 'discarded'; log('SELF-DEV · DISCARDED'); loadSelfDev();
     } catch { st.textContent = 'API offline'; }
   };
 

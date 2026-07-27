@@ -150,3 +150,29 @@ class SelfDevSkill(Skill):
         with contextlib.suppress(Exception):
             await self._engine.discard(p)
         return SkillResult("Discarded the proposal.")
+
+    # -- HUD surface (read the pending proposal, apply/discard by button) ----
+
+    def is_busy(self) -> bool:
+        return self._busy
+
+    def proposal_status(self) -> dict | None:
+        """A snapshot of the pending proposal for the HUD, or None."""
+        p = self._pending
+        if p is None:
+            return None
+        return {
+            "request": p.request, "branch": p.branch,
+            "files": list(p.files_changed), "diff": p.diff,
+            "tests_ok": p.tests_ok, "lint_ok": p.lint_ok, "ok": p.ok,
+            "summary": p.summary(),
+        }
+
+    async def apply_pending(self) -> dict:
+        """Apply the pending proposal (the HUD's APPLY button is the approval)."""
+        result = await self._apply_now()
+        return {"ok": result.success, "message": result.speech}
+
+    async def discard_pending(self) -> dict:
+        result = await self._discard()
+        return {"ok": result.success, "message": result.speech}
