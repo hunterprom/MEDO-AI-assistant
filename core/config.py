@@ -928,6 +928,39 @@ class LoggingConfig(BaseModel):
     routing_stats: bool = True
 
 
+class SelfDevConfig(BaseModel):
+    """MEDO changing its OWN code — the self-programming engine (core/self_dev.py).
+
+    OFF by default: this drives a coding agent that edits files. The safety model
+    is 'propose & wait' — every change is made in an ISOLATED git worktree on a
+    branch, gated by the test + lint suite, and NEVER merged into the live branch
+    (nor does MEDO restart itself) until a human approves it. Turning ``enabled``
+    on, or flipping ``auto_apply``, widens what MEDO can do to itself unattended.
+    """
+
+    enabled: bool = False
+    #: Which installed coding agent drives the edits ("claude-code" or "codex").
+    engine: str = "claude-code"
+    #: Proposal branches are named "<prefix>/<slug>-<hash>".
+    branch_prefix: str = "medo/self-dev"
+    #: The gate a proposal must pass, run as ``<python> <args>`` in the worktree.
+    test_cmd: list[str] = Field(default_factory=lambda: ["-m", "pytest", "-q"])
+    lint_cmd: list[str] = Field(
+        default_factory=lambda: ["-m", "ruff", "check", "."])
+    #: Hard bound on the coding agent (it can otherwise run a very long time).
+    agent_timeout_s: float = 900.0
+    #: Hard bound on the test+lint gate.
+    check_timeout_s: float = 600.0
+    #: Claude Code permission mode used INSIDE the worktree. "acceptEdits" lets it
+    #: edit files without prompting; the worktree isolation + human approval before
+    #: any merge is the real safety boundary. The engine runs the tests itself, so
+    #: the agent never needs shell access.
+    permission_mode: str = "acceptEdits"
+    #: propose & wait: proposals are never auto-merged. Only flip this for the
+    #: 'auto-apply on green' autonomy level.
+    auto_apply: bool = False
+
+
 class Settings(BaseSettings):
     """Root settings object — one instance per process."""
 
@@ -965,6 +998,7 @@ class Settings(BaseSettings):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
     routines: list[RoutineItem] = Field(default_factory=list)
     webhooks: list[WebhookConfig] = Field(default_factory=list)
+    self_dev: SelfDevConfig = Field(default_factory=SelfDevConfig)
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
