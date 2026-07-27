@@ -28,9 +28,20 @@ _KINDS = (
     r"web\s*page|html\s+page|doc")
 _MAKE = re.compile(
     r"\b(?:make|create|write|generate|draft|produce|build|prepare)\s+(?:me\s+)?"
-    r"(?:a|an|the)\s+(?P<kind>" + _KINDS + r")\b"
+    r"(?:a|an|the)\s+"
+    r"(?:[\w-]+\s+){0,4}?"                      # optional "five-page", "short", …
+    r"(?P<kind>" + _KINDS + r")\b"
     r"(?:\s+(?:about|on|for|of|titled|called|regarding|covering|listing|showing)"
     r"\s+(?P<topic>.+))?",
+    re.IGNORECASE)
+#: A length hint anywhere in the request, so "five-page" / "detailed" shapes the
+#: content (the renderer doesn't paginate, but the model writes more/less).
+_NUM_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+              "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_PAGES = re.compile(r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)"
+                    r"[-\s]?pages?\b", re.IGNORECASE)
+_LENGTH_WORD = re.compile(
+    r"\b(short|brief|quick|long|detailed|comprehensive|in-depth|thorough)\b",
     re.IGNORECASE)
 _TOPIC_TAIL = re.compile(
     r"\b(?:about|on|for|of|titled|called|regarding|covering|listing|showing)"
@@ -57,6 +68,25 @@ def _title_from(topic: str) -> str:
 
 def _ext(fmt: str) -> str:
     return "html" if fmt == "slides" else fmt
+
+
+def _length_hint(text: str) -> str:
+    """A sentence telling the model how much to write, from "five-page" / "short"."""
+    m = _PAGES.search(text)
+    if m:
+        n = _NUM_WORDS.get(m.group(1).lower())
+        if n is None:
+            with contextlib.suppress(ValueError):
+                n = int(m.group(1))
+        if n:
+            return (f"Aim for roughly {n} page(s) of substance — enough sections "
+                    "and detail to fill it.")
+    w = _LENGTH_WORD.search(text)
+    if w:
+        if w.group(1).lower() in ("short", "brief", "quick"):
+            return "Keep it concise — about a page."
+        return "Make it detailed and thorough — several pages of substance."
+    return ""
 
 
 class MakeDocumentSkill(Skill):
@@ -124,7 +154,8 @@ class MakeDocumentSkill(Skill):
                 "I need my language model to write the content, and it's offline "
                 "right now.", success=False)
         try:
-            markdown = await self._compose(self._instruction(topic, kind))
+            markdown = await self._compose(
+                self._instruction(topic, kind, _length_hint(request.text)))
         except Exception:                       # a model failure must not crash the turn
             logger.exception("make_document: compose failed for %r", topic)
             markdown = ""
@@ -170,7 +201,8 @@ class MakeDocumentSkill(Skill):
             return "pptx" if "pptx" in usable else "slides"
         return "docx" if "docx" in usable else "html"
 
-    def _instruction(self, topic: str, kind: str) -> str:
+    def _instruction(self, topic: str, kind: str, length: str = "") -> str:
+        tail = (" " + length) if length else ""
         if kind == "spreadsheet":
             return (
                 f"Produce a data table for {topic} as a GitHub-style Markdown "
@@ -181,10 +213,10 @@ class MakeDocumentSkill(Skill):
             return (
                 f"Create the content for a slide presentation about {topic}. "
                 "Use '## ' for each slide's title and '- ' bullets for the points "
-                "on that slide. Aim for 6 to 8 slides with short, punchy bullets. "
+                f"on that slide.{tail or ' Aim for 6 to 8 slides with short, punchy bullets.'} "
                 "Output only Markdown — no code fences, no preamble.")
         return (
             f"Write a well-structured document about {topic}. Use '## ' section "
-            "headings, short paragraphs, and '- ' bullet lists where useful. Do "
-            "not include a top-level title line (it's added separately). Output "
-            "only Markdown — no code fences, no preamble.")
+            "headings, short paragraphs, and '- ' bullet lists where useful."
+            f"{tail} Do not include a top-level title line (it's added "
+            "separately). Output only Markdown — no code fences, no preamble.")

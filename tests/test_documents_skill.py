@@ -70,6 +70,28 @@ async def test_format_override_to_html(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_page_count_request_routes_and_shapes_the_instruction(tmp_path):
+    # "five-page document" used to miss the fast path and fall to the LLM (which
+    # then failed to save to the Desktop). It must route here AND ask for length.
+    seen = {}
+
+    async def recording_compose(instruction):
+        seen["instruction"] = instruction
+        return FAKE_MD
+
+    skill = MakeDocumentSkill(recording_compose, out_dir=tmp_path)
+    result = await _run(skill, "make me a five-page document about my robot dog")
+    assert result.success and Path(result.data["path"]).suffix == ".docx"
+    assert "5 page" in seen["instruction"].lower()
+
+
+@pytest.mark.asyncio
+async def test_adjective_before_kind_still_routes(tmp_path):
+    result = await _run(_skill(tmp_path), "write a detailed report about the budget")
+    assert result.success and result.data["kind"] == "document"
+
+
+@pytest.mark.asyncio
 async def test_no_topic_asks_what_about(tmp_path):
     result = await _run(_skill(tmp_path), "make a report")
     assert result.success is False and "about" in result.speech.lower()
