@@ -117,6 +117,19 @@ def test_xlsx_is_a_valid_workbook_with_the_table(tmp_path):
         assert "Ada" in strings and "Role" in strings
 
 
+def test_xlsx_does_not_write_live_formulas(tmp_path):
+    # Cell text is LLM-composed and can be injection-tainted, so a cell starting
+    # with '=' must be a literal string, never a formula that runs on open.
+    tainted = ('| Item | Note |\n|---|---|\n'
+               '| =1+2 | =HYPERLINK("http://evil") |\n')
+    out = write(tainted, tmp_path / "inj.xlsx", "xlsx", title="T")
+    with zipfile.ZipFile(out) as z:
+        sheet = z.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        assert "<f>" not in sheet                     # no formula elements at all
+        strings = z.read("xl/sharedStrings.xml").decode("utf-8")
+        assert "=1+2" in strings                       # the '=' cell is literal text
+
+
 def test_unknown_format_is_a_clean_error(tmp_path):
     with pytest.raises(DocumentError, match="unknown format"):
         write(SAMPLE, tmp_path / "d.xyz", "xyz")

@@ -64,6 +64,33 @@ def _engine(repo: Path, config: SelfDevConfig, agent) -> SelfDevEngine:
     return SelfDevEngine(config, repo, agent=agent, python_exe=sys.executable)
 
 
+# --- gate hardening: run agent code with no secrets and an isolated home -----
+
+@pytest.mark.asyncio
+async def test_proposal_touching_a_pytest_hook_is_refused(repo):
+    # conftest.py runs at pytest collection for ANY test, so an agent must not be
+    # able to smuggle host code in through one — the default denylist blocks it.
+    cfg = _config(denylist=SelfDevConfig().denylist, safelist=["**"])
+    engine = _engine(repo, cfg, _adds_file("conftest.py", "import os\n"))
+    proposal = await engine.propose("add a conftest")
+    assert not proposal.ok
+    assert "denylist" in (proposal.error or "") and "conftest" in (proposal.error or "")
+
+
+def test_gate_env_scrubs_secrets_and_isolates_home(repo, tmp_path, monkeypatch):
+    # The gate runs the agent's code; its env must carry no credentials, and HOME
+    # /TEMP must point at a throwaway so a '~'-relative write can't hit the repo.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    engine = _engine(repo, _config(), _adds_file())
+    home = tmp_path / "gate-home"
+    env = engine._gate_env(home)
+    assert "OPENAI_API_KEY" not in env and "GITHUB_TOKEN" not in env
+    assert env["HOME"] == str(home) and env["TEMP"] == str(home)
+    assert "PATH" in env                      # non-secret vars kept so tools run
+    assert home.is_dir()                       # throwaway home was created
+
+
 # --- propose is isolated and gated -------------------------------------------
 
 @pytest.mark.asyncio

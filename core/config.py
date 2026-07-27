@@ -970,6 +970,14 @@ class SelfDevConfig(BaseModel):
     agent_timeout_s: float = 900.0
     #: Hard bound on the test+lint gate.
     check_timeout_s: float = 600.0
+    #: OPTIONAL real sandbox for the test+lint gate: the gate imports and RUNS the
+    #: agent-authored code (pytest collection executes module-level code), so a
+    #: proposal can run code on this host before any human review. When set, the
+    #: gate command is wrapped with this (e.g. ["firejail","--net=none","--private"]
+    #: or a container run), giving true OS isolation. When empty, the engine still
+    #: runs the gate with a scrubbed, HOME/TEMP-isolated environment — set this for
+    #: full containment.
+    sandbox_cmd: list[str] = Field(default_factory=list)
     #: Claude Code permission mode used INSIDE the worktree. "acceptEdits" lets it
     #: edit files without prompting; the worktree isolation + human approval before
     #: any merge is the real safety boundary. The engine runs the tests itself, so
@@ -993,6 +1001,11 @@ class SelfDevConfig(BaseModel):
         "core/self_dev.py", "core/safety.py", "core/config.py",
         "remote/server.py", "secrets.local.yaml", "secrets.local.yaml.bak",
         "config.yaml", ".github/**", "run.bat", "run.command",
+        # Files that run/configure code at PYTEST COLLECTION or interpreter
+        # startup, i.e. before any test the change is "about" — an agent could
+        # otherwise smuggle host code past the diff review through one of these.
+        "conftest.py", "**/conftest.py", "sitecustomize.py", "usercustomize.py",
+        "pytest.ini", "pyproject.toml", "setup.py", "setup.cfg", "tox.ini",
     ])
 
 
@@ -1145,13 +1158,28 @@ def _read_local(path: Path = SECRETS_PATH) -> dict:
 
 
 def _write_local(data: dict, path: Path = SECRETS_PATH) -> None:
+    import os
+
     import yaml
 
-    path.write_text(
+    content = (
         "# MEDO local overrides — git-ignored, do not commit.\n"
-        + yaml.safe_dump(data, sort_keys=False),
-        encoding="utf-8",
+        + yaml.safe_dump(data, sort_keys=False)
     )
+    # Owner-only (0600): this file holds the online API keys, the LAN companion
+    # bearer token, and MCP credentials. Create it restricted BEFORE writing so a
+    # POSIX default umask can't leave a world-readable window, and re-chmod in
+    # case it already existed with wider permissions. (No-op-ish on Windows,
+    # where the user-profile ACL already limits it — but harmless.)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, content.encode("utf-8"))
+    finally:
+        os.close(fd)
+    try:
+        os.chmod(str(path), 0o600)
+    except OSError:
+        pass
 
 
 def load_llm_secrets(path: Path = SECRETS_PATH) -> dict:

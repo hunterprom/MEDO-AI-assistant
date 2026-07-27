@@ -81,15 +81,20 @@ class HudServer:
 
     async def _index(self, request: web.Request) -> web.Response:
         html = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+        # The HUD server has no auth, so the companion-API bearer token is served
+        # ONLY to a loopback request. Otherwise any device that can GET this page
+        # (when the operator points hud.host at the LAN) would read the token from
+        # the HTML and replay it against the companion API — nullifying the token.
+        # A loopback HUD doesn't actually need the token (loopback + same-site is
+        # already exempt); a remote HUD must reach the API over an authed tunnel.
+        is_local = request.remote in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
         page_config = {
             "name": self._settings.personality.name,
             "visionEnabled": self._settings.vision.enabled,
             "streamPort": self._settings.vision.stream_port,
             "apiPort": self._settings.remote.port,
-            # Companion-API auth token. Needed only when this page is opened
-            # from another device (localhost requests are exempt); the HUD is
-            # already the trust boundary — it serves folder paths and config.
-            "apiToken": self._settings.remote.token,
+            # Companion-API auth token — loopback only (see above).
+            "apiToken": self._settings.remote.token if is_local else "",
             "wakePhrase": _wake_display(self._settings.wakeword.phrase),
             # Interface language default; the picker persists its own choice
             # in localStorage, so this only seeds a browser that has none.

@@ -217,7 +217,21 @@ def _make_video_handler(holder: dict, cfg: VisionRunConfig):
             self.end_headers()
             self.wfile.write(jpeg)
 
+        def _reject_cross_site(self) -> bool:
+            # Block a browser drive-by — a page on another origin loading the
+            # webcam via <img>, or POSTing /pointer to switch on mouse control.
+            # Modern browsers tag such a request Sec-Fetch-Site: cross-site; the
+            # same-origin HUD (same-site) and native local clients (no header)
+            # are allowed, and the loopback bind covers everything else.
+            site = self.headers.get("Sec-Fetch-Site", "")
+            if site in ("cross-site", "cross-origin"):
+                self._send_json(403, {"ok": False, "error": "cross-site refused"})
+                return True
+            return False
+
         def do_GET(self):
+            if self._reject_cross_site():
+                return
             if self.path == "/frame.jpg":
                 jpeg = holder["engine"].latest_jpeg()
                 if not jpeg:
@@ -287,6 +301,8 @@ def _make_video_handler(holder: dict, cfg: VisionRunConfig):
                 return
 
         def do_POST(self):
+            if self._reject_cross_site():
+                return
             if self.path != "/pointer":
                 self.send_error(404)
                 return
@@ -363,7 +379,11 @@ def main() -> None:
     engine.start()
     holder = {"engine": engine}
 
-    server = ThreadingHTTPServer(("0.0.0.0", cfg.stream_port),
+    # Bind loopback, NOT 0.0.0.0: the webcam stream and the /pointer mouse-control
+    # toggle had zero auth, so a 0.0.0.0 bind handed the live camera and input
+    # control to the whole LAN. The HUD reaches it over localhost; a remote HUD
+    # must tunnel. (Browser drive-by is handled by _reject_cross_site.)
+    server = ThreadingHTTPServer(("127.0.0.1", cfg.stream_port),
                                  _make_video_handler(holder, cfg))
     Thread(target=server.serve_forever, daemon=True).start()
     logger.info("pointer-only build | camera stream → http://127.0.0.1:%d/video | "

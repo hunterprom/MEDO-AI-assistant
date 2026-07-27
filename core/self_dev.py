@@ -40,6 +40,12 @@ from core.config import SelfDevConfig
 
 logger = logging.getLogger(__name__)
 
+#: Environment variables scrubbed from the test/lint gate's env — anything that
+#: looks like a credential, so agent code running at collection time can't read
+#: real secrets out of the environment it inherits.
+_SECRET_ENV_RE = re.compile(
+    r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|_API|API_|AUTH|SESSION", re.I)
+
 #: What the coding agent is told. It EDITS only — the engine owns commit + tests,
 #: so the agent never needs git or a shell (smaller blast radius, cleaner diff).
 _AGENT_PROMPT = (
@@ -223,24 +229,51 @@ class SelfDevEngine:
     async def _run_checks(self, worktree: Path,
                           files: list[str]) -> tuple[bool, bool, str]:
         parts: list[str] = []
+        # The gate IMPORTS and runs the agent's code (pytest collection executes
+        # module-level code), so it runs in a scrubbed, HOME/TEMP-isolated
+        # environment — no secrets in the env, and a '~'-relative or temp write
+        # lands in a throwaway home, not the live repo. sandbox_cmd (if set) wraps
+        # it for true OS isolation. Belt-and-braces on top of the denylist, which
+        # can only bound the DIFF, not what the code does when executed.
+        env = self._gate_env(worktree.parent / "gate-home")
+        wrap = list(self._config.sandbox_cmd)
         # Tests run whole: a change must not break anything, anywhere.
         tcode, tout, terr = await self._run(
-            [self._python, *self._config.test_cmd], cwd=worktree,
-            timeout=self._config.check_timeout_s)
+            [*wrap, self._python, *self._config.test_cmd], cwd=worktree,
+            timeout=self._config.check_timeout_s, env=env)
         parts.append("$ tests\n" + _tail(tout + terr))
         # Lint ONLY the files this proposal changed — a good change must not be
         # blocked by pre-existing lint debt elsewhere in the repo.
         py_files = [f for f in files if f.endswith(".py")]
         if py_files:
             lcode, lout, lerr = await self._run(
-                [self._python, *self._config.lint_cmd, *py_files],
-                cwd=worktree, timeout=180.0)
+                [*wrap, self._python, *self._config.lint_cmd, *py_files],
+                cwd=worktree, timeout=180.0, env=env)
             parts.append(f"$ lint {' '.join(py_files)}\n" + _tail(lout + lerr))
             lint_ok = lcode == 0
         else:
             parts.append("$ lint (no python files changed — skipped)")
             lint_ok = True
         return tcode == 0, lint_ok, "\n\n".join(parts)
+
+    def _gate_env(self, sandbox_home: Path) -> dict[str, str]:
+        """Environment for the test/lint gate: real env minus secrets, with HOME
+        and TEMP redirected into a throwaway dir. A payload that runs at
+        collection time then can't read credentials from the environment, can't
+        persist into the user's real home, and a '~'-relative write (the
+        demonstrated self-dev exploit) lands in the throwaway — not the live repo.
+        """
+        import os
+
+        with contextlib.suppress(OSError):
+            sandbox_home.mkdir(parents=True, exist_ok=True)
+        env = {k: v for k, v in os.environ.items() if not _SECRET_ENV_RE.search(k)}
+        hp = str(sandbox_home)
+        env.update({
+            "HOME": hp, "USERPROFILE": hp, "TEMP": hp, "TMP": hp, "TMPDIR": hp,
+            "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
+        })
+        return env
 
     def _scope_violation(self, files: list[str]) -> str:
         """Empty if every changed file is in scope, else why it's refused."""
@@ -300,9 +333,10 @@ class SelfDevEngine:
         return out
 
     async def _run(self, argv: list[str], cwd: Path,
-                   timeout: float = 120.0) -> tuple[int, str, str]:
+                   timeout: float = 120.0,
+                   env: dict[str, str] | None = None) -> tuple[int, str, str]:
         proc = await asyncio.create_subprocess_exec(
-            *argv, cwd=str(cwd),
+            *argv, cwd=str(cwd), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)

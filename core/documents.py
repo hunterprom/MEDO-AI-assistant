@@ -335,13 +335,18 @@ def _to_xlsx(blocks, out: Path, title, markdown: str) -> None:
                 if k in ("h1", "h2", "h3", "p")]
         rows += [[_strip_markup(it)]
                  for k, v in blocks if k in ("bullets", "numbered") for it in v]
-    wb = xlsxwriter.Workbook(str(out))
+    # strings_to_formulas=False: cell text comes from the (LLM-composed, possibly
+    # injection-tainted) content, so a cell like "=cmd|'/c calc'!A1" or
+    # "=HYPERLINK(...)" must be written as a LITERAL string, never interpreted as
+    # a live formula that runs when the file is opened. write_string below is the
+    # belt to this option's braces.
+    wb = xlsxwriter.Workbook(str(out), {"strings_to_formulas": False})
     ws = wb.add_worksheet((title or "Sheet")[:31])
     header = wb.add_format({"bold": True})
     widths: dict[int, int] = {}
     for r, row in enumerate(rows):
         for c, cell in enumerate(row):
-            ws.write(r, c, cell, header if r == 0 else None)
+            ws.write_string(r, c, cell, header if r == 0 else None)
             widths[c] = max(widths.get(c, 10), min(len(cell) + 2, 60))
     for c, w in widths.items():
         ws.set_column(c, c, w)
