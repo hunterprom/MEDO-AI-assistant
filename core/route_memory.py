@@ -129,11 +129,18 @@ class RouteMemory:
                     (count,) = conn.execute(
                         "SELECT COUNT(*) FROM route_memory").fetchone()
                     if count > max_rows:
+                        # Exclude the row we just wrote from eviction: it always
+                        # enters with hits=1 (the minimum), so in a store full of
+                        # reinforced (hits>=2) rows it would otherwise be the very
+                        # row deleted — the learn silently a no-op, and the store
+                        # frozen against every new phrasing. A fresh exemplar must
+                        # be able to displace an older/less-used one, not itself.
                         conn.execute(
                             "DELETE FROM route_memory WHERE norm_text IN ("
                             "  SELECT norm_text FROM route_memory "
+                            "  WHERE norm_text != ? "
                             "  ORDER BY hits ASC, last_used ASC LIMIT ?)",
-                            (count - max_rows,))
+                            (norm_text, count - max_rows))
         except Exception:
             logger.debug("route memory write failed", exc_info=True)
             return

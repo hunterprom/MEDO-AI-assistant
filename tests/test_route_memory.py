@@ -86,6 +86,25 @@ def test_row_cap_evicts_least_used(tmp_path):
     assert _row(tmp_path, "b") is None                         # evicted
 
 
+def test_new_exemplar_displaces_an_old_row_not_itself(tmp_path):
+    # Regression: a fresh exemplar enters with hits=1; in a store already full of
+    # reinforced (hits>=2) rows the same-transaction eviction used to select and
+    # delete the just-inserted row (it's the strict minimum on hits), freezing the
+    # store against every new phrasing. A new row must displace an OLDER one.
+    m = _mem(tmp_path)
+    m.remember("a", "weather", _v(1, 0, 0), now=1.0)
+    m.remember("a", "weather", _v(1, 0, 0), now=1.1)          # hits 2
+    m.remember("b", "news", _v(0, 1, 0), now=2.0)
+    m.remember("b", "news", _v(0, 1, 0), now=2.1)             # hits 2
+    # Store is full (cap 2) and every existing row has hits>=2. A brand-new
+    # phrasing must still be retained, not dropped on arrival.
+    m.remember("c", "datetime", _v(0, 0, 1), now=3.0, max_rows=2)
+    assert len(m) == 2
+    assert _row(tmp_path, "c") is not None                    # the new row SURVIVED
+    assert _row(tmp_path, "a") is None                        # oldest reinforced row went
+    assert m.match(_v(0, 0, 0.99), 0.82)[0] == "datetime"
+
+
 def test_prune_drops_dead_skills(tmp_path):
     m = _mem(tmp_path)
     m.remember("w", "weather", _v(1, 0, 0), now=1.0)

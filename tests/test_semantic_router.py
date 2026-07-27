@@ -161,6 +161,30 @@ async def test_semantic_declines_and_falls_to_llm(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cold_embedder_does_not_permanently_disable_the_tier(tmp_path):
+    # A transient empty build (embed model cold on the first miss) must NOT latch
+    # the index off for the whole session — the next miss, model now warm,
+    # rebuilds and routes by meaning.
+    calls = {"n": 0}
+
+    def flaky(texts):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None                      # cold on the first build -> empty index
+        return _fake_embedder(texts)         # warm afterwards
+
+    router = _router(tmp_path, shadow=False)
+    router._embedder = flaky
+    router._route_index = None
+    r1 = await router.route("is it warm right now")
+    assert r1.path is RoutePath.LLM          # tier declined (empty build), fell through
+    assert router._route_index is None       # NOT latched to the permanent-off sentinel
+    router._route_index_retry_at = None      # simulate the retry cooldown elapsing
+    r2 = await router.route("is it warm right now")
+    assert r2.path is RoutePath.SEMANTIC and r2.skill_name == "weather"
+
+
+@pytest.mark.asyncio
 async def test_semantic_never_dispatches_an_unsafe_skill(tmp_path):
     # The safety invariant, tested at the dispatch decision: even if a stale
     # cached vector for a PC-controlling skill were somehow present in the index

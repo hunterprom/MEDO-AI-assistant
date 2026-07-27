@@ -108,7 +108,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "entanglement, decoherence, qubits and quantum algorithms honestly — "
         "including where popular accounts are wrong. You never dress "
         "classical randomness up as quantum weirdness.",
-        ("quantum", "qubit", "entangle", "superposition", "decoherence",
+        ("quantum", "qubit", "entangle*", "superposition", "decoherence",
          "quantum computing", "квантн"),
         aliases=("квантен физичар", "квантниот физичар", "quantum"),
     ),
@@ -147,8 +147,8 @@ COUNCIL: tuple[Specialist, ...] = (
         "You are a financial analyst. You reason about cash flow, unit "
         "economics, risk and time value of money. You show the arithmetic. "
         "You note that this is analysis, not investment advice.",
-        ("invest", "cash flow", "profit", "margin", "loan", "interest rate",
-         "valuation", "budget", "финанс", "камата", "буџет"),
+        ("investment", "investing", "cash flow", "profit", "margin", "loan",
+         "interest rate", "valuation", "budget", "финанс", "камата", "буџет"),
         aliases=("финансиски аналитичар", "финансиер", "financial adviser",
                  "financial advisor", "analyst"),
     ),
@@ -173,7 +173,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "makes someone care. You are concrete: you name the segment, the hook and "
         "the metric, and you call out hype that will not convert.",
         ("marketing", "brand", "branding", "positioning", "campaign", "audience",
-         "customer", "go to market", "advertis", "headline", "seo", "funnel",
+         "customer", "go to market", "advertis*", "headline", "seo", "funnel",
          "conversion", "landing page", "маркетинг", "бренд", "реклам"),
         aliases=("marketer", "the marketer", "growth strategist", "brand strategist",
                  "маркетер", "маркетинг"),
@@ -195,7 +195,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "datasets, features, model choice, training dynamics, overfitting, metrics "
         "and reinforcement learning. You are honest about what the data can and "
         "cannot support, and you give the number with its uncertainty.",
-        ("machine learning", "neural network", "neural net", "dataset", "overfit",
+        ("machine learning", "neural network", "neural net", "dataset", "overfit*",
          "hyperparameter", "gradient", "classifier", "regression", "reinforcement "
          "learning", "pytorch", "tensor", "embedding", "inference"),
         aliases=("data scientist", "ml engineer", "machine learning engineer",
@@ -208,7 +208,7 @@ COUNCIL: tuple[Specialist, ...] = (
         "attack surface, authentication, injection, least privilege and blast "
         "radius. You name the concrete exploit and the concrete mitigation, and "
         "you never trade real security for the appearance of it.",
-        ("vulnerab", "exploit", "authentication", "encryption", "injection",
+        ("vulnerab*", "exploit*", "authentication", "encryption", "injection",
          "malware", "phishing", "firewall", "threat model", "penetration test",
          "безбедност", "ранлив"),
         aliases=("security engineer", "the security engineer", "pentester",
@@ -313,15 +313,45 @@ def find_specialist(spoken: str,
             alias = alias.lower()
             if want == alias or bare == alias:
                 return member
-    # "ask the electrical guy" / "прашај го електроинженерот" — containment,
-    # so a title with an extra word or an article still lands.
+    # "ask the electrical guy" / "прашај го електроинженерот" — a looser match so
+    # a title with an extra word or an article still lands.
     for member in council:
         title = member.title.lower().removeprefix("the ")
-        if want in title or title in want:
+        # `want in title` ONLY as a whole word and only for a real fragment: a
+        # bare "a"/"the" must never substring-match into "electricAl engineer"
+        # and hijack the turn — that stole "have a look at my screen" from the
+        # vision skill (who-capture yielded "a", and "a" is inside "electricAl").
+        # `title in want` stays: a full multi-word title in the phrase is specific.
+        if title in want or (len(want) >= 4
+                             and re.search(rf"\b{re.escape(want)}\b", title)):
             return member
         if any(a.lower() in want for a in member.aliases if len(a) >= 5):
             return member
     return None
+
+
+#: Trigger matching for :func:`rank_specialists`. A discipline's triggers are
+#: subject words; how they match decides who a "convene" pulls in.
+_CYRILLIC = re.compile(r"[Ѐ-ӿ]")
+
+
+def _trigger_hit(trigger: str, text: str) -> bool:
+    """Does ``trigger`` fire on ``text``?
+
+    * A **Cyrillic** trigger prefix-matches — Macedonian glues suffixes onto the
+      stem ("мотор" must catch "моторот"), so a trailing boundary can't be used.
+    * A trailing ``*`` marks an explicit Latin **stem** ("advertis*" catches
+      advertise / advertising / advertisement).
+    * Every other Latin trigger matches as a **whole word**, tolerating only a
+      plural ``s``/``es``. This is what stops the reported over-matches: "market"
+      no longer fires on "marketing", "current" on "currently", "invest" on
+      "investigate", "law" on "lawn", "force" on "forced".
+    """
+    if _CYRILLIC.search(trigger):
+        return re.search(rf"\b{re.escape(trigger)}", text) is not None
+    if trigger.endswith("*"):
+        return re.search(rf"\b{re.escape(trigger[:-1])}", text) is not None
+    return re.search(rf"\b{re.escape(trigger)}(?:e?s)?\b", text) is not None
 
 
 def rank_specialists(question: str, council: tuple[Specialist, ...] = COUNCIL,
@@ -335,13 +365,11 @@ def rank_specialists(question: str, council: tuple[Specialist, ...] = COUNCIL,
     text = question.lower()
     scored: list[tuple[int, int, Specialist]] = []
     for index, member in enumerate(council):
-        # Leading word boundary, not bare containment: "amp" was matching inside
-        # "example", "led" inside "pulled", "law" inside "flawless", pulling the
-        # wrong specialist into a convene. \b is Unicode-aware, so the Cyrillic
-        # STEM triggers ("инфлациј", "економ") still prefix-match their inflected
-        # forms, and multi-word triggers ("power supply") are unaffected.
-        hits = sum(1 for trigger in member.triggers
-                   if re.search(rf"\b{re.escape(trigger)}", text))
+        # Whole-word (plural-tolerant) for Latin triggers, prefix for Cyrillic
+        # stems and explicit "trigger*" stems — see _trigger_hit. Leading-only
+        # \b used to match "current" inside "currently" and "market" inside
+        # "marketing", pulling the wrong specialist into a convene.
+        hits = sum(1 for trigger in member.triggers if _trigger_hit(trigger, text))
         if hits:
             scored.append((-hits, index, member))
     scored.sort()

@@ -69,6 +69,9 @@ MAX_TOOL_ROUNDS = 4
 #: Re-check a DOWN council tool-brain no more than once per this many seconds,
 #: so a parallel convene never fires the blocking ~2s probe per specialist.
 _COUNCIL_PROBE_TTL = 30.0
+#: Retry a failed/empty semantic-index build at most this often, so a cold embed
+#: model recovers (the build isn't latched off) without every miss re-attempting.
+_ROUTE_INDEX_RETRY_TTL = 20.0
 #: Tools whose output is raw and needs the model to synthesize a spoken reply.
 #: Everything else returns a ready-to-speak sentence, so we skip the second LLM
 #: hop — faster, and it can't be undone by a small model second-guessing itself.
@@ -202,6 +205,10 @@ class Router:
         #: None = not built yet; False = permanently unavailable (no embedder).
         self._embedder = embedder
         self._route_index: Any = None
+        #: Monotonic time of the last route-index build attempt, so an empty
+        #: build (cold embedder) is retried on a later miss instead of latching
+        #: the tier off — but not re-attempted on every single miss.
+        self._route_index_retry_at: float | None = None
         #: Adaptive route memory (M2.5e): learned exemplars consulted alongside
         #: the curated index. Same None/False sentinels. `_last_query_vec` caches
         #: the utterance embedding computed in _semantic_route so a learn on the
@@ -210,16 +217,32 @@ class Router:
         self._last_query_vec: Any = None
 
     async def _ensure_route_index(self):
-        """Build the semantic route index once; None when it can't be built."""
+        """Build the semantic route index once; None when it can't be built.
+
+        An empty build is treated as TRANSIENT when an embedder is configured —
+        the embed model was cold or briefly unreachable for that one call — so
+        the sentinel is left None and the next miss retries (bounded by a
+        cooldown), rather than latched False for the whole session. Only a
+        genuinely absent embedder, or a roster with nothing to route on, latches
+        False permanently.
+        """
         if self._route_index is not None:
             # Explicit sentinel test (not truthiness): a SkillRouteIndex also
             # defines __len__, so `or None` would misfire if a stored index were
-            # ever empty. It isn't today (the len==0 guard below stores False),
-            # but keep this robust and consistent with _ensure_route_memory.
+            # ever empty. It isn't today, but keep this robust and consistent
+            # with _ensure_route_memory.
             return self._route_index if self._route_index is not False else None
         if self._embedder is None:
-            self._route_index = False
+            self._route_index = False        # no embedder ever: genuinely inert
             return None
+        # Bound retries so a persistently-unreachable embedder can't make every
+        # miss re-attempt a build; a cold model recovers on the next miss past
+        # the cooldown (mirrors the council tool-brain probe TTL in this file).
+        now = time.monotonic()
+        if (self._route_index_retry_at is not None
+                and now - self._route_index_retry_at < _ROUTE_INDEX_RETRY_TTL):
+            return None
+        self._route_index_retry_at = now
         from core.route_index import SkillRouteIndex
 
         idx = SkillRouteIndex(self._settings.memory.db_path, self._embedder,
@@ -230,14 +253,22 @@ class Router:
         sources = [s for s in self._registry.all()
                    if getattr(s, "routing_phrases", None)
                    and self._semantic_safe(s)]
+        if not sources:
+            self._route_index = False        # nothing opts in: nothing to route to
+            return None
         try:
             await asyncio.to_thread(idx.build, sources)
         except Exception:
-            logger.exception("semantic route index build failed — tier disabled")
-            self._route_index = False
+            # A crash mid-build is transient too (a locked DB, a flaky embed
+            # call) — leave the sentinel None so a later miss can rebuild.
+            logger.exception("semantic route index build failed — will retry")
             return None
         if len(idx) == 0:
-            self._route_index = False
+            # Every source was skipped: the embed model was down/cold for this
+            # one call. Do NOT latch False — that killed the tier for the whole
+            # session on a single cold-start miss. Retry on the next miss.
+            logger.info("semantic route index empty (embed model cold/down?) "
+                        "— will retry")
             return None
         self._route_index = idx
         logger.info("semantic route index ready: %d skill(s)", len(idx))

@@ -132,6 +132,41 @@ def test_new_specialists_are_routed_by_subject(question, key):
     assert key in [s.key for s in rank_specialists(question)]
 
 
+def test_find_specialist_ignores_tiny_fragments():
+    # "have a look at my screen" -> the who-capture yields the bare article "a",
+    # which must NOT substring-match into "electricAl engineer" and hijack the
+    # turn from the vision skill. A fragment under 4 chars resolves to nobody.
+    assert find_specialist("a") is None
+    assert find_specialist("the") is None
+    skill = AskSpecialistSkill(load_settings())
+    assert skill.match("have a look at my screen") is None
+    assert skill.match("have a look at this") is None
+
+
+def test_rank_specialists_no_longer_prefix_matches_unrelated_words():
+    # Latin triggers are whole-word (plural-tolerant), so these common words in
+    # unrelated questions no longer drag in the wrong specialist.
+    assert rank_specialists("what is the team currently working on") == []   # not electrical
+    assert rank_specialists("should we investigate the lawn drainage") == []  # not finance/law
+    assert "physics" not in [s.key for s in
+                             rank_specialists("the part was forced into place")]
+    # ...and the economics 'market' trigger no longer fires on 'marketing'.
+    assert "economics" not in [s.key for s in
+                               rank_specialists("help with the marketing funnel")]
+
+
+def test_rank_specialists_stem_triggers_still_inflect():
+    for q, key in [("improve our advertising campaign", "marketing"),
+                   ("any injection vulnerability or exploitation", "cybersecurity"),
+                   ("explain quantum entanglement", "quantum"),
+                   ("my model keeps overfitting", "data"),
+                   ("the return on this investment", "finance")]:
+        assert key in [s.key for s in rank_specialists(q)], q
+    # a plain plural still matches its whole-word trigger
+    assert "electrical" in [s.key for s in rank_specialists("what resistors do I need")]
+    assert "medicine" in [s.key for s in rank_specialists("what are the symptoms")]
+
+
 def test_broadened_bench_keeps_the_roster_deterministic():
     # New majors must not perturb the two rank invariants the router relies on.
     assert rank_specialists("what is the weather in Skopje") == []
