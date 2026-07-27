@@ -14,9 +14,11 @@ from core.config import WebFetchConfig, load_settings
 from main import Announcer, build_registry
 from skills.base import SkillRequest
 from skills.webfetch import (
+    FetchError,
     WebFetchSkill,
     extract_text,
     extract_title,
+    fetch_page,
     normalize_url,
     url_is_trusted,
 )
@@ -227,6 +229,45 @@ async def test_size_cap_aborts_mid_stream(monkeypatch):
     # The whole body was NEVER pulled: we stopped on the chunk that crossed it.
     assert len(body.read) == 3
     assert len(body.read) < 10
+
+
+async def test_extreme_oversize_stays_bounded_and_names_the_numbers(monkeypatch):
+    """The engineer's case: a source ~1000x the cap. It must cost ~one chunk over
+    the limit in memory (not 1000x), and the error must say what it read vs the
+    cap so the failure is debuggable from the log alone."""
+    cap = 1000
+    body = _FakeResponse([b"x" * cap] * 1000)          # 1,000,000 B available = 1000x
+    _patch_httpx(monkeypatch, body)
+    with pytest.raises(FetchError) as excinfo:
+        await fetch_page("https://example.com/huge", WebFetchConfig(max_bytes=cap))
+    assert excinfo.value.reason == "too_big"
+    # "read 2,000 B, over the 1,000 B cap" — the expected limit AND the actual.
+    assert "cap" in excinfo.value.detail
+    assert f"{cap:,}" in excinfo.value.detail
+    # Only the chunks up to the one that crossed the cap were ever read.
+    assert len(body.read) == 2 and len(body.read) < 1000
+
+
+async def test_unexpected_error_is_handled_and_logged_with_a_traceback(
+        monkeypatch, caplog):
+    """An error fetch_page didn't anticipate must not crash the turn or leak a
+    stack trace to the user — but the traceback (with the failing line) MUST land
+    in the log so we can see exactly what happened and where."""
+    async def boom(url, config):
+        raise ValueError("a bug we didn't foresee")
+
+    monkeypatch.setattr("skills.webfetch.fetch_page", boom)
+    skill = WebFetchSkill(WebFetchConfig(), _echo_summarize)
+    text = "read https://example.com"
+    with caplog.at_level("ERROR"):
+        result = await skill.execute(SkillRequest(text=text, match=skill.match(text)))
+
+    assert result.success is False
+    assert result.data["error"] == "unexpected"
+    assert "Traceback" not in result.speech            # the user never sees the stack
+    rec = next((r for r in caplog.records
+                if "unexpected error reading" in r.getMessage()), None)
+    assert rec is not None and rec.exc_info is not None  # traceback captured for us
 
 
 async def test_timeout_is_a_clean_spoken_failure(monkeypatch):

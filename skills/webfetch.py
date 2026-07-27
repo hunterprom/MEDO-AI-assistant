@@ -273,9 +273,19 @@ async def fetch_page(url: str, config: WebFetchConfig) -> tuple[str, str]:
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
                     if size > config.max_bytes:
-                        raise FetchError("too_big", str(size))
+                        # Name the numbers, not just "too big": the log should
+                        # say WHAT was read vs the limit it blew (e.g. a page
+                        # 1000x the cap stops here, having pulled ~one chunk over).
+                        logger.info(
+                            "web_fetch: %s over the byte cap — read %d B, cap %d B; "
+                            "aborting the stream", url, size, config.max_bytes)
+                        raise FetchError(
+                            "too_big",
+                            f"read {size:,} B, over the {config.max_bytes:,} B cap")
                     if time.monotonic() > deadline:
-                        raise FetchError("timeout", "body")
+                        raise FetchError(
+                            "timeout",
+                            f"body stalled after {size:,} B / {config.timeout_s:.0f}s")
                     chunks.append(chunk)
                 encoding = getattr(response, "charset_encoding", None) or "utf-8"
                 body = b"".join(chunks)
@@ -438,11 +448,23 @@ class WebFetchSkill(Skill):
         try:
             html, _content_type = await fetch_page(url, self._config)
         except FetchError as exc:
+            # Expected, classified failures: the reason + its specifics (sizes,
+            # status) go to the log; the user hears one clean sentence.
             logger.info("web_fetch: %s failed (%s)", host, exc)
             english, macedonian = _FAILURES[exc.reason]
             return SkillResult(
                 (macedonian if speak_mk else english).format(host=host),
                 success=False, data={"url": url, "error": exc.reason})
+        except Exception:
+            # Anything fetch_page did NOT anticipate. Log with the traceback so
+            # the exact failing line is captured for debugging, and still answer
+            # gracefully instead of crashing the turn / leaking a stack trace.
+            logger.exception("web_fetch: unexpected error reading %s", url)
+            return SkillResult(
+                "Не успеав да ја прочитам таа страница."
+                if speak_mk else
+                f"Something unexpected went wrong reading {host}.",
+                success=False, data={"url": url, "error": "unexpected"})
 
         text = extract_text(html)
         if not text:
