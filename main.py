@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import re
 import sys
 import threading
 
@@ -199,6 +200,7 @@ def build_registry(
     expert=None,
     synthesize_council=None,
     compose=None,
+    plan=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -304,7 +306,7 @@ def build_registry(
     from core.projects import ProjectStore
     from skills.projects_skill import ProjectsSkill
 
-    registry.register(ProjectsSkill(ProjectStore(settings.memory.db_path)))
+    registry.register(ProjectsSkill(ProjectStore(settings.memory.db_path), plan))
     # Long-term facts. Recall/forget register before remember so "what do you
     # remember" is answered, never stored.
     registry.register(RecallFactsSkill(facts, settings.memory.max_facts))
@@ -679,6 +681,26 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return ""
         return (message.get("content") or "").strip()
 
+    async def plan(goal: str) -> list[str]:
+        """Break a goal into concrete tasks (for ProjectsSkill). [] with no model."""
+        if not router.model:
+            return []
+        prompt = [
+            {"role": "system", "content": (
+                "Break the user's goal into 5 to 10 concrete, ordered, actionable "
+                "tasks. Reply with ONLY the tasks, one per line, no numbering, no "
+                "headings, no preamble.")},
+            {"role": "user", "content": goal},
+        ]
+        try:
+            message = await llm.chat(router.model, prompt)
+        except LLMUnavailableError:
+            return []
+        lines = (message.get("content") or "").splitlines()
+        tasks = [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", ln).strip()
+                 for ln in lines]
+        return [t for t in tasks if t][:12]
+
     async def expert(system: str, user: str) -> str:
         """One specialist round-trip: a role prompt plus the question.
 
@@ -786,7 +808,8 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     registry = build_registry(settings, announcer, summarize, reminders, doc_index,
                               briefing_rewrite=briefing_rewrite, modes=modes,
                               browser_think=browser_think, expert=expert,
-                              synthesize_council=synthesize_council, compose=compose)
+                              synthesize_council=synthesize_council, compose=compose,
+                              plan=plan)
 
     # MCP: connect configured servers and register their tools as skills, so
     # any application that speaks the Model Context Protocol becomes callable

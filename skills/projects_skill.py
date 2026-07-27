@@ -11,10 +11,13 @@ left" without naming one fall back to it — the way people actually talk.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 
 from core.projects import ProjectStore
 from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
 
 _CREATE = re.compile(
     r"\b(?:start|create|begin|open|set\s+up)\s+(?:a\s+)?(?:new\s+)?project\s+"
@@ -49,6 +52,10 @@ _STATUS_HOW = re.compile(
     r"\bhow(?:'s| is)\s+(?:the\s+)?(?P<proj>.+?)\s+project\b(?:\s+(?:going|doing|coming))?"
     r"|\bhow(?:'s| is)\s+project\s+(?P<proj2>.+?)(?:\s+(?:going|doing|coming))?\s*[?.!]*$",
     re.IGNORECASE)
+_PLAN = re.compile(
+    r"\b(?:plan\s+out|make\s+(?:me\s+)?a\s+plan\s+for|draft\s+a\s+plan\s+for|"
+    r"break\s+down|plan)\s+(?:a\s+|my\s+|the\s+|an\s+)?(?:project\s+)?"
+    r"(?:to\s+|for\s+|called\s+|named\s+)?(?P<goal>.+)", re.IGNORECASE)
 
 
 def _clean(text: str) -> str:
@@ -58,14 +65,15 @@ def _clean(text: str) -> str:
 class ProjectsSkill(Skill):
     name = "projects"
     description = (
-        "Organize work into projects and tasks — create a project, add tasks, "
-        "list what's left, and mark tasks done.")
-    patterns = [_CREATE, _LIST, _ADD, _ADD_HERE, _FOR, _COMPLETE, _COMPLETE2,
-                _STATUS, _STATUS_HOW]
+        "Organize work into projects and tasks — plan a goal into tasks, create "
+        "a project, add tasks, list what's left, and mark tasks done.")
+    patterns = [_PLAN, _CREATE, _LIST, _ADD, _ADD_HERE, _FOR, _COMPLETE,
+                _COMPLETE2, _STATUS, _STATUS_HOW]
 
-    def __init__(self, store: ProjectStore) -> None:
+    def __init__(self, store: ProjectStore, plan=None) -> None:
         self._store = store
-        self._last: str | None = None          # most recently touched project
+        self._plan_fn = plan                    # async (goal) -> list[str] tasks
+        self._last: str | None = None           # most recently touched project
 
     def tool_schema(self) -> dict:
         return {
@@ -77,10 +85,12 @@ class ProjectsSkill(Skill):
                     "type": "object",
                     "properties": {
                         "action": {"type": "string",
-                                   "enum": ["create_project", "add_task",
+                                   "enum": ["plan", "create_project", "add_task",
                                             "list_projects", "list_tasks",
                                             "complete_task"]},
                         "project": {"type": "string", "description": "the project name"},
+                        "goal": {"type": "string",
+                                 "description": "a goal to break into tasks (plan)"},
                         "task": {"type": "string",
                                  "description": "task text (add) or a phrase to match (complete)"},
                     },
@@ -94,7 +104,9 @@ class ProjectsSkill(Skill):
         if args.get("action"):
             return await self._dispatch_tool(args)
         text = request.text
-        # Order matters: add/complete before the broad status/create.
+        # Order matters: plan/add/complete before the broad status/create.
+        if (m := _PLAN.search(text)):
+            return await self._plan(m.group("goal"))
         if (m := _ADD.search(text)):
             return await self._add(m.group("proj"), m.group("task"))
         if (m := _FOR.search(text)):
@@ -118,6 +130,33 @@ class ProjectsSkill(Skill):
                            success=False)
 
     # -- actions ------------------------------------------------------------
+
+    async def _plan(self, goal: str) -> SkillResult:
+        goal = _clean(goal)
+        if not goal:
+            return SkillResult("What should I plan?", success=False)
+        if self._plan_fn is None:
+            return SkillResult(
+                "I need my language model to plan that, and it's offline right now.",
+                success=False)
+        try:
+            tasks = await self._plan_fn(goal)
+        except Exception:                       # a model failure must not crash the turn
+            logger.exception("projects: planning failed for %r", goal)
+            tasks = []
+        tasks = [t for t in (tasks or []) if t and t.strip()]
+        if not tasks:
+            return SkillResult(f"I couldn't put a plan together for {goal}.",
+                               success=False)
+        name = goal[:60]
+        await asyncio.to_thread(self._store.create_project, name)
+        for task in tasks:
+            await asyncio.to_thread(self._store.add_task, name, task)
+        self._last = name
+        preview = "; ".join(tasks[:3])
+        return SkillResult(
+            f"I've planned '{name}' with {len(tasks)} tasks — starting with: "
+            f"{preview}.", data={"project": name, "tasks": tasks})
 
     async def _create(self, name: str) -> SkillResult:
         name = _clean(name)
@@ -188,6 +227,8 @@ class ProjectsSkill(Skill):
         action = str(args.get("action") or "")
         project = str(args.get("project") or "")
         task = str(args.get("task") or "")
+        if action == "plan":
+            return await self._plan(str(args.get("goal") or project))
         if action == "create_project":
             return await self._create(project)
         if action == "add_task":

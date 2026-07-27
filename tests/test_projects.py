@@ -119,6 +119,26 @@ def test_status_how_needs_a_project_marker(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_skill_plans_a_goal_into_tasks(tmp_path):
+    async def fake_plan(goal):
+        return ["Pick a topic", "Buy a microphone", "Record episode one"]
+
+    skill = ProjectsSkill(ProjectStore(tmp_path / "medo.sqlite"), plan=fake_plan)
+    r = await _run(skill, "plan a project to launch a podcast")
+    assert r.success and r.data["tasks"][0] == "Pick a topic"
+    # the tasks landed in a project and are queryable
+    r2 = await _run(skill, "what's left on launch a podcast")
+    assert r2.data["open"] == 3
+
+
+@pytest.mark.asyncio
+async def test_plan_declines_without_a_model(tmp_path):
+    skill = ProjectsSkill(ProjectStore(tmp_path / "medo.sqlite"), plan=None)
+    r = await _run(skill, "plan a trip to Japan")
+    assert r.success is False and "offline" in r.speech.lower()
+
+
+@pytest.mark.asyncio
 async def test_skill_tool_path(tmp_path):
     skill = _skill(tmp_path)
     r = await skill.execute(SkillRequest(
