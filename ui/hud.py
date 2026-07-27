@@ -55,6 +55,13 @@ class HudServer:
         # Live capability map for the orb (M21). Same origin as the HUD page,
         # so no CORS/token dance; the registry is already in hand.
         app.router.add_get("/capabilities", self._capabilities)
+        # PWA: makes the HUD installable (home-screen icon, standalone launch,
+        # offline shell). Static, same-origin; the sw.js only caches this shell,
+        # never the cross-origin API/MJPEG or the SSE feed. See ui/web/sw.js.
+        app.router.add_get("/manifest.json", self._manifest)
+        app.router.add_get("/sw.js", self._service_worker)
+        if (_WEB_DIR / "icons").is_dir():
+            app.router.add_static("/icons", _WEB_DIR / "icons")
         return app
 
     async def start(self) -> None:
@@ -117,6 +124,28 @@ class HudServer:
         }
         html = html.replace("__MEDO_CONFIG__", json.dumps(page_config))
         return web.Response(text=html, content_type="text/html")
+
+    async def _manifest(self, request: web.Request) -> web.Response:
+        """The PWA manifest. Static file, but the app name tracks the configured
+        personality so an installed icon reads e.g. 'JARVIS' if renamed."""
+        try:
+            data = json.loads((_WEB_DIR / "manifest.json").read_text(encoding="utf-8"))
+        except Exception:                       # never let a bad manifest 500 the HUD
+            return web.json_response({}, status=404)
+        name = self._settings.personality.name or "MEDO"
+        data["name"] = name
+        data["short_name"] = name
+        return web.json_response(data, content_type="application/manifest+json")
+
+    async def _service_worker(self, request: web.Request) -> web.Response:
+        """Serve sw.js at the site root so its scope can cover the whole HUD."""
+        try:
+            js = (_WEB_DIR / "sw.js").read_text(encoding="utf-8")
+        except OSError:
+            return web.Response(status=404)
+        return web.Response(text=js, content_type="text/javascript",
+                            headers={"Service-Worker-Allowed": "/",
+                                     "Cache-Control": "no-cache"})
 
     async def _capabilities(self, request: web.Request) -> web.Response:
         """GET /capabilities — the live capability map (agents + skills) the orb

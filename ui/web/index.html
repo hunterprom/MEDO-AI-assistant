@@ -2,11 +2,31 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>MEDO</title>
 <!-- Design: docs/design/Medo.dc.html (claude.ai/design handoff), implemented
      against the live HudServer contract: the config token below is replaced
      server-side; SSE /events (hello|state|transcript|routed); POST /ask. -->
+<!-- PWA: makes the LAN HUD installable with a home-screen icon + a chrome-less
+     standalone launch, and (via sw.js) an offline shell. Served by ui/hud.py.
+     Fully revert by removing manifest.json, sw.js, /icons, and these tags. -->
+<meta name="theme-color" content="#04070d" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="MEDO" />
+<link rel="manifest" href="/manifest.json" />
+<link rel="apple-touch-icon" href="/icons/medo-192.png" />
+<script>
+  /* Register the service worker (best-effort; needs a secure context —
+     localhost is treated as secure, and LAN-over-http still installs on most
+     Android browsers). A failure here must never break the HUD. */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    });
+  }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
