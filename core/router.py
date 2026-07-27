@@ -340,6 +340,16 @@ class Router:
                 if (skill is not None and self._is_learnable(skill)
                         and (best is None or mhit[1] > best[1])):
                     best = (skill, mhit[1])
+        # Final safety invariant, stated once at the dispatch decision: the
+        # semantic tier must NEVER reach a PC-controlling or confirmation-gated
+        # skill by meaning. The index build and the learn/replay guards already
+        # exclude those, but re-assert it here so a stale cached vector or a
+        # future refactor can't quietly open a meaning-shortcut to a destructive
+        # action — the one route that has no regex and no confirmation prompt.
+        if best is not None and not self._semantic_safe(best[0]):
+            logger.warning("semantic tier rejected unsafe skill %r at dispatch",
+                           best[0].name)
+            return None
         return best
 
     async def _maybe_learn_route(self, text: str, result: RouteResult,

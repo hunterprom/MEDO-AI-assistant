@@ -210,16 +210,22 @@ class SkillRouteIndex:
             return None
         q = np.asarray(query_vector, dtype=np.float32).ravel()
         qn = float(np.linalg.norm(q))
-        if qn == 0.0:
+        # A non-finite norm (NaN/inf from a degenerate embedding) would slip past
+        # a bare `== 0.0` check and then poison the sort with NaN scores — every
+        # NaN comparison is False, so a NaN could sort ahead of a real match and
+        # be handed back. Reject it outright instead.
+        if not np.isfinite(qn) or qn == 0.0:
             return None
         q = q / qn
         scored: list[tuple[str, float]] = []
         for e in self._entries:
             v = e.vector.ravel()
             vn = float(np.linalg.norm(v))
-            if vn == 0.0 or v.shape != q.shape:
+            if not np.isfinite(vn) or vn == 0.0 or v.shape != q.shape:
                 continue
-            scored.append((e.skill, float(q @ (v / vn))))
+            score = float(q @ (v / vn))
+            if np.isfinite(score):
+                scored.append((e.skill, score))
         if not scored:
             return None
         scored.sort(key=lambda x: x[1], reverse=True)

@@ -64,6 +64,20 @@ def test_match_empty_index_or_zero_query():
     assert idx.match(None) is None
 
 
+def test_match_rejects_nonfinite_query_and_candidate_vectors():
+    # A NaN/inf query used to slip past the `== 0.0` norm check and poison the
+    # sort (every NaN comparison is False), so a real match could be missed or a
+    # NaN handed back. It must decline instead.
+    idx = _index({"weather": [1, 0, 0], "news": [0, 1, 0]})
+    assert idx.match(np.array([np.nan, 0, 0], dtype=np.float32)) is None
+    assert idx.match(np.array([np.inf, 0, 0], dtype=np.float32)) is None
+    # A single corrupt CANDIDATE vector must be skipped, not sink the whole match:
+    # the clean 'weather' entry still wins.
+    idx2 = _index({"weather": [1, 0, 0], "broken": [np.nan, np.nan, np.nan]})
+    hit = idx2.match(np.array([0.95, 0.05, 0.0], dtype=np.float32))
+    assert hit is not None and hit[0] == "weather"
+
+
 # --- router wiring -----------------------------------------------------------
 
 class _FakeSkill(Skill):
@@ -144,6 +158,42 @@ async def test_semantic_declines_and_falls_to_llm(tmp_path):
     result = await router.route("please recite a poem for me")
     assert result.path is RoutePath.LLM
     assert result.speech == OFFLINE_LLM_REPLY
+
+
+@pytest.mark.asyncio
+async def test_semantic_never_dispatches_an_unsafe_skill(tmp_path):
+    # The safety invariant, tested at the dispatch decision: even if a stale
+    # cached vector for a PC-controlling skill were somehow present in the index
+    # AND matched a query, the semantic tier must refuse to reach it by meaning
+    # (a route with no regex and no confirmation prompt).
+    from core.route_index import RouteEntry
+
+    def emb(texts):
+        out = []
+        for t in texts:
+            tl = t.lower()
+            if "erase" in tl or "wipe" in tl:
+                out.append(np.array([0.0, 0.0, 1.0], dtype=np.float32))
+            elif "warm" in tl:
+                out.append(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+            else:
+                out.append(np.array([1.0, 1.0, 1.0], dtype=np.float32))
+        return out
+
+    router = _router(tmp_path, shadow=False)
+    router._embedder = emb
+    router._route_index = None
+    router._registry.register(
+        _FakeSkill("wipe_disk", ["erase the whole disk now"], controls_pc=True))
+    # _ensure_route_index excludes the controls_pc skill (it is not semantic-safe),
+    # so smuggle a stale entry in as if a cached vector had outlived a flag flip.
+    idx = await router._ensure_route_index()
+    idx._entries.append(RouteEntry("wipe_disk", "erase", np.array([0, 0, 1], np.float32), 1))
+
+    # The matcher WOULD pick wipe_disk (its own axis), but the guard rejects it.
+    assert await router._semantic_route("please wipe it") is None
+    result = await router.route("please wipe it")
+    assert result.path is RoutePath.LLM          # fell through; nothing destructive ran
 
 
 @pytest.mark.asyncio

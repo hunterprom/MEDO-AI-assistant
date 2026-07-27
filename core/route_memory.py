@@ -156,7 +156,10 @@ class RouteMemory:
             return None
         q = np.asarray(query_vector, dtype=np.float32).ravel()
         qn = float(np.linalg.norm(q))
-        if qn == 0.0:
+        # Reject a non-finite query norm (NaN/inf) outright: a bare `== 0.0`
+        # check lets it through, and a NaN score is never > best so it would
+        # silently make every learned exemplar unreachable for that turn.
+        if not np.isfinite(qn) or qn == 0.0:
             return None
         q = q / qn
         best_skill: str | None = None
@@ -164,10 +167,10 @@ class RouteMemory:
         for skill, v in self._entries:
             v = v.ravel()
             vn = float(np.linalg.norm(v))
-            if vn == 0.0 or v.shape != q.shape:
+            if not np.isfinite(vn) or vn == 0.0 or v.shape != q.shape:
                 continue
             score = float(q @ (v / vn))
-            if score > best:
+            if np.isfinite(score) and score > best:
                 best, best_skill = score, skill
         if best_skill is not None and best >= threshold:
             return best_skill, best
