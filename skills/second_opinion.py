@@ -71,7 +71,10 @@ _SEVERITY = {"WRONG": 3, "UNSUPPORTED": 2, "CANNOT_VERIFY": 1, "SUPPORTED": 0}
 
 
 def _norm_tag(raw: str) -> str:
-    t = raw.upper().replace(" ", "_").replace("-", "_")
+    # Collapse ANY run of whitespace/underscore/hyphen — _TAG matches
+    # "CANNOT<any \s>VERIFY" (tab, NBSP…), so a plain " "/"-" replace would leave
+    # a stray separator and yield an unknown tag (a _SEVERITY KeyError downstream).
+    t = re.sub(r"[\s_-]+", "_", raw.strip().upper())
     if t in ("INCORRECT", "FALSE"):
         return "WRONG"
     if t in ("UNVERIFIABLE", "UNKNOWN", "CANNOT_VERIFY"):
@@ -116,8 +119,10 @@ def _parse_audit(reply: str, member: Specialist) -> list[dict[str, str]]:
             # (over-flag, never under-flag) with the text before the first tag as
             # the claim.
             hits = list(_TAG.finditer(line))
+            # .get(..., 3): an unrecognised tag ranks most-severe (over-flag,
+            # never crash) — the parser must never throw on odd auditor output.
             tag = max((_norm_tag(m.group(1)) for m in hits),
-                      key=lambda t: _SEVERITY[t])
+                      key=lambda t: _SEVERITY.get(t, 3))
             claim = _clean(line[:hits[0].start()])
             reason = _clean(line[hits[-1].end():])
         if not claim:                       # a bare tag with no claim text -> skip

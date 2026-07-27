@@ -85,6 +85,12 @@ def test_tag_word_inside_the_claim_text_cannot_flip_the_verdict():
     # And with no delimiters, the MOST SEVERE tag on the line wins (over-flag).
     c2 = _parse_audit("the 2.5 figure is UNSUPPORTED though partly SUPPORTED", COUNCIL[0])
     assert c2[0]["tag"] == "UNSUPPORTED"
+    # A tag with an odd whitespace separator (tab / non-breaking space) must
+    # normalize, not crash the parser — the fail-safe contract forbids throwing.
+    c3 = _parse_audit("the melting point CANNOT\tVERIFY here", COUNCIL[0])
+    assert c3[0]["tag"] == "CANNOT_VERIFY"
+    c4 = _parse_audit("CLAIM: x | CANNOT\xa0VERIFY | outside my field", COUNCIL[0])
+    assert c4[0]["tag"] == "CANNOT_VERIFY"
 
 
 @pytest.mark.asyncio

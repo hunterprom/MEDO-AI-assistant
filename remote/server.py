@@ -218,8 +218,10 @@ class RemoteServer:
             # CSRF / DNS-rebinding gate: a cross-origin browser request (an Origin
             # that isn't same-site) is refused BEFORE it can act — this closes the
             # loopback drive-by, where a page on the open web POSTs to 127.0.0.1
-            # and was treated as local. Non-browser clients send no Origin and are
-            # unaffected; the token gate still applies to them.
+            # and was treated as local. Non-browser clients (no Origin) that
+            # address MEDO by IP are unaffected; the token gate still applies to
+            # them (a native client using a hostname must list it in
+            # remote.allowed_origins, same as a hostname HUD).
             if request.method != "OPTIONS" and not self._origin_allowed(request):
                 return _error(403, "cross-origin request refused")
             if self._authorized(request):
