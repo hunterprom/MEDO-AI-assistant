@@ -158,7 +158,7 @@ class SelfDevEngine:
                 ["commit", "-m", f"self-dev: {request[:60]}", "--no-verify"],
                 cwd=worktree)
             diff = await self._run_git(["diff", f"{base}..{branch}"])
-            tests_ok, lint_ok, checks = await self._run_checks(worktree)
+            tests_ok, lint_ok, checks = await self._run_checks(worktree, files)
             proposal = Proposal(request, branch, worktree, base, diff, files,
                                 tests_ok, lint_ok, checks, agent_output)
             logger.info("self-dev: %s", proposal.summary())
@@ -196,16 +196,27 @@ class SelfDevEngine:
 
     # -- internals ----------------------------------------------------------
 
-    async def _run_checks(self, worktree: Path) -> tuple[bool, bool, str]:
+    async def _run_checks(self, worktree: Path,
+                          files: list[str]) -> tuple[bool, bool, str]:
         parts: list[str] = []
+        # Tests run whole: a change must not break anything, anywhere.
         tcode, tout, terr = await self._run(
             [self._python, *self._config.test_cmd], cwd=worktree,
             timeout=self._config.check_timeout_s)
         parts.append("$ tests\n" + _tail(tout + terr))
-        lcode, lout, lerr = await self._run(
-            [self._python, *self._config.lint_cmd], cwd=worktree, timeout=180.0)
-        parts.append("$ lint\n" + _tail(lout + lerr))
-        return tcode == 0, lcode == 0, "\n\n".join(parts)
+        # Lint ONLY the files this proposal changed — a good change must not be
+        # blocked by pre-existing lint debt elsewhere in the repo.
+        py_files = [f for f in files if f.endswith(".py")]
+        if py_files:
+            lcode, lout, lerr = await self._run(
+                [self._python, *self._config.lint_cmd, *py_files],
+                cwd=worktree, timeout=180.0)
+            parts.append(f"$ lint {' '.join(py_files)}\n" + _tail(lout + lerr))
+            lint_ok = lcode == 0
+        else:
+            parts.append("$ lint (no python files changed — skipped)")
+            lint_ok = True
+        return tcode == 0, lint_ok, "\n\n".join(parts)
 
     async def _run_cli_agent(self, worktree: Path, request: str) -> str:
         """Drive the configured coding CLI to edit files in ``worktree``."""

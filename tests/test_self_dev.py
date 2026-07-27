@@ -129,6 +129,24 @@ async def test_discard_removes_every_trace(repo):
     assert not proposal.worktree.exists()
 
 
+# --- the gate lints only what changed ----------------------------------------
+
+@pytest.mark.asyncio
+async def test_lint_gate_ignores_preexisting_debt_in_untouched_files(repo):
+    # A real lint violation (unused import) in a file the proposal never touches.
+    (repo / "legacy.py").write_text("import os\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "pre-existing lint debt")
+
+    # Real ruff this time; the agent adds a CLEAN file.
+    engine = _engine(repo, _config(lint_cmd=["-m", "ruff", "check"]),
+                     _adds_file("clean.py", "ADDED = True\n"))
+    proposal = await engine.propose("add a clean module")
+
+    # legacy.py's F401 must NOT fail this proposal — only clean.py is linted.
+    assert proposal.lint_ok is True and proposal.ok is True
+
+
 # --- the off switch -----------------------------------------------------------
 
 @pytest.mark.asyncio

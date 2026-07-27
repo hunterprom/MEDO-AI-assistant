@@ -944,9 +944,11 @@ class SelfDevConfig(BaseModel):
     #: Proposal branches are named "<prefix>/<slug>-<hash>".
     branch_prefix: str = "medo/self-dev"
     #: The gate a proposal must pass, run as ``<python> <args>`` in the worktree.
+    #: Tests run whole (a change must break nothing); lint gets ONLY the changed
+    #: files appended — linting the whole repo would fail a good change on
+    #: unrelated pre-existing debt.
     test_cmd: list[str] = Field(default_factory=lambda: ["-m", "pytest", "-q"])
-    lint_cmd: list[str] = Field(
-        default_factory=lambda: ["-m", "ruff", "check", "."])
+    lint_cmd: list[str] = Field(default_factory=lambda: ["-m", "ruff", "check"])
     #: Hard bound on the coding agent (it can otherwise run a very long time).
     agent_timeout_s: float = 900.0
     #: Hard bound on the test+lint gate.
