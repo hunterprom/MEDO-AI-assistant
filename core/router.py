@@ -514,7 +514,7 @@ class Router:
         if skill.controls_pc and not self._settings.safety.pc_control_enabled:
             return RouteResult(path=path, speech=PC_CONTROL_OFF_REPLY,
                               skill_name=skill.name)
-        outcome = await skill.execute(request)
+        outcome = await self._safe_execute(skill, request)
         if (outcome.needs_confirmation and self._settings.safety.confirm_destructive):
             # Stash the request; the next utterance is treated as the yes/no.
             self._pending = (skill, request)
@@ -539,7 +539,7 @@ class Router:
         if is_affirmative(text):
             self._pending = None
             request.context = {**request.context, "confirmed": True}
-            outcome = await skill.execute(request)  # now performs the action
+            outcome = await self._safe_execute(skill, request)  # performs the action
             return RouteResult(
                 path=RoutePath.FAST,
                 speech=outcome.speech,
@@ -553,6 +553,23 @@ class Router:
         self._pending = None
         logger.info("ambiguous confirmation %r; cancelling pending action", text)
         return await self._route_inner(text, context)
+
+    async def _safe_execute(self, skill: Skill, request: SkillRequest) -> SkillResult:
+        """Run a skill's ``execute`` with a backstop for unexpected exceptions.
+
+        Skills are expected to handle their own failures and return a spoken
+        ``SkillResult``, and almost all do. But an unguarded bug (e.g. a bad
+        ``float()`` on a model-supplied arg) would otherwise propagate out of
+        ``route()`` — merely a silent turn in voice mode, but a HARD CRASH of
+        the text REPL and the ``/ask`` endpoint, which have no catch-all. This
+        turns any such escape into a graceful spoken error instead.
+        """
+        try:
+            return await skill.execute(request)
+        except Exception:
+            logger.exception("skill %r raised; returning a spoken error", skill.name)
+            return SkillResult(
+                "Sorry — something went wrong running that.", success=False)
 
     def _tool_brain_client(self) -> OllamaClient | None:
         """A local Ollama client for the configured tool-brain model, or None.
@@ -804,7 +821,14 @@ class Router:
                 # to an actuation tool is refused when PC control is off.
                 result = SkillResult(PC_CONTROL_OFF_REPLY, success=False)
             else:
-                result = await dispatch_tool(self._registry, name, args, context)
+                try:
+                    result = await dispatch_tool(self._registry, name, args, context)
+                except Exception:
+                    # A crashing tool must not take down the turn (silent in
+                    # voice, fatal in the text REPL / /ask). Speak an error.
+                    logger.exception("tool %r raised; returning a spoken error", name)
+                    result = SkillResult(
+                        "Sorry — that ran into an error.", success=False)
             used_skill = name
 
             if (result.needs_confirmation

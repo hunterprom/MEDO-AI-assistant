@@ -414,7 +414,13 @@ class BrightnessSkill(Skill):
         if level is None:
             return SkillResult("Tell me a brightness from 0 to 100.", success=False)
 
-        level = max(0, min(100, int(level)))
+        try:
+            # "level" is typed "integer", but a model may send "50%"/"fifty";
+            # coerce leniently and reject what still isn't a number.
+            level = int(str(level).strip().rstrip("%"))
+        except (TypeError, ValueError):
+            return SkillResult("Tell me a brightness from 0 to 100.", success=False)
+        level = max(0, min(100, level))
         code, _ = await self._powershell(
             "(Get-WmiObject -Namespace root/wmi -Class WmiMonitorBrightnessMethods)"
             f".WmiSetBrightness(1,{level})"

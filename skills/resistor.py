@@ -276,8 +276,16 @@ class ResistorSkill(Skill):
 
         # Direction 2: a value named -> give the bands.
         arg_ohms = request.args.get("ohms")
-        ohms = (float(arg_ohms) if arg_ohms not in (None, "")
-                else parse_ohms(request.text))
+        if arg_ohms not in (None, ""):
+            try:
+                ohms = float(arg_ohms)
+            except (TypeError, ValueError):
+                # The "ohms" arg is typed "number", but a model happily sends
+                # "4.7k"/"4k7" (the skill's own examples use it) — float() would
+                # crash the turn, so parse it like spoken text instead.
+                ohms = parse_ohms(str(arg_ohms)) or parse_ohms(request.text)
+        else:
+            ohms = parse_ohms(request.text)
         if ohms is not None:
             try:
                 bands = value_to_bands(ohms)

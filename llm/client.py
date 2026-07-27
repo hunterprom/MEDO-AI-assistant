@@ -24,6 +24,7 @@ only ever placed in request headers; they are never logged.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -401,7 +402,10 @@ class LLMClient:
                     async for line in resp.aiter_lines():
                         if not line.strip():
                             continue
-                        data = json.loads(line)
+                        try:
+                            data = json.loads(line)
+                        except ValueError:
+                            continue  # a truncated / non-JSON frame — skip it
                         msg = data.get("message") or {}
                         delta = msg.get("content") or ""
                         if delta:
@@ -466,7 +470,11 @@ class LLMClient:
                         chunk = line[5:].strip()
                         if not chunk or chunk == "[DONE]":
                             continue
-                        choices = json.loads(chunk).get("choices") or []
+                        try:
+                            choices = json.loads(chunk).get("choices") or []
+                        except ValueError:
+                            continue  # a keep-alive / malformed SSE frame — skip
+
                         delta = (choices[0].get("delta") if choices else None) or {}
                         piece = delta.get("content") or ""
                         if piece:
@@ -663,6 +671,10 @@ class LLMClient:
             )
         except asyncio.TimeoutError:
             proc.kill()
+            # Reap the killed child so its pipes/transport aren't left dangling
+            # (a repeatedly-timing-out CLI would otherwise leak processes).
+            with contextlib.suppress(Exception):
+                await proc.wait()
             raise LLMUnavailableError(
                 f"{self._provider} CLI timed out after {self._config.cli_timeout_s:.0f}s"
             ) from None

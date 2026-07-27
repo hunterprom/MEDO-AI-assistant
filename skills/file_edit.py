@@ -219,7 +219,9 @@ class FileEditSkill(Skill):
             else:
                 action = "append"
 
-        target, problem = self._resolve(name)
+        # _resolve walks the whitelist (rglob) — thread it so a slow disk isn't
+        # an audible gap in MEDO's voice.
+        target, problem = await asyncio.to_thread(self._resolve, name)
         if problem is not None:
             return self._refusal(problem, name, speak_mk)
 
@@ -500,7 +502,7 @@ class OpenInEditorSkill(Skill):
         if not name:
             return SkillResult("Која датотека?" if speak_mk else "Which file?",
                                success=False)
-        hits = search_files(self._whitelist, name, limit=8)
+        hits = await asyncio.to_thread(search_files, self._whitelist, name, limit=8)
         hits = [h for h in hits if self._whitelist.is_allowed(h)]
         if not hits:
             return SkillResult(

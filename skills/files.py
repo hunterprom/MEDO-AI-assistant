@@ -7,6 +7,7 @@ config.yaml. Search is a filename substring match across those trees.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any
@@ -104,7 +105,9 @@ class FilesSkill(Skill):
             return SkillResult("Која датотека?" if speak_mk else "Which file?",
                                success=False)
 
-        hits = self._search(query)
+        # rglob over the whitelisted trees can walk thousands of files; keep it
+        # off the event loop so TTS streaming and the HUD don't stall mid-turn.
+        hits = await asyncio.to_thread(self._search, query)
         if not hits:
             return SkillResult(
                 f"Не најдов датотека со '{query}' во {self._whitelist.describe()}."
