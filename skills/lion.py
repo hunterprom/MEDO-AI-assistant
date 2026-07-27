@@ -108,8 +108,14 @@ class LionModeSkill(Skill):
         # prompt would only teach the habit of clicking through security
         # prompts. It just enters the profile.
         self._settings.mode.lion = True
-        return SkillResult(ON_REPLY_MK if speak_mk else ON_REPLY,
-                           data={"lion_mode": True})
+        reply = ON_REPLY_MK if speak_mk else ON_REPLY
+        if self._settings.self_dev.enabled:
+            # Self-programming lives in the Lion profile too (skills/self_dev_skill).
+            reply += (" Можам и да работам на мојот код — кажи „поправи го твојот код…“."
+                      if speak_mk else
+                      " I can also work on my own code now — say 'fix your code …' "
+                      "to propose a change.")
+        return SkillResult(reply, data={"lion_mode": True})
 
     def tool_schema(self) -> dict[str, Any]:
         return {

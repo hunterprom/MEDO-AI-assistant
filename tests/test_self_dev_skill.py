@@ -57,6 +57,17 @@ def _proposal(ok: bool = True) -> Proposal:
 
 # --- the trigger --------------------------------------------------------------
 
+def test_self_dev_surfaces_only_in_lion_mode():
+    from core.config import load_settings
+
+    settings = load_settings()
+    skill = SelfDevSkill(_FakeEngine(proposal=_proposal(ok=True)), None, settings)
+    settings.mode.lion = False
+    assert skill.match("fix your code so the timer works") is None
+    settings.mode.lion = True
+    assert skill.match("fix your code so the timer works") is not None
+
+
 def test_trigger_requires_a_self_marker():
     assert _START.search("fix your code so the timer works")
     assert _START.search("program yourself to send emails")

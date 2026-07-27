@@ -6,9 +6,11 @@ minutes, far longer than a turn), then ANNOUNCES the verdict when it's ready. Th
 change is applied only on an explicit "apply your change", which — because it
 edits the live code — goes through the normal yes/no confirmation gate.
 
-Only registered when ``self_dev.enabled`` is set, so its very presence is the
-opt-in; the engine's safelist/denylist + the isolated worktree bound what a
-proposal can touch.
+Self-programming is a **Lion-mode** capability: even when ``self_dev.enabled`` is
+set (the master consent that registers it), the skill only SURFACES while lion
+mode is on — you enter the Lion profile to let MEDO work on its own code, the way
+the defensive-security tools live there. The engine's safelist/denylist + the
+isolated worktree + the apply confirmation bound what a proposal can do.
 """
 
 from __future__ import annotations
@@ -56,12 +58,21 @@ class SelfDevSkill(Skill):
         "in isolation, gated by the tests, and applied only on your approval.")
     patterns = [_START, _APPLY, _DISCARD]
 
-    def __init__(self, engine: SelfDevEngine, announcer=None) -> None:
+    def __init__(self, engine: SelfDevEngine, announcer=None, settings=None) -> None:
         self._engine = engine
         self._announce = announcer          # async callable(text) or None
+        self._settings = settings           # gates surfacing on lion mode
         self._pending: Proposal | None = None
         self._task: asyncio.Task | None = None
         self._busy = False
+
+    def match(self, text: str):
+        # A Lion-mode capability: surfaced only while lion mode is on. Out of it
+        # these phrases fall through to the normal router (nothing is hidden — the
+        # tool just isn't on the fast path unless the profile is active).
+        if self._settings is not None and not self._settings.mode.lion:
+            return None
+        return super().match(text)
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         # The "yes" confirming an apply comes back through here with confirmed set.
