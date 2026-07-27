@@ -492,7 +492,14 @@ class RemoteServer:
             self._pair = None
             logger.warning("pairing aborted: too many wrong codes from %s", request.remote)
             return _error(429, "too many attempts — start pairing again")
-        if not supplied or not hmac.compare_digest(supplied, pair["code"]):
+        try:
+            ok = bool(supplied) and hmac.compare_digest(supplied, pair["code"])
+        except TypeError:
+            # compare_digest rejects non-ASCII str operands; a code like "123é"
+            # simply can't match an ASCII pairing code — treat it as wrong, not
+            # a 500 (mirrors the guard in _authorized).
+            ok = False
+        if not ok:
             return _error(401, "wrong code")
 
         self._pair = None  # single use
@@ -1192,6 +1199,11 @@ class RemoteServer:
         await self._sm.transition(AssistantState.THINKING)
         try:
             result = await self._router.route(text, context={"source": "remote"})
+        except Exception:
+            # The router guards skill crashes itself, but a bug anywhere else on
+            # the path shouldn't hand the caller an aiohttp 500 stack trace.
+            logger.exception("routing %r failed", text[:80])
+            return _error(500, "the assistant hit an error handling that")
         finally:
             await self._sm.transition(AssistantState.IDLE)
 

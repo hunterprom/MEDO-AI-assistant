@@ -408,7 +408,13 @@ class Router:
 
         # Capture BEFORE routing clears it: was this utterance a yes/no answering
         # a pending confirmation? (self._pending is cleared inside _route_inner.)
-        answering_confirmation = self._pending is not None
+        # Scoped to the SAME channel that armed it — a remote /ask or a routine
+        # must never resolve, or silently cancel, a destructive action the voice
+        # user is mid-confirming (and vice versa).
+        answering_confirmation = (
+            self._pending is not None
+            and self._pending[1].context.get("source")
+            == (context or {}).get("source"))
         self._turn_used_live_info = False
         # Cleared each turn so a stale embedding can never attach to a later
         # learned route; set by _semantic_route when it embeds this utterance.
@@ -455,8 +461,14 @@ class Router:
         on_llm_start: Any = None,
     ) -> RouteResult:
         # --- CONFIRMATION GATE ---
-        # A destructive action is waiting on a yes/no; this reply answers it.
-        if self._pending is not None:
+        # A destructive action is waiting on a yes/no; this reply answers it —
+        # but only when it comes from the channel that armed it. A turn from a
+        # different source (e.g. a remote /ask while the voice user is being
+        # asked "are you sure?") routes normally and leaves the confirmation
+        # armed, so no channel can confirm/cancel another channel's action.
+        if (self._pending is not None
+                and self._pending[1].context.get("source")
+                == context.get("source")):
             return await self._resolve_confirmation(text, context)
 
         # Expose the PREVIOUS spoken reply so a skill can replay it verbatim
@@ -631,18 +643,24 @@ class Router:
             return True
         return False
 
-    def _pick_brain(self, text: str) -> tuple[OllamaClient, str | None, bool]:
+    async def _pick_brain(self, text: str) -> tuple[OllamaClient, str | None, bool]:
         """Choose (client, model, borrowed) for this turn.
 
         Borrow the local tool-brain only when the selected brain is a CLI agent
         (which can't use MEDO's tools) AND the query looks like it needs live
         info. Otherwise use the selected brain unchanged — so normal chat still
         goes to the model you picked, and MEDO 'returns' to it automatically.
+
+        The availability probe is a blocking ~2s HTTP GET, so it runs in a thread
+        (once — the result is cached) rather than freezing the event loop, which
+        would stall the companion API and voice for every CLI-provider live query.
         """
         if (self._settings.llm.provider in CLI_PROVIDERS
                 and self._wants_live_info(text)):
             tb = self._tool_brain_client()
-            if tb is not None and tb.is_available():
+            if tb is not None and (self._tool_brain_ok
+                                   or await asyncio.to_thread(tb.is_available)):
+                self._tool_brain_ok = True
                 logger.info("auto tool-brain: %r needs live info -> %s",
                             text, self._settings.llm.tool_brain_model)
                 return tb, self._settings.llm.tool_brain_model, True
@@ -708,7 +726,7 @@ class Router:
         # Selected brain for normal chat; auto-borrow the local tool-brain when
         # a CLI agent hits a live-info query (then we're back on the selected
         # brain next turn — nothing is mutated).
-        llm, model, borrowed = self._pick_brain(text)
+        llm, model, borrowed = await self._pick_brain(text)
         if not model:
             return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 

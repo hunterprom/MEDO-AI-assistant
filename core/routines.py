@@ -59,13 +59,25 @@ class RoutineScheduler:
                     ", ".join(f"{r.name} @ {r.at}" for r in self._routines))
         while True:
             now = datetime.now()
+            # Compute each routine's next fire defensively: a routine loaded
+            # straight from config.yaml skips the HUD's HH:MM validation, so a
+            # typo like `at: "8am"` makes seconds_until raise — which, unguarded,
+            # would kill this whole task and silently stop ALL routines. Skip the
+            # offender instead and keep the rest scheduled.
+            timed = []
+            for r in self._routines:
+                try:
+                    timed.append((seconds_until(r.at, r.days, now), r))
+                except Exception:
+                    logger.warning("routine %r has an unschedulable time %r; "
+                                   "skipping it", r.name, r.at)
+            if not timed:
+                await asyncio.sleep(3600.0)   # nothing schedulable — re-check later
+                continue
             # key on the delay ONLY: two routines sharing a next-fire time would
             # otherwise tie and fall through to comparing RoutineItem objects,
             # which aren't orderable -> TypeError kills this whole task silently.
-            delay, routine = min(
-                ((seconds_until(r.at, r.days, now), r) for r in self._routines),
-                key=lambda pair: pair[0],
-            )
+            delay, routine = min(timed, key=lambda pair: pair[0])
             await asyncio.sleep(delay + 1.0)
             await self.fire(routine)
 
