@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
 
 from skills.base import SkillRequest, SkillResult
 
@@ -64,7 +63,6 @@ def test_link_rejects_duplicate_capability_names():
 
 
 def test_link_reinstall_matches_owning_device_not_prefix():
-    from unittest.mock import MagicMock
     from skills.base import SkillRegistry
     from link.registry import LinkRegistry
     reg = SkillRegistry()
@@ -104,7 +102,6 @@ def test_browser_opener_does_not_fall_back_on_a_blocked_host(monkeypatch):
 # --- SK-BENCH1 / SK-SCREEN1 ---------------------------------------------------
 
 def test_bench_inventory_reachable_from_llm_query_arg():
-    from unittest.mock import MagicMock
     from core.config import load_settings
     from skills.bench import BenchSkill
 
@@ -117,7 +114,6 @@ def test_bench_inventory_reachable_from_llm_query_arg():
 
 
 def test_screen_agent_handles_a_non_object_model_reply():
-    from unittest.mock import MagicMock
     from core.config import load_settings
     from skills.screen_agent import ScreenAgentSkill
 

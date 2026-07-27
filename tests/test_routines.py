@@ -36,7 +36,8 @@ async def test_fire_routes_and_announces_and_survives_failures():
             routed.append(text)
             if "broken" in text:
                 raise RuntimeError("boom")
-            class R: speech = f"answer to {text}"
+            class R:
+                speech = f"answer to {text}"
             return R()
 
     async def announcer(text):

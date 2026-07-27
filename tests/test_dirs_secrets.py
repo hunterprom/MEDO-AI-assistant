@@ -13,7 +13,7 @@ import pytest
 import pytest_asyncio
 from aiohttp.test_utils import TestClient, TestServer
 
-from core import config, dirs
+from core import dirs
 from core.config import (
     apply_local_secrets,
     load_llm_secrets,
@@ -56,7 +56,8 @@ def test_sphere_dirs_respects_limit():
 
 def test_search_files_finds_matches_and_ignores_empty(tmp_path, monkeypatch):
     (tmp_path / "alpha_report.txt").write_text("x")
-    sub = tmp_path / "sub"; sub.mkdir()
+    sub = tmp_path / "sub"
+    sub.mkdir()
     (sub / "beta_report.txt").write_text("y")
     (tmp_path / "unrelated.log").write_text("z")
     monkeypatch.setattr(dirs, "_search_roots", lambda: [tmp_path])
@@ -68,9 +69,11 @@ def test_search_files_finds_matches_and_ignores_empty(tmp_path, monkeypatch):
 
 def test_resolve_path_allows_home_blocks_outside(tmp_path, monkeypatch):
     monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: tmp_path))
-    f = tmp_path / "doc.txt"; f.write_text("x")
+    f = tmp_path / "doc.txt"
+    f.write_text("x")
     assert dirs.resolve_path(str(f)) is not None
-    outside = tmp_path.parent / "elsewhere_medo"; outside.mkdir(exist_ok=True)
+    outside = tmp_path.parent / "elsewhere_medo"
+    outside.mkdir(exist_ok=True)
     assert dirs.resolve_path(str(outside)) is None       # exists but outside home
     assert dirs.resolve_path(str(tmp_path / "missing")) is None
 
@@ -134,10 +137,12 @@ def test_audio_and_llm_overrides_coexist(tmp_path):
 def test_apply_audio_override_accepts_name_and_null(tmp_path):
     path = tmp_path / "secrets.local.yaml"
     save_audio_input("FHD Webcam", path)
-    s = load_settings(); apply_local_secrets(s, path)
+    s = load_settings()
+    apply_local_secrets(s, path)
     assert s.audio.input_device == "FHD Webcam"
     save_audio_input(None, path)
-    s2 = load_settings(); apply_local_secrets(s2, path)
+    s2 = load_settings()
+    apply_local_secrets(s2, path)
     assert s2.audio.input_device is None
 
 

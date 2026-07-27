@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from core.facts import FactsStore
@@ -81,8 +82,6 @@ async def test_remember_pattern_is_start_anchored():
 
 
 # --- semantic recall (fake embedder: keyword axes, no Ollama needed) ---------
-
-import numpy as np
 
 
 def _fake_embedder(texts):

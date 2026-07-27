@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: E702 — compact numpy/torch setup lines, kept dense on purpose
 """Deep, two-stage LOCAL training for the "medo" / "hey medo" wake word.
 
 Why two stages (and two Python envs): openWakeWord's feature extractor lives in

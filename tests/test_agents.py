@@ -7,9 +7,7 @@ that, plus the council-as-stars special case and the plugin fallback.
 
 from __future__ import annotations
 
-import re
 
-import pytest
 
 from core.agents import (
     DOMAIN_ORDER,

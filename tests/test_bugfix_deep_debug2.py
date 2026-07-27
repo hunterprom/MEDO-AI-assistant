@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from skills.base import SkillRequest, SkillResult
+from skills.base import SkillRequest
 
 
 # --- CORE1/CORE2: unescaped LIKE wildcards wiped/over-matched everything ------
@@ -89,7 +89,6 @@ def test_files_searches_from_the_query_arg(tmp_path):
 
 @pytest.mark.asyncio
 async def test_json_dict_coerces_non_objects():
-    from unittest.mock import AsyncMock
     from remote.server import _json_dict
 
     class Req:

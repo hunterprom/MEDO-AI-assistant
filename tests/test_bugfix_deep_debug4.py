@@ -9,6 +9,7 @@ Each test pins a bug found by the iter-4 audit of the content skills:
   WEATHER1 A non-JSON 200 (captive portal) raised JSONDecodeError past the
            httpx-only handler; a shape-shifted JSON crashed on data["current"].
 """
+# ruff: noqa: E402 — each section keeps its imports next to the test it sets up
 
 from __future__ import annotations
 
