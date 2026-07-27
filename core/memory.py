@@ -163,5 +163,10 @@ class ConversationMemory:
         """MEDO's most recent spoken reply, for a verbatim 'say that again'."""
         return self._turns[-1][1] if self._turns else None
 
+    def last_question(self) -> str | None:
+        """The user's most recent utterance — the question that produced
+        :meth:`last_reply`, for 'are you sure?' / 'second opinion'."""
+        return self._turns[-1][0] if self._turns else None
+
     def clear(self) -> None:
         self._turns.clear()

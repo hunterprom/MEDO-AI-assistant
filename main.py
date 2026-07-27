@@ -288,6 +288,13 @@ def build_registry(
             CouncilRosterSkill,
         )
 
+        # "second opinion" / "are you sure?" — the council red-teams MEDO's OWN
+        # last answer and returns a deterministic, fail-safe verdict. Registered
+        # first so its specific patterns win over the broader council/LLM path.
+        if settings.council.second_opinion:
+            from skills.second_opinion import SecondOpinionSkill
+
+            registry.register(SecondOpinionSkill(settings, expert))
         registry.register(ConveneCouncilSkill(settings, expert, synthesize_council))
         registry.register(AskSpecialistSkill(settings, expert))
         # "who's on the council" / "do you have a lawyer" — discovery, no LLM.

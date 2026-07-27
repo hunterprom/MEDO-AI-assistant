@@ -537,10 +537,13 @@ class Router:
                     text=text, context={**context, "captured_reply": True})
                 return await self._run_skill(reply_skill, captured)
 
-        # Expose the PREVIOUS spoken reply so a skill can replay it verbatim
-        # ("say that again"). route() calls add_turn() AFTER this, so right now
-        # last_reply() is the prior turn's reply, exactly what should be echoed.
-        context = {**context, "last_reply": self.conversation.last_reply()}
+        # Expose the PREVIOUS turn so a skill can replay the reply verbatim
+        # ("say that again") or audit it ("second opinion" -> both the prior
+        # question and answer). route() calls add_turn() AFTER this, so right now
+        # these are the prior turn, exactly what should be echoed/checked.
+        context = {**context,
+                   "last_reply": self.conversation.last_reply(),
+                   "last_question": self.conversation.last_question()}
 
         # --- FAST PATH ---
         if self._settings.router.fast_path_enabled:

@@ -809,6 +809,10 @@ class CouncilConfig(BaseModel):
     disabled: list[str] = Field(default_factory=list)
     #: Extra specialists, keyed by name: {title, prompt, triggers, wants_tools}.
     extra: dict = Field(default_factory=dict)
+    #: "Second opinion" — the council red-teams MEDO's OWN last answer, tagging
+    #: each claim and returning a deterministic, fail-safe confidence verdict.
+    #: See skills/second_opinion.py. On by default; costs nothing until invoked.
+    second_opinion: bool = True
 
 
 class WeatherConfig(BaseModel):

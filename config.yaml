@@ -624,6 +624,11 @@ council:                            # core/council.py — one expert per major
   default_agent: "software"         # who answers when no field matches
   max_members: 3                    # specialists per "convene" (latency dial)
   disabled: []                      # keys to switch off, e.g. ["law", "finance"]
+  # "Second opinion" / "are you sure?" — the council red-teams MEDO's OWN last
+  # answer, tags each claim, and returns a deterministic fail-safe verdict that
+  # retracts anything unsupported. skills/second_opinion.py. Costs nothing until
+  # you ask for it.
+  second_opinion: true
   # Built in: electrical, robotics, mechanical, physics, quantum, mathematics,
   # software, law, finance, economics, marketing, design, data, cybersecurity,
   # chemistry, medicine, biology, writing. Add your own without touching code:
