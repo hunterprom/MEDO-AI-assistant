@@ -897,20 +897,43 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             ui.banner("text mode — /help for commands", router.model)
             await run_repl(router, sm, llm, ui, log)
     finally:
+        _slog = logging.getLogger(__name__)
+
+        async def _quietly(what: str, coro) -> None:
+            # Each shutdown step guarded on its own: one failing (e.g. aiohttp
+            # cleanup erroring on an in-flight SSE stream) must NOT skip the rest
+            # — the MCP stdio children (not reaped on Windows) and the browser
+            # profile lock both have to be released regardless.
+            try:
+                await coro
+            except Exception:
+                _slog.warning("shutdown: %s failed", what, exc_info=True)
+
         if overlay_proc is not None:
-            overlay_proc.terminate()          # the sphere follows MEDO down
+            try:
+                overlay_proc.terminate()      # the sphere follows MEDO down
+            except Exception:
+                _slog.warning("shutdown: overlay terminate failed", exc_info=True)
+        # Cancel the long-lived background tasks (routine scheduler run_forever,
+        # model warmup, doc reindex) so they can't fire against a half-torn-down
+        # router or leave "Task was destroyed but it is pending" noise.
+        pending = list(_BG_TASKS)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         if remote is not None:
-            await remote.stop()
+            await _quietly("remote.stop", remote.stop())
         if hud_server is not None:
-            await hud_server.stop()
+            await _quietly("hud.stop", hud_server.stop())
         if webhook_manager is not None:
-            await webhook_manager.stop()
-        await mcp_manager.stop()
+            await _quietly("webhooks.stop", webhook_manager.stop())
+        await _quietly("mcp.stop", mcp_manager.stop())
         # Close the controlled browser if one was ever launched, so Chrome
         # doesn't outlive MEDO holding a lock on the profile directory.
         browser_skill = registry.get("browser_control")
         if browser_skill is not None:
-            await browser_skill.session.close()
+            await _quietly("browser.close", browser_skill.session.close())
 
 
 def main() -> None:

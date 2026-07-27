@@ -220,7 +220,11 @@ class HudServer:
             while True:
                 data = await queue.get()
                 await self._send(resp, data)
-        except (ConnectionResetError, asyncio.CancelledError):
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError,
+                asyncio.CancelledError):
+            # A HUD tab closing/refreshing mid-stream raises one of these — on
+            # Windows it's usually ConnectionAbortedError (WinError 10053).
+            # Expected, not an error: drop the client quietly.
             pass
         finally:
             self._clients.discard(queue)

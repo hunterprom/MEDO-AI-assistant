@@ -124,6 +124,15 @@ class VoiceLoop:
         # MEDO is speaking runs two player threads at once — corrupting the wake
         # model's ring buffers and truncating one of the two replies.
         self._speak_lock = asyncio.Lock()
+        # Cross-THREAD guard for the single wake model. _speak_lock only
+        # serializes the event-loop _speak callers; it does NOT cover the standby
+        # loop (_wait_for_wake), which runs in its own worker thread and never
+        # takes it. So a timer/reminder announcement firing DURING standby drives
+        # _play_interruptible's wake.reset()/predict() on the same non-thread-safe
+        # model from a second thread — corrupting its ring buffers so wake
+        # detection breaks afterwards. The player sets this flag to claim the
+        # model; the standby loop pauses its own predicting while it's set.
+        self._model_busy = threading.Event()
         # 'Let me think' fillers for slow LLM answers (core/filler.py). LLM path
         # only — armed on the router's on_llm_start hook in _run_turn.
         from core.filler import Filler
@@ -220,6 +229,10 @@ class VoiceLoop:
         """
         wake = self._wakeword
         assert wake is not None
+        # An announcement speaking right now owns the model on another thread;
+        # wait for it before we touch the model, so the two never race.
+        while self._model_busy.is_set():
+            time.sleep(0.05)
         wake.reset()
         # Report the peak wake score + mic level every few seconds so it's obvious
         # whether the mic is even hearing you and how close the phrase gets to the
@@ -237,6 +250,11 @@ class VoiceLoop:
         recent = (collections.deque(maxlen=20)
                   if (self._wake_capture.enabled or confirm) else None)
         while True:
+            if self._model_busy.is_set():
+                # A timer/reminder announcement is speaking and owns the model;
+                # pause predicting until it's done rather than corrupt it.
+                time.sleep(0.05)
+                continue
             if self._settings.audio.input_device != opened_device:
                 logger.info("input device changed — reopening the microphone")
                 return "reopen"
@@ -357,28 +375,34 @@ class VoiceLoop:
         wake = self._wakeword
         assert wake is not None
         audio_cfg = self._settings.audio
-        sd.play(wav, samplerate=sr, device=self._settings.audio.output_device)
-        stream = sd.get_stream()
-        why: str | None = None
+        # Claim the wake model so the standby loop (another thread) pauses its
+        # own predicting for the duration — see __init__/_model_busy.
+        self._model_busy.set()
         try:
-            wake.reset()
-            with Microphone(self._settings.audio.sample_rate,
-                            device=self._settings.audio.input_device) as m:
-                def live_frames():
-                    while stream.active:
-                        yield m.read_frame()   # 80 ms cadence paces this loop
-                why = self.watch_for_barge(
-                    live_frames(), wake, audio_cfg, self._wake_event)
-        except Exception:  # mic busy/unavailable — degrade to plain playback
-            logger.debug("barge-in watcher failed", exc_info=True)
-            sd.wait()
-            return False
+            sd.play(wav, samplerate=sr, device=self._settings.audio.output_device)
+            stream = sd.get_stream()
+            why: str | None = None
+            try:
+                wake.reset()
+                with Microphone(self._settings.audio.sample_rate,
+                                device=self._settings.audio.input_device) as m:
+                    def live_frames():
+                        while stream.active:
+                            yield m.read_frame()   # 80 ms cadence paces this loop
+                    why = self.watch_for_barge(
+                        live_frames(), wake, audio_cfg, self._wake_event)
+            except Exception:  # mic busy/unavailable — degrade to plain playback
+                logger.debug("barge-in watcher failed", exc_info=True)
+                sd.wait()
+                return False
+            finally:
+                wake.reset()
+            if why:
+                sd.stop()
+                logger.info("barge-in (%s): reply interrupted, listening", why)
+            return why is not None
         finally:
-            wake.reset()
-        if why:
-            sd.stop()
-            logger.info("barge-in (%s): reply interrupted, listening", why)
-        return why is not None
+            self._model_busy.clear()
 
     # --- speak ---------------------------------------------------------------
 
@@ -804,7 +828,21 @@ class VoiceLoop:
             cap_require_wake = require_wake and not (interpreting or dictating)
             if cap_require_wake:
                 await self._sm.transition(AssistantState.IDLE)
-            audio, wake_to_listen_ms = await self._capture(cap_require_wake)
+            # _capture handles a mic that won't OPEN (device fallback), but a
+            # read error MID-stream (USB/Bluetooth mic unplugged while listening)
+            # used to propagate out of run() and kill voice mode for the whole
+            # session. Catch it here: return to standby and let the next _capture
+            # re-resolve the device, so a reconnect just works.
+            try:
+                audio, wake_to_listen_ms = await self._capture(cap_require_wake)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                raise
+            except Exception:
+                logger.exception("audio capture failed; back to standby")
+                console.print("[red]Lost the microphone — retrying…[/red]")
+                require_wake = True
+                await asyncio.sleep(0.5)      # don't spin if the device stays gone
+                continue
             if audio.size == 0:
                 if interpreting or dictating:
                     continue  # silent gap — keep the mode open

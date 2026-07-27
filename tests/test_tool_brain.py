@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from core.config import load_settings
 from core.events import EventBus
 from core.router import _LIVE_INFO_RE, Router
@@ -31,35 +33,40 @@ def test_live_info_regex_matches_web_queries():
         assert not _LIVE_INFO_RE.search(q), q
 
 
-def test_cli_brain_borrows_tool_brain_for_live_info():
+@pytest.mark.asyncio
+async def test_cli_brain_borrows_tool_brain_for_live_info():
     r = _router("claude-code")
-    client, model, borrowed = r._pick_brain("what's the latest news on AI")
+    client, model, borrowed = await r._pick_brain("what's the latest news on AI")
     assert borrowed and model == "qwen3:30b" and client is r._tool_brain
 
 
-def test_cli_brain_keeps_selected_model_for_normal_chat():
+@pytest.mark.asyncio
+async def test_cli_brain_keeps_selected_model_for_normal_chat():
     r = _router("claude-code")
-    client, model, borrowed = r._pick_brain("tell me a joke")
+    client, model, borrowed = await r._pick_brain("tell me a joke")
     assert not borrowed and model == "sonnet" and client is r._llm
 
 
-def test_tool_capable_brain_never_borrows():
+@pytest.mark.asyncio
+async def test_tool_capable_brain_never_borrows():
     # ollama/openai/anthropic already get MEDO's tools — no need to switch.
     r = _router("ollama")
-    _, _, borrowed = r._pick_brain("what's the latest news on AI")
+    _, _, borrowed = await r._pick_brain("what's the latest news on AI")
     assert not borrowed
 
 
-def test_disabled_when_no_tool_brain_configured():
+@pytest.mark.asyncio
+async def test_disabled_when_no_tool_brain_configured():
     r = _router("claude-code", tool_brain="")
-    _, model, borrowed = r._pick_brain("what's the latest news")
+    _, model, borrowed = await r._pick_brain("what's the latest news")
     assert not borrowed and model == "sonnet"
 
 
-def test_borrow_falls_back_when_ollama_down():
+@pytest.mark.asyncio
+async def test_borrow_falls_back_when_ollama_down():
     r = _router("claude-code")
     r._tool_brain.is_available = lambda: False  # type: ignore[method-assign]
-    _, model, borrowed = r._pick_brain("what's the latest news")
+    _, model, borrowed = await r._pick_brain("what's the latest news")
     assert not borrowed and model == "sonnet"  # gracefully use the selected brain
 
 
@@ -69,7 +76,8 @@ def test_new_live_keywords_are_caught():
         assert _LIVE_INFO_RE.search(q), q
 
 
-def test_followup_after_live_info_borrows_even_without_keywords():
+@pytest.mark.asyncio
+async def test_followup_after_live_info_borrows_even_without_keywords():
     # The tariff-list bug: a follow-up that names no keyword of its own must
     # still reach the tool-brain right after a live-info answer.
     r = _router("claude-code")
@@ -77,7 +85,7 @@ def test_followup_after_live_info_borrows_even_without_keywords():
     assert r._wants_live_info(plain) is False        # cold: not live info
     r._last_live_info = True                          # ...as if the news just ran
     assert r._wants_live_info(plain) is True          # now it's a follow-up
-    _, model, borrowed = r._pick_brain(plain)
+    _, model, borrowed = await r._pick_brain(plain)
     assert borrowed and model == "qwen3:30b"
 
 
