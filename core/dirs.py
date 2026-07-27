@@ -227,3 +227,19 @@ def open_path(path: Path) -> bool:
     except Exception:
         logger.exception("could not open %s", path)
         return False
+
+
+def reveal_path(path: Path) -> bool:
+    """Open a directory, or REVEAL a file's containing folder — never execute it.
+
+    :func:`open_path` runs a file with its default handler (an ``.exe`` runs, a
+    ``.lnk``/``.bat`` runs), which is fine for the local "open this document"
+    skill but dangerous for the companion ``/open`` endpoint on a caller-supplied
+    path. So a directory opens as-is and a FILE opens its parent folder — the
+    file itself is never launched.
+    """
+    try:
+        target = path if path.is_dir() else path.parent
+    except OSError:
+        return False
+    return open_path(target)

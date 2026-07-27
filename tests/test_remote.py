@@ -141,11 +141,82 @@ async def test_lan_wrong_token_is_401(lan_client: TestClient):
 
 
 @pytest.mark.asyncio
-async def test_lan_401_still_carries_cors_headers(lan_client: TestClient):
-    # The browser HUD must be able to read the error cross-origin.
-    resp = await lan_client.get("/ping")
+async def test_lan_401_echoes_an_allowed_origin_not_wildcard(lan_client: TestClient):
+    # The browser HUD (a loopback origin) can still READ the error cross-origin,
+    # but only its OWN origin is echoed — never a wildcard.
+    resp = await lan_client.get("/ping", headers={"Origin": "http://127.0.0.1:8730"})
     assert resp.status == 401
-    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+    assert resp.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1:8730"
+    assert "Access-Control-Allow-Headers" in resp.headers          # static CORS present
+    # A non-browser client (no Origin) simply gets no ACAO, which is fine.
+    bare = await lan_client.get("/ping")
+    assert bare.status == 401
+    assert bare.headers.get("Access-Control-Allow-Origin") is None
+
+
+# --- CSRF / DNS-rebinding defense (the loopback drive-by) --------------------
+
+
+@pytest.mark.asyncio
+async def test_cross_origin_browser_request_is_refused(client: TestClient):
+    # A page on the open web POSTing to 127.0.0.1 sends its own Origin; even
+    # though the peer is loopback (auth-exempt), the request is refused BEFORE it
+    # can act, and no ACAO is echoed so the page can't read the response either.
+    resp = await client.post("/ask", json={"text": "what time is it"},
+                             headers={"Origin": "https://evil.example"})
+    assert resp.status == 403
+    assert resp.headers.get("Access-Control-Allow-Origin") is None
+
+
+@pytest.mark.asyncio
+async def test_same_site_origin_and_no_origin_still_work(client: TestClient):
+    # The HUD (a loopback origin) and non-browser clients (no Origin) are allowed.
+    hud = await client.post("/ask", json={"text": "what time is it"},
+                            headers={"Origin": "http://127.0.0.1:8730"})
+    assert hud.status == 200
+    assert hud.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1:8730"
+    bare = await client.post("/ask", json={"text": "what time is it"})
+    assert bare.status == 200
+
+
+@pytest.mark.asyncio
+async def test_allowed_origins_whitelist(server_client):
+    tc, server = server_client
+    server._settings.remote.allowed_origins = ["https://medo.example"]
+    resp = await tc.post("/ask", json={"text": "what time is it"},
+                         headers={"Origin": "https://medo.example"})
+    assert resp.status == 200
+    assert resp.headers.get("Access-Control-Allow-Origin") == "https://medo.example"
+
+
+@pytest.mark.asyncio
+async def test_provider_base_url_change_requires_api_key(server_client):
+    # Redirecting a cloud provider to a NEW base URL without re-supplying the key
+    # must be refused, so the stored key is never sent to an attacker URL.
+    tc, server = server_client
+    server._settings.llm.provider = "openai"
+    server._settings.llm.api_key = "sk-secret"
+    server._settings.llm.openai_base_url = "https://api.openai.com/v1"
+    resp = await tc.post("/provider", json={"provider": "openai",
+                                            "base_url": "https://evil.example/v1"})
+    assert resp.status == 400
+    assert server._settings.llm.openai_base_url == "https://api.openai.com/v1"   # unchanged
+
+
+@pytest.mark.asyncio
+async def test_open_reveals_a_file_never_executes_it(server_client, tmp_path, monkeypatch):
+    # /open on a caller-supplied FILE must reveal its folder, never run the file.
+    import core.dirs as d
+
+    f = tmp_path / "payload.exe"
+    f.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(d, "resolve_path", lambda s: f)
+    opened: dict = {}
+    monkeypatch.setattr(d, "open_path", lambda p: (opened.setdefault("path", p), True)[1])
+    tc, _server = server_client
+    resp = await tc.post("/open", json={"path": str(f)})
+    assert resp.status == 200
+    assert opened["path"] == f.parent          # the folder, NOT the executable
 
 
 @pytest.mark.asyncio

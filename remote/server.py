@@ -46,11 +46,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import ipaddress
 import json
 import logging
 import secrets as secrets_mod
 import threading
 import time
+from urllib.parse import urlsplit
 
 import psutil
 from aiohttp import web
@@ -65,12 +67,40 @@ logger = logging.getLogger(__name__)
 #: Reject absurdly long utterances before they reach the LLM.
 MAX_TEXT_CHARS = 2000
 
-#: Permissive CORS for the browser HUD; the API is LAN-only anyway.
-CORS_HEADERS = {
-    "Access-Control-Allow-Origin": "*",
+#: Static CORS headers (methods/headers). The Allow-Origin is added PER REQUEST
+#: by the server, echoing only an ALLOWED (same-site or whitelisted) origin —
+#: never a wildcard — so a drive-by page can't read a response from this API.
+_CORS_STATIC = {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 }
+
+
+def _host_only(value: str) -> str:
+    """The bare host from an Origin URL or a Host header ('h:port' / 'scheme://h')."""
+    s = (value or "").strip()
+    if "://" not in s:
+        s = "//" + s
+    return (urlsplit(s).hostname or "").lower()
+
+
+def _is_ip_or_localhost(host: str) -> bool:
+    """True for an IP literal or localhost; False for a domain (a rebinding Host)."""
+    if host in ("", "localhost"):
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _apply_cors(headers, allow_origin: str | None) -> None:
+    """Attach CORS headers; echo an Allow-Origin only for an allowed origin."""
+    headers.update(_CORS_STATIC)
+    if allow_origin:
+        headers["Access-Control-Allow-Origin"] = allow_origin
+        headers["Vary"] = "Origin"
 
 #: Peer addresses that skip token auth (the HUD + sidecar run on this machine).
 _LOCAL_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
@@ -115,18 +145,6 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
 
 #: Providers accepted by ``POST /provider`` (mirrors LLMConfig.provider).
 VALID_PROVIDERS = ("ollama", "openai", "anthropic", "claude-code", "codex")
-
-
-@web.middleware
-async def cors_middleware(request: web.Request, handler) -> web.StreamResponse:
-    """Attach CORS headers to every response, including error responses."""
-    try:
-        response = await handler(request)
-    except web.HTTPException as exc:
-        exc.headers.update(CORS_HEADERS)
-        raise
-    response.headers.update(CORS_HEADERS)
-    return response
 
 
 class RemoteServer:
@@ -182,12 +200,33 @@ class RemoteServer:
         """Create the aiohttp application (separated out for tests)."""
 
         @web.middleware
+        async def cors_middleware(request: web.Request, handler) -> web.StreamResponse:
+            # Echo an Allow-Origin only for an ALLOWED origin (never a wildcard),
+            # so a drive-by page can't read this API's responses.
+            origin = request.headers.get("Origin")
+            allow = origin if (origin and self._origin_allowed(request)) else None
+            try:
+                response = await handler(request)
+            except web.HTTPException as exc:
+                _apply_cors(exc.headers, allow)
+                raise
+            _apply_cors(response.headers, allow)
+            return response
+
+        @web.middleware
         async def auth_middleware(request: web.Request, handler) -> web.StreamResponse:
+            # CSRF / DNS-rebinding gate: a cross-origin browser request (an Origin
+            # that isn't same-site) is refused BEFORE it can act — this closes the
+            # loopback drive-by, where a page on the open web POSTs to 127.0.0.1
+            # and was treated as local. Non-browser clients send no Origin and are
+            # unaffected; the token gate still applies to them.
+            if request.method != "OPTIONS" and not self._origin_allowed(request):
+                return _error(403, "cross-origin request refused")
             if self._authorized(request):
                 return await handler(request)
             return _error(401, "missing or invalid token")
 
-        # cors first so even 401s carry the headers the browser HUD needs.
+        # cors first so even 401/403s carry the headers the browser HUD needs.
         app = web.Application(middlewares=[cors_middleware, auth_middleware])
         app.router.add_get("/ping", self._handle_ping)
         app.router.add_post("/ask", self._handle_ask)
@@ -246,6 +285,30 @@ class RemoteServer:
     def _is_local(self, request: web.Request) -> bool:
         """True when the request comes from this machine (auth-exempt)."""
         return request.remote in _LOCAL_PEERS
+
+    def _origin_allowed(self, request: web.Request) -> bool:
+        """CSRF / DNS-rebinding gate for BROWSER requests.
+
+        No ``Origin`` header → a non-browser client (the watch app, curl); allow,
+        the token gate still applies. With an ``Origin``, allow only SAME-SITE: a
+        loopback origin, an explicitly whitelisted one (``remote.allowed_origins``),
+        or an ``Origin`` whose host equals the request's ``Host`` header host AND
+        that host is an IP/localhost — a domain ``Host`` is a DNS-rebinding attempt,
+        so it is refused. This is what stops a page on the open web from driving
+        the API even though the browser connects to it over 127.0.0.1.
+        """
+        origin = request.headers.get("Origin")
+        if not origin:
+            return True
+        if origin in self._settings.remote.allowed_origins:
+            return True
+        ohost = _host_only(origin)
+        if ohost in ("127.0.0.1", "localhost", "::1"):
+            return True
+        rhost = _host_only(request.host or "")
+        if not _is_ip_or_localhost(rhost):
+            return False                        # domain Host header → rebinding
+        return bool(ohost) and ohost == rhost
 
     def _authorized(self, request: web.Request) -> bool:
         """Token gate for LAN clients.
@@ -737,6 +800,16 @@ class RemoteServer:
                 llm_cfg.api_key = str(api_key)
         base_url = str(payload.get("base_url") or "").strip()
         if base_url:
+            current = {"openai": llm_cfg.openai_base_url,
+                       "anthropic": llm_cfg.anthropic_base_url,
+                       "ollama": llm_cfg.host}.get(provider, "")
+            # Redirecting a cloud provider to a NEW base URL must not carry a
+            # previously-stored key to an endpoint the user didn't just authorize
+            # — that would exfiltrate the key (and the conversation) to an
+            # attacker-supplied URL. Require the key to be re-supplied on a change.
+            if (base_url != current and api_key is None
+                    and provider in ("openai", "anthropic")):
+                return _error(400, "changing base_url requires api_key to be re-supplied")
             if provider == "openai":
                 llm_cfg.openai_base_url = base_url
             elif provider == "anthropic":
@@ -896,7 +969,10 @@ class RemoteServer:
             path = await asyncio.to_thread(dirs.resolve, key)
             if path is None:
                 return _error(404, f"unknown folder shortcut {key!r}")
-        opened = await asyncio.to_thread(dirs.open_path, path)
+        # Never EXECUTE a caller-supplied file: os.startfile runs a .exe/.bat/.lnk
+        # with its default handler. reveal_path opens a directory as-is and, for a
+        # file, opens its containing folder instead.
+        opened = await asyncio.to_thread(dirs.reveal_path, path)
         if not opened:
             return _error(500, f"could not open {path}")
         logger.info("opened %s via companion API", path)

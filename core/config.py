@@ -219,6 +219,12 @@ class RemoteConfig(BaseModel):
     # Answer UDP "who is MEDO?" broadcasts so the watch app can find this
     # machine and start pairing without typing an IP (same port, UDP).
     discovery_enabled: bool = True
+    # Browser origins allowed to call the API cross-origin, IN ADDITION to
+    # same-site (loopback / the HUD served from this host). A page from any other
+    # origin is refused (CSRF/DNS-rebinding defense) even from 127.0.0.1, so a
+    # website you visit can't drive MEDO. Add an entry only for a trusted remote
+    # HUD, e.g. ["https://medo.example"].
+    allowed_origins: list[str] = Field(default_factory=list)
 
 
 class PointerConfig(BaseModel):
