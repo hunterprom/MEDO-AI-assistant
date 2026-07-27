@@ -26,6 +26,7 @@ from core.safety import is_affirmative, is_negative
 from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
 from llm.tools import build_tools, coerce_args, dispatch_tool
+from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: A query "needs live info" (search the web, current events) when it trips one
 #: of these. Used only to decide whether to borrow the tool-brain — a false
@@ -62,7 +63,6 @@ _FOLLOWUP_RE = re.compile(
 
 def _is_followup_question(text: str) -> bool:
     return "?" in text or bool(_FOLLOWUP_RE.search(text))
-from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: How many tool rounds before we force a final text answer (loop guard).
 MAX_TOOL_ROUNDS = 4
@@ -822,7 +822,15 @@ class Router:
             messages.append({"role": "tool", "name": name, "content": result.speech})
             if name in SYNTHESIS_TOOLS:
                 needs_synthesis = True
-            elif result.success and result.speech:
+            elif not result.success:
+                # A failed tool must not be silently dropped while its siblings
+                # speak their success — otherwise the user hears "opened X" and
+                # never learns Y failed (success-by-omission). Its message is
+                # already in `messages`, so force the model to synthesize a
+                # reply that reconciles the whole batch instead of returning
+                # only the successes.
+                needs_synthesis = True
+            elif result.speech:
                 direct.append(result.speech)
 
         # Structured tools already speak for themselves — answer directly.

@@ -266,9 +266,16 @@ class SystemInfoSkill(Skill):
     ]
 
     patterns = [
-        re.compile(r"\bbattery\b", re.IGNORECASE),
+        # "battery"/"memory" need a system frame, or they answer unrelated speech
+        # ("the battery in my car is dead", "how do I improve my memory") with
+        # this PC's stats. "ram"/"cpu" are unambiguous enough to stay bare.
+        re.compile(r"\b(?:my|laptop|pc|computer)\s+battery\b|"
+                   r"\bbattery\s+(?:level|percent(?:age)?|life|left|remaining|"
+                   r"charge|status)\b|\bhow\s+much\s+battery\b", re.IGNORECASE),
         re.compile(r"\b(?:cpu|processor)\s*(?:usage|load)?\b", re.IGNORECASE),
-        re.compile(r"\b(?:ram|memory)\s*(?:usage)?\b", re.IGNORECASE),
+        re.compile(r"\bram\b|\bmemory\s+(?:usage|used|free|available|left)\b|"
+                   r"\b(?:system|physical)\s+memory\b|\bhow\s+much\s+memory\b",
+                   re.IGNORECASE),
         re.compile(r"\bsystem\s+(?:status|stats|info)\b", re.IGNORECASE),
         # Disk / storage. Deliberately broad on the words people actually use
         # for it ("how much space do I have", "free space", "storage left").
@@ -401,11 +408,21 @@ class PowerSkill(Skill):
     controls_pc = True
     description = "Lock, sleep, shut down, or restart the machine."
 
+    #: A power skill is destructive (it arms a confirmation gate), so its verbs
+    #: must NAME the machine. Bare "sleep"/"restart" used to match — so "I need
+    #: some sleep tonight" or "let's restart the conversation" armed a real
+    #: suspend/reboot confirmation. Anchor on a device, exactly as "lock" does.
+    _PC = r"(?:computer|pc|laptop|desktop|machine|mac)"
     patterns = [
         re.compile(r"\block\s+(?:the\s+)?(?:screen|computer|pc|mac)\b", re.IGNORECASE),
-        re.compile(r"\b(?:go\s+to\s+)?sleep\b", re.IGNORECASE),
-        re.compile(r"\bshut\s*(?:down|off)\b", re.IGNORECASE),
-        re.compile(r"\b(?:restart|reboot)\b", re.IGNORECASE),
+        re.compile(rf"\b(?:sleep|suspend)\s+(?:the\s+|my\s+)?{_PC}\b", re.IGNORECASE),
+        re.compile(rf"\bput\s+(?:the\s+|my\s+)?{_PC}\s+(?:in)?to\s+sleep\b",
+                   re.IGNORECASE),
+        # "shut down" is unambiguous enough to keep bare; "shut off" needs the
+        # machine named so "shut off the music/lights" doesn't offer a shutdown.
+        re.compile(rf"\bshut\s+down\b|\bshut\s*off\s+(?:the\s+|my\s+)?{_PC}\b",
+                   re.IGNORECASE),
+        re.compile(rf"\breboot\b|\brestart\s+(?:the\s+|my\s+)?{_PC}\b", re.IGNORECASE),
     ]
 
     def _action(self, text: str) -> str | None:

@@ -98,8 +98,19 @@ class WeatherSkill(Skill):
                    rf"(?:\s+(?:in|for|at)\s+(?P<city>{_CITY}))?", re.IGNORECASE),
         re.compile(rf"\bweather(?:\s+like)?\s+(?:in|for|at)\s+(?P<cityb>{_CITY})"
                    rf"|^\s*(?:the\s+)?weather\s*[?.!]*$", re.IGNORECASE),
-        re.compile(rf"\bforecast\b(?:\s+(?:in|for)\s+(?P<city2>{_CITY}))?", re.IGNORECASE),
-        re.compile(r"\b(?:how\s+(?:hot|cold)|temperature)\b", re.IGNORECASE),
+        # "forecast" alone answered "sales/revenue forecast for Q3" with weather;
+        # keep bare weather "forecast" but not a business one named right before.
+        re.compile(rf"\b(?<!sales\s)(?<!revenue\s)(?<!budget\s)(?<!market\s)"
+                   rf"(?<!financial\s)(?<!economic\s)(?<!traffic\s)(?<!earnings\s)"
+                   rf"forecast\b(?:\s+(?:in|for)\s+(?P<city2>{_CITY}))?", re.IGNORECASE),
+        # "temperature" alone answered cooking/hardware/body questions ("what
+        # temperature to cook chicken", "GPU temperature") with the outdoor temp.
+        # Require a weather frame.
+        re.compile(r"\bhow\s+(?:hot|cold)\b(?!\s+(?:should|to|do|does|can|would|is\s+the))|"
+                   r"\btemperature\s+(?:outside|out\s+there|today|tonight|right\s+now|"
+                   r"this\s+(?:morning|afternoon|evening)|in|for|at)\b|"
+                   r"\bwhat(?:'?s| is)\s+the\s+temperature\b"
+                   r"(?!\s+(?:to|for|of|inside|when|should|at\s+which))", re.IGNORECASE),
         # Bare precipitation questions used to fabricate on the LLM path:
         # "will it snow", "is it going to rain", plain "is it raining/snowing".
         re.compile(r"\b(?:will\s+it|is\s+it\s+going\s+to)\s+(?:rain|snow)\b", re.IGNORECASE),
