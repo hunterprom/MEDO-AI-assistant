@@ -45,6 +45,12 @@ feedparser>=6.0      # news via RSS
 # "chrome"); only if you have none do you need `playwright install chromium`.
 playwright>=1.44
 
+# --- document / presentation generation (skills/documents_gen.py) ---
+# Small pure-Python packages (lxml + Pillow, already pulled by the voice/vision
+# stack, are their only heavy deps). HTML/Markdown output needs neither.
+python-docx>=1.1     # Word .docx
+python-pptx>=1.0     # PowerPoint .pptx
+
 # --- tooling ---
 pytest>=8.0
 pytest-asyncio>=0.23

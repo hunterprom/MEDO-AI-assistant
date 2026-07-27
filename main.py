@@ -198,6 +198,7 @@ def build_registry(
     browser_think=None,
     expert=None,
     synthesize_council=None,
+    compose=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -394,6 +395,11 @@ def build_registry(
     registry.register(FileEditSkill(whitelist))
     registry.register(OpenInEditorSkill(whitelist, apps_table))
     registry.register(FilesSkill(whitelist))
+    # Make a document/presentation about a topic — MEDO writes the content (via
+    # `compose`, the LLM) and renders it to Word/PowerPoint/HTML (core/documents).
+    from skills.documents_gen import MakeDocumentSkill
+
+    registry.register(MakeDocumentSkill(compose))   # saves to ~/Documents/MEDO
     # Application discovery. LocateApp answers "do I have X" (it only looks);
     # InstallApp is gated on a spoken yes AFTER naming the resolved package.
     from skills.appfinder import (
@@ -645,6 +651,28 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return "I found results, but my summarizer is offline."
         return (message.get("content") or "").strip() or "I couldn't summarize that."
 
+    async def compose(instruction: str) -> str:
+        """Write document/presentation content as Markdown (for MakeDocumentSkill).
+
+        Returns "" when there's no model, so the skill declines cleanly rather
+        than saving an empty file.
+        """
+        if not router.model:
+            return ""
+        prompt = [
+            {"role": "system", "content": (
+                "You are a writing assistant. Produce ONLY the requested content "
+                "as clean Markdown: '## ' for section or slide titles, short "
+                "paragraphs, and '- ' bullet lists. No code fences, no preamble, "
+                "no closing remarks.")},
+            {"role": "user", "content": instruction},
+        ]
+        try:
+            message = await llm.chat(router.model, prompt)
+        except LLMUnavailableError:
+            return ""
+        return (message.get("content") or "").strip()
+
     async def expert(system: str, user: str) -> str:
         """One specialist round-trip: a role prompt plus the question.
 
@@ -752,7 +780,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     registry = build_registry(settings, announcer, summarize, reminders, doc_index,
                               briefing_rewrite=briefing_rewrite, modes=modes,
                               browser_think=browser_think, expert=expert,
-                              synthesize_council=synthesize_council)
+                              synthesize_council=synthesize_council, compose=compose)
 
     # MCP: connect configured servers and register their tools as skills, so
     # any application that speaks the Model Context Protocol becomes callable
