@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fnmatch
 import logging
 import re
 import shutil
@@ -94,6 +95,20 @@ def _slugify(text: str, limit: int = 32) -> str:
     return (slug[:limit].rstrip("-")) or "change"
 
 
+def _path_matches(path: str, patterns: list[str]) -> bool:
+    """Repo-relative ``path`` against a glob list; ``dir/**`` matches the subtree."""
+    p = path.replace("\\", "/")
+    for pat in patterns:
+        pat = pat.replace("\\", "/")
+        if pat.endswith("/**"):
+            prefix = pat[:-3]
+            if p == prefix or p.startswith(prefix + "/"):
+                return True
+        elif fnmatch.fnmatch(p, pat):
+            return True
+    return False
+
+
 def _tail(text: str, limit: int = 2000) -> str:
     text = text.strip()
     return text if len(text) <= limit else "…\n" + text[-limit:]
@@ -154,6 +169,15 @@ class SelfDevEngine:
                 return Proposal(request, branch, worktree, base,
                                 agent_output=agent_output,
                                 error="the coding agent made no changes")
+            # Hard safety boundary: refuse a proposal that touched anything the
+            # denylist protects or the safelist doesn't allow — checked on the
+            # ACTUAL changed files, so it holds even if the agent ignored the note.
+            violation = self._scope_violation(files)
+            if violation:
+                logger.warning("self-dev: %s", violation)
+                await self._cleanup(branch, parent)
+                return Proposal(request, branch, worktree, base, files_changed=files,
+                                agent_output=agent_output, error=violation)
             await self._run_git(
                 ["commit", "-m", f"self-dev: {request[:60]}", "--no-verify"],
                 cwd=worktree)
@@ -218,9 +242,28 @@ class SelfDevEngine:
             lint_ok = True
         return tcode == 0, lint_ok, "\n\n".join(parts)
 
+    def _scope_violation(self, files: list[str]) -> str:
+        """Empty if every changed file is in scope, else why it's refused."""
+        denied = sorted(f for f in files
+                        if _path_matches(f, self._config.denylist))
+        if denied:
+            return "would change protected files (denylist): " + ", ".join(denied)
+        if self._config.safelist:
+            outside = sorted(f for f in files
+                             if not _path_matches(f, self._config.safelist))
+            if outside:
+                return "would change files outside the safelist: " + ", ".join(outside)
+        return ""
+
+    def _scope_note(self) -> str:
+        allowed = ", ".join(self._config.safelist) or "(anything)"
+        denied = ", ".join(self._config.denylist) or "(nothing)"
+        return (f"\nSCOPE — edit ONLY files matching: {allowed}\n"
+                f"NEVER edit: {denied}\n")
+
     async def _run_cli_agent(self, worktree: Path, request: str) -> str:
         """Drive the configured coding CLI to edit files in ``worktree``."""
-        prompt = _AGENT_PROMPT.format(request=request)
+        prompt = _AGENT_PROMPT.format(request=request) + self._scope_note()
         engine = self._config.engine
         if engine == "claude-code":
             argv = ["claude", "-p", prompt,

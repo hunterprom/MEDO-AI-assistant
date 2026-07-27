@@ -229,6 +229,17 @@ def build_registry(
     from skills.repeat_skill import RepeatSkill
 
     registry.register(RepeatSkill())
+
+    # Self-programming: MEDO proposes changes to its OWN code (core/self_dev.py),
+    # built in an isolated worktree and gated by the tests. Registered ONLY when
+    # opted in, and early so "fix your code" / "program yourself" win over broader
+    # patterns (e.g. notes' "add …").
+    if settings.self_dev.enabled:
+        from core.self_dev import SelfDevEngine
+        from skills.self_dev_skill import SelfDevSkill
+
+        registry.register(SelfDevSkill(
+            SelfDevEngine(settings.self_dev, PROJECT_ROOT), announcer))
     # Session-mode toggles (continuous conversation / interpreter). Registered
     # early so its phrases can't be stolen; flips the shared SessionModes the
     # voice loop reads. A no-op holder when modes weren't provided (tests).

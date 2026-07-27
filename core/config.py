@@ -961,6 +961,22 @@ class SelfDevConfig(BaseModel):
     #: propose & wait: proposals are never auto-merged. Only flip this for the
     #: 'auto-apply on green' autonomy level.
     auto_apply: bool = False
+    #: Repo-relative globs MEDO MAY change ("dir/**" = that whole subtree). A
+    #: proposal that touches anything outside the safelist is refused. Broad by
+    #: default (so it can fix bugs across the code), but the denylist always wins.
+    safelist: list[str] = Field(default_factory=lambda: [
+        "skills/**", "plugins/**", "tests/**", "core/**", "llm/**", "voice/**",
+        "vision/**", "ui/**", "link/**", "remote/**", "docs/**", "main.py", "*.md",
+    ])
+    #: Globs MEDO may NEVER change, even inside the safelist — the safety boundary:
+    #: its own engine, the confirmation/auth code, secrets, and this config (which
+    #: holds the safelist itself). Enforced by the engine on the ACTUAL changed
+    #: files after the agent runs, so it holds even if the agent tries to escape.
+    denylist: list[str] = Field(default_factory=lambda: [
+        "core/self_dev.py", "core/safety.py", "core/config.py",
+        "remote/server.py", "secrets.local.yaml", "secrets.local.yaml.bak",
+        "config.yaml", ".github/**", "run.bat", "run.command",
+    ])
 
 
 class Settings(BaseSettings):

@@ -43,16 +43,19 @@ def repo(tmp_path: Path) -> Path:
 
 def _config(**over) -> SelfDevConfig:
     # Deterministic gate: the "python" just exits 0/1, so the flow doesn't depend
-    # on pytest/ruff behaving inside a throwaway repo.
+    # on pytest/ruff behaving inside a throwaway repo. Scope checks off by default
+    # here (safelist/denylist empty) — they get their own dedicated tests.
     base = dict(enabled=True, test_cmd=["-c", "print('tests ok')"],
-                lint_cmd=["-c", "print('lint ok')"])
+                lint_cmd=["-c", "print('lint ok')"], safelist=[], denylist=[])
     base.update(over)
     return SelfDevConfig(**base)
 
 
 def _adds_file(name: str = "feature.py", body: str = "ADDED = True\n"):
     async def agent(worktree: Path, request: str) -> str:
-        (worktree / name).write_text(body, encoding="utf-8")
+        target = worktree / name
+        target.parent.mkdir(parents=True, exist_ok=True)   # allow nested paths
+        target.write_text(body, encoding="utf-8")
         return f"added {name}"
     return agent
 
@@ -145,6 +148,37 @@ async def test_lint_gate_ignores_preexisting_debt_in_untouched_files(repo):
 
     # legacy.py's F401 must NOT fail this proposal — only clean.py is linted.
     assert proposal.lint_ok is True and proposal.ok is True
+
+
+# --- the safety boundary: safelist / denylist --------------------------------
+
+@pytest.mark.asyncio
+async def test_denylist_refuses_a_protected_file(repo):
+    engine = _engine(repo, _config(denylist=["core/safety.py"]),
+                     _adds_file("core/safety.py", "HACKED = True\n"))
+    proposal = await engine.propose("mess with the safety module")
+    assert proposal.ok is False
+    assert "denylist" in proposal.error and "core/safety.py" in proposal.error
+    # refused proposals leave nothing behind
+    assert proposal.branch not in _git(repo, "branch", "--list", proposal.branch)
+    assert not (repo / "core" / "safety.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_safelist_refuses_an_out_of_scope_file(repo):
+    engine = _engine(repo, _config(safelist=["skills/**"]),
+                     _adds_file("core/newthing.py", "X = 1\n"))
+    proposal = await engine.propose("add a core module")
+    assert proposal.ok is False
+    assert "safelist" in proposal.error
+
+
+@pytest.mark.asyncio
+async def test_safelist_allows_an_in_scope_file(repo):
+    engine = _engine(repo, _config(safelist=["skills/**"], denylist=[]),
+                     _adds_file("skills/newthing.py", "ADDED = True\n"))
+    proposal = await engine.propose("add a new skill")
+    assert proposal.ok is True and proposal.files_changed == ["skills/newthing.py"]
 
 
 # --- the off switch -----------------------------------------------------------
