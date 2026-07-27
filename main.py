@@ -299,6 +299,11 @@ def build_registry(
         reminders=reminder_store, facts=facts, rewrite=briefing_rewrite,
     ))
     registry.register(NotesSkill(notes))
+    # Project organization — create projects, add/complete tasks, status.
+    from core.projects import ProjectStore
+    from skills.projects_skill import ProjectsSkill
+
+    registry.register(ProjectsSkill(ProjectStore(settings.memory.db_path)))
     # Long-term facts. Recall/forget register before remember so "what do you
     # remember" is answered, never stored.
     registry.register(RecallFactsSkill(facts, settings.memory.max_facts))
