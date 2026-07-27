@@ -625,7 +625,8 @@ council:                            # core/council.py — one expert per major
   max_members: 3                    # specialists per "convene" (latency dial)
   disabled: []                      # keys to switch off, e.g. ["law", "finance"]
   # Built in: electrical, robotics, mechanical, physics, quantum, mathematics,
-  # software, law, finance, economics. Add your own without touching code:
+  # software, law, finance, economics, marketing, design, data, cybersecurity,
+  # chemistry, medicine, biology, writing. Add your own without touching code:
   extra: {}
   #  metallurgy:
   #    title: "the metallurgist"

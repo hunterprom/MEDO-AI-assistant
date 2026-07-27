@@ -97,6 +97,55 @@ def test_rank_specialists_is_empty_off_topic():
     assert rank_specialists("what is the weather in Skopje") == []
 
 
+# --- the broadened bench (marketing, design, data, cybersecurity, ...) --------
+
+@pytest.mark.parametrize("spoken,key", [
+    ("marketing", "marketing"),
+    ("the marketing strategist", "marketing"),
+    ("marketer", "marketing"),
+    ("маркетинг", "marketing"),
+    ("designer", "design"),
+    ("the product designer", "design"),
+    ("the data scientist", "data"),
+    ("ml engineer", "data"),
+    ("the security engineer", "cybersecurity"),
+    ("pentester", "cybersecurity"),
+    ("chemist", "chemistry"),
+    ("doctor", "medicine"),
+    ("the physician", "medicine"),
+    ("biologist", "biology"),
+    ("the writer", "writing"),
+])
+def test_new_specialists_resolve_by_name(spoken, key):
+    found = find_specialist(spoken)
+    assert found is not None and found.key == key
+
+
+@pytest.mark.parametrize("question,key", [
+    ("help me with brand positioning and the marketing funnel", "marketing"),
+    ("my neural network is overfitting the dataset", "data"),
+    ("is there an injection vulnerability or exploit in this", "cybersecurity"),
+    ("what epoxy adhesive should I use", "chemistry"),
+    ("proofread this paragraph and fix the grammar", "writing"),
+])
+def test_new_specialists_are_routed_by_subject(question, key):
+    assert key in [s.key for s in rank_specialists(question)]
+
+
+def test_broadened_bench_keeps_the_roster_deterministic():
+    # New majors must not perturb the two rank invariants the router relies on.
+    assert rank_specialists("what is the weather in Skopje") == []
+    q = "the circuit voltage torque motor equation contract inflation"
+    assert len(rank_specialists(q, COUNCIL, 3)) == 3
+    # No two specialists share a trigger word (a shared trigger would make a
+    # convene non-deterministic about who it pulls in).
+    seen: dict[str, str] = {}
+    for s in COUNCIL:
+        for t in s.triggers:
+            assert t not in seen, f"trigger {t!r} shared by {seen.get(t)} and {s.key}"
+            seen[t] = s.key
+
+
 def test_rank_specialists_is_bounded_and_stable():
     q = "the circuit voltage torque motor equation contract inflation"
     first = rank_specialists(q, COUNCIL, limit=3)

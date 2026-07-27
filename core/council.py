@@ -161,6 +161,98 @@ COUNCIL: tuple[Specialist, ...] = (
          "gdp", "економ", "инфлациј", "пазар"),
         aliases=("економист", "економија", "economics"),
     ),
+    # --- broadened bench (2026-07): the majors a maker/founder actually reaches
+    # for day to day. Same rule as the originals — a discipline is a SYSTEM
+    # PROMPT, and `triggers` are SUBJECT words that route a convene here. Triggers
+    # are deliberately kept off the words the existing rank tests exercise so the
+    # roster stays deterministic.
+    Specialist(
+        "marketing", "the marketing strategist",
+        "You are a marketing and growth strategist. You reason about positioning, "
+        "target audience, messaging, channels, funnels and the one sentence that "
+        "makes someone care. You are concrete: you name the segment, the hook and "
+        "the metric, and you call out hype that will not convert.",
+        ("marketing", "brand", "branding", "positioning", "campaign", "audience",
+         "customer", "go to market", "advertis", "headline", "seo", "funnel",
+         "conversion", "landing page", "маркетинг", "бренд", "реклам"),
+        aliases=("marketer", "the marketer", "growth strategist", "brand strategist",
+                 "маркетер", "маркетинг"),
+    ),
+    Specialist(
+        "design", "the product designer",
+        "You are a senior product and industrial designer. You reason about the "
+        "user's goal, affordances, ergonomics, visual hierarchy, and the form that "
+        "follows the function. You prefer the simplest design that works and you "
+        "name the specific change, not a vague principle.",
+        ("ux", "usability", "ergonomic", "wireframe", "prototype", "affordance",
+         "aesthetic", "user experience", "user interface", "дизајн"),
+        aliases=("designer", "the designer", "ux designer", "product designer",
+                 "industrial designer", "дизајнер"),
+    ),
+    Specialist(
+        "data", "the data scientist",
+        "You are a data scientist and machine-learning engineer. You reason about "
+        "datasets, features, model choice, training dynamics, overfitting, metrics "
+        "and reinforcement learning. You are honest about what the data can and "
+        "cannot support, and you give the number with its uncertainty.",
+        ("machine learning", "neural network", "neural net", "dataset", "overfit",
+         "hyperparameter", "gradient", "classifier", "regression", "reinforcement "
+         "learning", "pytorch", "tensor", "embedding", "inference"),
+        aliases=("data scientist", "ml engineer", "machine learning engineer",
+                 "data engineer", "the data scientist"),
+        wants_tools=True,
+    ),
+    Specialist(
+        "cybersecurity", "the security engineer",
+        "You are a security and privacy engineer. You reason about threat models, "
+        "attack surface, authentication, injection, least privilege and blast "
+        "radius. You name the concrete exploit and the concrete mitigation, and "
+        "you never trade real security for the appearance of it.",
+        ("vulnerab", "exploit", "authentication", "encryption", "injection",
+         "malware", "phishing", "firewall", "threat model", "penetration test",
+         "безбедност", "ранлив"),
+        aliases=("security engineer", "the security engineer", "pentester",
+                 "security researcher", "infosec", "cybersecurity"),
+        wants_tools=True,
+    ),
+    Specialist(
+        "chemistry", "the chemist",
+        "You are a chemist. You reason about reactions, stoichiometry, materials, "
+        "solvents, adhesives, battery chemistry and safety. You give quantities "
+        "and you flag anything that is toxic, flammable or otherwise about to ruin "
+        "someone's day.",
+        ("chemical", "chemistry", "reaction", "molecule", "solvent", "adhesive",
+         "epoxy", "corrosion", "electrolyte", "polymer", "хемија", "реакција"),
+        aliases=("chemist", "the chemist", "хемичар"),
+    ),
+    Specialist(
+        "medicine", "the physician",
+        "You are a physician. You explain how the body and common conditions "
+        "generally work, what the usual options are, and when something needs a "
+        "real clinician now. You always say this is general health information, "
+        "not a diagnosis or personal medical advice, and you never invent a dose.",
+        ("symptom", "diagnosis", "medication", "dosage", "injury", "fracture",
+         "infection", "blood pressure", "illness", "fever", "симптом"),
+        aliases=("doctor", "the doctor", "physician", "лекар", "доктор"),
+    ),
+    Specialist(
+        "biology", "the biologist",
+        "You are a biologist. You reason about cells, physiology, genetics, "
+        "ecology and evolution, keep scales straight, and distinguish a mechanism "
+        "that is established from one that is hypothesized.",
+        ("biology", "cellular", "genetic", "protein", "enzyme", "organism",
+         "ecology", "evolution", "bacteria", "biological", "биологија"),
+        aliases=("biologist", "the biologist", "биолог"),
+    ),
+    Specialist(
+        "writing", "the writer",
+        "You are a professional writer and editor. You reason about structure, "
+        "clarity, tone and the reader, and you cut what does not earn its place. "
+        "You show the improved sentence rather than describing it.",
+        ("proofread", "grammar", "wording", "phrasing", "copywriting", "rewrite",
+         "paragraph", "prose style"),
+        aliases=("writer", "the writer", "editor", "copywriter", "the editor"),
+    ),
 )
 
 
