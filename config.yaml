@@ -385,19 +385,24 @@ wakeword:                           # M1
   # than TTS) voice extra head-room to trigger without letting normal talk in.
   # Watch your live score with `.venv\Scripts\python -m voice.wakeword`; nudge
   # up toward 0.5 if it ever false-fires, down toward 0.3 if it under-triggers.
-  # 0.3: tuned MORE SENSITIVE (was 0.4) — real "medo" scores ~1.0 so there's
-  # ample head-room, and stt_confirm (below) rejects anything that isn't speech.
-  threshold: 0.3
+  # 0.25: tuned VERY SENSITIVE (was 0.4 -> 0.3 -> 0.25) so even a faint "medo"
+  # triggers. This lets more ordinary speech blip a raw trigger, but stt_confirm
+  # (below) re-transcribes each one and only wakes on a real "medo", so the extra
+  # blips cost a short STT pass, not a false wake. Raise toward 0.4 if that STT
+  # work feels heavy or noise sneaks through.
+  threshold: 0.25
   # WAKING ON RANDOM SOUNDS? This is the main fix, no retraining needed. MEDO
   # only wakes when the score stays above `threshold` for this many consecutive
   # ~80 ms frames. A clap or a stray word spikes for ONE frame; a real
   # "hey medo" holds for several. 1 = the old twitchy single-frame trigger.
   # Raise to 3-4 if it still wakes to noise; lower toward 1 if it starts
   # missing a genuine "hey medo".
-  # 2: tuned MORE SENSITIVE (was 3) — catches a shorter/quieter "medo" while
-  # still needing the score to hold for two frames, so a one-frame spike (clap,
-  # door) doesn't wake it. Raise back to 3 if noise starts getting through.
-  trigger_frames: 2
+  # 1: MOST SENSITIVE (was 3 -> 2 -> 1) — a single over-threshold frame triggers,
+  # so the shortest "medo" wakes it. This is the twitchy single-frame mode; it's
+  # only safe here because stt_confirm rejects the one-frame claps/doors that get
+  # through. Raise back toward 2-3 if you want fewer STT passes / firmer noise
+  # rejection without relying on stt_confirm alone.
+  trigger_frames: 1
   # Speech gate (0 = off). Set ~0.5 to make MEDO ignore anything that isn't
   # SPEECH — music, door bangs, keyboard clatter never even get scored. Uses
   # openWakeWord's VAD model; if it can't load, MEDO warns and runs without it.
