@@ -1,0 +1,59 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-vision/
+venv/
+# First-run marker written by run.bat / run.command once the one-time setup
+# (Ollama, Obsidian, the local models) has completed — per-machine, not tracked.
+.medo-setup-done
+*.egg-info/
+.pytest_cache/
+.coverage
+# The assistant database — runtime state (your facts, notes, reminders, routing
+# metrics). *.db catches it whatever it's called: the jarvis->medo rename left
+# only the OLD name ignored, so medo.db silently became tracked and every run
+# produced a diff carrying personal data.
+*.db
+jarvis.db
+medo.db
+# Online API key(s), written by the HUD "connect online model" flow — never commit
+# Trailing * so backups (secrets.local.yaml.bak) can't slip past the pattern —
+# they hold the same API keys and auth token as the original.
+secrets.local.yaml*
+# Downloaded STT/TTS/wake-word models (fetched by setup, never committed).
+# models/* (not bare models/) so a re-include below can escape the ignore.
+models/*
+# ...but keep the wake-word folder's README so the path is documented in-repo.
+!models/wakeword/
+models/wakeword/*
+!models/wakeword/README.md
+*.onnx
+# ...but DO keep the trained "hey MEDO" wake model in the repo (it's small,
+# ~1-2 MB, and you want it versioned so it ships with the app).
+!models/wakeword/hey_medo.onnx
+*.onnx.json
+.DS_Store
+screenshots/
+medo_*.png
+# Obsidian per-machine state (vault lives in docs/)
+docs/.obsidian/workspace*
+docs/.obsidian/cache
+# Flutter build artifacts
+watch/build/
+watch/.dart_tool/
+watch/android/.gradle/
+# Controlled-browser profile (skills/browser.py): live session cookies for
+# every site you log MEDO into — as sensitive as secrets.local.yaml.
+browser-profile/
+medo.log
+medo.err.log
+vision.log
+vision.err.log
+# Wake-word debug captures — recordings of your own voice/room. Never commit.
+logs/
+
+# wake-word model backups (old versions live in git history)
+*.onnx.bak-*
+
+# real captured wake-word audio = the user's own voice; keep it local
+models/wakeword/real/

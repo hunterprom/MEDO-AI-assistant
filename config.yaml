@@ -1,0 +1,814 @@
+# =============================================================================
+# MEDO — configuration (super project: v1 jarvis-web + v2 merged)
+# Every subsystem is swappable from here without touching code.
+# Paths starting with ~ are expanded to your home directory.
+# =============================================================================
+
+llm:
+  # The brain MEDO thinks with. Switch here or live from the HUD CONFIG tab:
+  #   ollama       local Ollama server
+  #   openai       any OpenAI-compatible cloud API (GPT, Groq, ...)
+  #   anthropic    the Claude API (api.anthropic.com)
+  #   claude-code  the locally installed `claude` CLI agent (Claude Code)
+  #   codex        the locally installed `codex` CLI agent (OpenAI Codex)
+  provider: "ollama"
+  host: "http://localhost:11434"   # Ollama server
+  # api_key: leave empty for local Ollama; set to use any OpenAI-compatible cloud model
+  api_key: ""
+  openai_base_url: "https://api.openai.com/v1"   # base URL of the OpenAI-compatible API
+  # Claude API (provider: anthropic) — its own key, so GPT + Claude coexist.
+  # Prefer entering keys in the HUD: they land in git-ignored secrets.local.yaml.
+  anthropic_api_key: ""
+  anthropic_base_url: "https://api.anthropic.com"
+  anthropic_max_tokens: 1024       # Claude requires an output cap (spoken replies are short)
+  # CLI agents (provider: claude-code | codex): executable name or full path.
+  # They use their own login (`claude login` / `codex login`) — no key here.
+  claude_cmd: "claude"
+  codex_cmd: "codex"
+  cli_timeout_s: 180               # CLI agents think longer than a bare model call
+  # The brain. qwen3:30b is a thinking model — its </think> reasoning is
+  # stripped in llm/client.py. Falls back to the first installed model if absent.
+  default_model: "qwen3:30b"
+  fallback_model: "llama3.2:3b"
+  # Auto tool-brain: the CLI brains (claude-code/codex) can't use MEDO's tools,
+  # so a query needing live/online info is answered by this local Ollama model
+  # for that ONE turn (it has web_search etc.), then MEDO reverts to your
+  # selected brain. "" disables. Must be pulled in Ollama.
+  tool_brain_model: "qwen3:30b"
+  temperature: 0.6
+  num_ctx: 4096                    # 8192 OOMs a 12 GB GPU with the 30B — keep 4096
+  keep_alive: "30m"                # keep the model loaded between turns (no reload stalls)
+  request_timeout_s: 120
+
+router:
+  fast_path_enabled: true           # deterministic skills before touching the LLM
+  # Tier-2 SEMANTIC router: when no regex matches, reach a query skill by MEANING
+  # before paying for the LLM. Change it live from the HUD CONFIG tab
+  # (SEMANTIC TIER · OFF / SHADOW / LIVE) — that choice is remembered per machine
+  # in secrets.local.yaml; the two flags below are only the boot default.
+  #   enabled: false                  -> OFF    (fast -> LLM, as before)
+  #   enabled: true, shadow: true     -> SHADOW (logs the would-be route, still uses the LLM)
+  #   enabled: true, shadow: false    -> LIVE   (routes by meaning)
+  semantic_enabled: true
+  semantic_shadow: true             # log-only until proven on real usage, then go LIVE
+  semantic_threshold: 0.6           # min cosine similarity to route
+  semantic_margin: 0.04             # the best match must beat the runner-up by this
+  # Adaptive route memory: LEARN (utterance -> skill) from confirmed single-tool
+  # LLM resolutions, then shortcut the same phrasing on the semantic tier. Off by
+  # default; CONSULTING what it learned still obeys the semantic mode above.
+  route_memory_enabled: false
+  route_memory_threshold: 0.82      # HIGH cosine gate, no margin (near-exact phrasings)
+  route_memory_max: 500             # row cap; least-used exemplars evicted past this
+
+conversation:                       # continuous mode (voice/loop.py, core/modes.py)
+  # When on, MEDO keeps listening after each reply for a natural follow-up
+  # WITHOUT the wake word. Toggle live by voice ("continuous mode on") or the
+  # HUD CONFIG switch — this is only the boot default.
+  continuous: false
+  followup_window_s: 8.0            # mic stays open this long for a follow-up,
+                                    # then falls back to standby on silence
+  # After you interrupt MEDO by saying "medo" over its reply, keep listening for
+  # a follow-up without the wake word? false = interrupting just stops MEDO and
+  # it returns to standby (it won't sit there recording the silence after).
+  # true = chain "medo — actually, do X" in one breath.
+  listen_after_barge: false
+  # Dictation ("take dictation" … "stop dictation"): everything heard is
+  # written down instead of answered, with no wake word between lines. Composing
+  # involves pauses, so it gets a longer silence gate and ceiling than a command.
+  dictation_dir: "~/Documents"
+  dictation_file: "dictation.md"
+  dictation_silence_s: 2.5
+  dictation_max_utterance_s: 90.0
+
+personality:
+  name: "MEDO"
+  address_user_as: "sir"            # used sparingly by the system prompt (M4)
+  # The Jarvis charm (core/persona.py, M7). A decorator layer over the fast
+  # path plus a manner fragment in the LLM system prompt — skills stay literal.
+  style: "dry_wit"                  # dry_wit | professional | minimal
+  wit_level: 0.3                    # 0 = never quip, 1 = quip often (fast path only;
+                                    # never on errors, confirmations, or destructive acts)
+  quips_language: "match"           # match user's language (mk quips for mk input) | en | mk
+
+filler:                             # 'let me think' fillers on slow LLM answers
+  # Bridges dead air while a slow model composes (a hard local query, or Claude
+  # Code, which says nothing until it's wholly done). LLM path ONLY — the fast
+  # path answers in milliseconds and never triggers this. Phrases are per
+  # language in lang/filler_phrases/<code>.yaml and follow the active languages.
+  enabled: true
+  delay_s: 8.0                      # speak a filler if still silent after this
+  big_delay_s: 2.0                  # a big/complex question gets a quicker one
+  big_question_words: 12            # >= this many words counts as "big"
+  followup_s: 12.0                  # one more "still working on it" after this
+
+remote:
+  # Companion API for the watch app (remote/server.py). LAN-only; there is no
+  # TLS — never forward this port beyond your local network.
+  enabled: false                    # true = always serve; --serve flag also works
+  host: "0.0.0.0"                   # bind address (0.0.0.0 = every interface)
+  port: 8710
+  # Bearer-token auth for LAN clients. The token is generated on first serve
+  # and stored in git-ignored secrets.local.yaml (remote.token). Easiest setup:
+  # tap "Pair with MEDO" on the watch — it finds this PC (UDP discovery below),
+  # MEDO flashes a 6-digit code on this screen, and typing that code on the
+  # watch delivers the token automatically. Requests from this machine
+  # (127.0.0.1: the HUD, the vision sidecar) never need a token. false = old
+  # open behavior (UNSAFE: anyone on your network can type, screenshot, and
+  # power off this PC).
+  auth_enabled: true
+  # Answer "who is MEDO?" UDP broadcasts (same port) so the watch can find
+  # this machine without anyone typing an IP. Reveals only name + port.
+  discovery_enabled: true
+
+vision:                             # camera hand-gesture control (sidecar process)
+  enabled: true                     # auto-serve the API so the gesture sidecar connects
+  camera_index: 0
+  stream_port: 8731                 # MJPEG stream the HUD embeds
+  flip: true                        # mirror the selfie view
+  # Draw the coloured hand skeleton on the camera feed? false = invisible
+  # tracking: gestures still work, but neither you nor the vision model sees
+  # coloured lines on your hands (that overlay is drawn on the very frame the
+  # "what do you see" model looks at). true = show it as pointer feedback.
+  show_hand_tracking: false
+  max_fps: 15                       # throttle inference on CPU
+  min_detection_confidence: 0.6
+  min_tracking_confidence: 0.5
+  stability_frames: 6               # consecutive frames to confirm a gesture
+  cooldown_s: 2.0                   # min gap before re-firing a gesture
+  # --- exact gesture signatures (vision/gestures.py) --------------------------
+  # Every gesture is an EXACT per-finger signature, not a heuristic. A pose that
+  # does not match every required digit is UNKNOWN — there is no "nearest
+  # gesture" fallback, which is what stopped in-between poses firing actions.
+  #   E = extended  C = curled  . = don't care        T I M R P
+  #   pinch      E E C C C   + thumb/index tips touching
+  #   l_shape    E E C C C   + tips apart, thumb-index at ~90 deg   -> next tab
+  #   zoom       E E C C C   + tips apart, BOTH HANDS               -> zoom
+  #   rock       . E C C E   + index/pinky splayed >= 50 deg        -> zoom
+  #   victory    C E E C C   + index/middle splayed                 -> scroll
+  #   three      C E E E C                                          -> right click
+  #   four       C E E E E                                          -> taskbar
+  #   open_palm  E E E E E
+  #   thumbs_up  E C C C C                                          -> volume up
+  #   pinky_up   C C C C E                                          -> volume down
+  #   point_up   . E C C C   + tips apart, not an L                 -> move cursor
+  #   fist       C C C C C                                          -> idle / exit
+  # Run  .venv\Scripts\python -m vision.gestures --list  to print this table
+  # live, with each gesture's binding — anything shown UNBOUND is defined but
+  # unreachable.
+  gesture_recognition:
+    min_confidence: 0.85            # how deep inside its band every REQUIRED finger
+                                    # must sit (0 = on the threshold, 1 = perfect).
+                                    # gestures hard to trigger? lower to ~0.7
+    hold_frames: 3                  # consecutive frames the same signature must hold
+                                    # before it fires. raise if gestures still flicker
+    hysteresis: true                # after firing, the hand must leave the pose before
+                                    # it can fire again. false = a held pose repeats
+  pointer:                          # gesture mouse control ("pointer on|off", HUD toggle)
+    enabled: true                   # feature available (runtime toggle always starts OFF)
+    sensitivity: 2.5                # hand movement -> cursor movement amplification
+    ema_alpha: 0.4                  # smoothing (0..1; higher = snappier, lower = steadier)
+    click_debounce_ms: 600          # min gap between gesture right-clicks
+    hold_frames: 3                  # frames a right-click pose must hold before it fires
+    scroll_gain: 45.0               # victory pose: hand up/down -> scroll speed
+    zoom_gain: 25.0                 # rock pose: hand up/down -> zoom speed (ctrl+wheel)
+    volume_interval_ms: 180         # min gap between volume steps while thumbs-up/pinky held
+    exit_hold_frames: 18            # frames a fist must HOLD to exit (~1.2 s; brief
+                                    # fist misreads while pointing don't kick you out)
+    # --- gesture geometry (vision/gestures.py) ---------------------------------
+    # A finger's state is the angle at its middle knuckle, so there is a dead band
+    # between "curled" and "extended". strict_gestures rejects the whole hand while
+    # ANY finger sits in that band -> a hand halfway into a fist no longer flashes
+    # through rock/victory and fires a zoom or a scroll.
+    strict_gestures: true           # false = old loose behavior (twitchy, fires mid-motion)
+    extended_min_deg: 160.0         # >= this angle counts as extended (180 = dead straight).
+                                    # gestures too hard to trigger? LOWER it (e.g. 150)
+    curled_max_deg: 100.0           # <= this angle counts as curled.
+                                    # gestures too twitchy? LOWER it (e.g. 80) to widen
+                                    # the dead band; raise both bounds toward each other
+                                    # to make recognition looser and faster
+    zoom_min_spread_deg: 50.0       # rock/zoom pose: min angle between index and pinky.
+                                    # zoom fires by accident? RAISE it (e.g. 65). can't
+                                    # get zoom to start? LOWER it (e.g. 35)
+    l_shape_tolerance_deg: 25.0
+    # --- window / tab navigation ------------------------------------------------
+    # The cursor is worst at small targets: a taskbar icon is ~40 px and a browser
+    # tab strip is worse. These poses send key chords instead, so no aiming:
+    #   L shape (thumb + index at 90 deg) -> next tab      (Ctrl+Tab)
+    #   four fingers, thumb tucked        -> focus taskbar (Win+T, then arrows/Enter)
+    # Held longer and debounced harder than a click, because they jump you between
+    # windows and a single misread frame must never fire one.
+    # --- click snapping ---------------------------------------------------------
+    # Pinching pulls the fingertip DOWN as the thumb comes up, so the click lands
+    # just below the button you were aiming at. Snap asks the OS what is clickable
+    # near the cursor and presses the nearest one instead.
+    # It never snaps silently: the chosen target is outlined on screen and the
+    # click waits snap_confirm_ms, so a wrong pick is visible and you can pull your
+    # hand back. Nothing in range, or no accessibility data -> clicks the raw
+    # cursor position, exactly as before.
+    snap_enabled: true
+    snap_radius_px: 100             # capture circle around the cursor. bigger =
+                                    # more forgiving but more likely to pick a
+                                    # neighbour; 0 disables snapping entirely
+    snap_confirm_ms: 250            # preview delay before the click. 0 = instant
+                                    # (still outlines the target)
+    snap_above_bias_px: 20.0        # distance discount for targets ABOVE the
+                                    # cursor, since the drift is downward. raise
+                                    # if it still lands low; 0 = pure distance
+    snap_highlight: true            # draw the ring/box. false = snap silently
+                                    # (not recommended — that is the trust issue)
+    nav_hold_frames: 5
+    nav_debounce_ms: 900
+    # Rebind any pose. Actions: move, drag, scroll, zoom, right_click, volume_up,
+    # volume_down, next_tab, switch_window, taskbar, idle. open_palm is unbound on
+    # purpose (a hand passes through it while opening) — bind it if you want it.
+    pose_actions: {}
+    #  open_palm: "switch_window"     # L pose (thumb + index): how far off a 90 deg corner
+                                    # is still an L. raise = easier to hit but bleeds into
+                                    # plain pointing; lower = stricter right angle
+  bench:                            # M10: 2nd workbench camera (skills/bench.py)
+    enabled: false                  # "what's on my bench" / "identify this part" /
+                                    # "log this part" / "do i have any 10k resistors"
+    camera_index: 1                 # opened per request, released immediately —
+                                    # never streamed (privacy + VRAM)
+  # Screen agent (EXPERIMENTAL, skills/screen_agent.py): "do this for me: …"
+  # looks at the screen and clicks/types/scrolls toward a goal. Gated by the
+  # PC-control switch AND a spoken confirmation; bounded to agent_max_steps.
+  agent_enabled: true
+  agent_max_steps: 6
+  # NOTE: this build is pointer-only — the gesture->utterance map below is no
+  # longer routed (kept for reference / future re-enable). Pointer poses:
+  #   index=move, pinch=drag/click, victory=scroll, rock=zoom, three=right-click,
+  #   thumbs_up=volume up, pinky=volume down, HELD fist=exit,
+  #   anything unrecognized keeps moving the cursor.
+  gestures:                         # (inactive) recognized gesture -> routed utterance
+    thumbs_up: "yes"                # confirm a pending action (safety gate)
+    open_palm: "no"                 # cancel
+    victory:   "take a screenshot"
+    point_up:  "volume up"
+    three:     "volume down"        # index+middle+ring extended
+    fist:      "mute"
+    pinch:     "lock the screen"    # thumb tip touches index tip
+    rock:      "play music"         # index+pinky extended (play/pause)
+
+hud:                                # M.E.D.O. web HUD arc-reactor UI (--hud)
+  enabled: false
+  host: "127.0.0.1"
+  port: 8730
+
+ui:                                 # HUD look + the desktop presence sphere
+  overlay:                          # ui/overlay.py — always-on-top corner sphere
+    # A small CORE sphere pinned to a screen corner so MEDO stays VISIBLE while
+    # you work in other apps: it shows state (idle / listening / thinking /
+    # speaking) and bubbles up what you said and what it answered.
+    #   click        -> start listening now (same as saying the wake word;
+    #                   while it's speaking, a click interrupts instead)
+    #   double-click -> open the full HUD
+    #   right-click  -> menu · drag -> move it
+    # It adds NO listening of its own — the wake word already runs with the mic
+    # open whatever is on screen. This is the presence, not a second ear.
+    # Needs the HUD running for live state (--hud) and the companion API
+    # (--serve) for click-to-talk; without them it sits dim and retries.
+    enabled: true
+    size: 132                       # sphere diameter in px
+    corner: "bottom-right"          # bottom-right | bottom-left | top-right | top-left
+    margin: 18                      # gap from the screen edge
+    # CPU dial: the sphere is composed in Python (~9 ms/frame), so 12 fps is
+    # roughly 10% of ONE core. Drop to 8 for a near-free widget.
+    fps: 12
+
+# --- Subsystems below are configured now but wired in later milestones ---
+
+languages:                          # constrained two-language mode
+  # MEDO runs with AT MOST 2 ACTIVE languages at a time, and per-utterance
+  # detection is constrained to that pair. This is an ACCURACY feature, not just
+  # a preference: two known candidates beat open-ended language ID (spoken
+  # Macedonian heard as Bulgarian, Spanish as Portuguese) — the single biggest
+  # lever on reliable bilingual STT. Everything language-dependent (STT clamp,
+  # yes/no words, persona/filler phrases, TTS voice) reads from `active` below.
+  #
+  # `available` = everything MEDO can support (must be in core/languages.py).
+  available: ["en", "mk", "de", "fr", "es", "it", "pt", "nl", "pl",
+              "ru", "tr", "el", "zh", "ja", "ko", "hi"]
+  # `active` = the <=2 languages live right now. Default English + Macedonian.
+  # Put any two from `available` here (e.g. ["en", "es"]); more than two is
+  # rejected on load.
+  active: ["en", "mk"]
+  # `primary` = the fallback (voice used when another active language lacks one,
+  # and the language the system prompt is written in). Must be one of `active`.
+  primary: "en"
+  # `auto_pair` detects PER UTTERANCE between the two active languages; `fixed`
+  # always transcribes as `primary` (fastest/most accurate if you only speak one).
+  detection: "auto_pair"
+  # NOTE: the WAKE WORD is a separate trained model (wakeword.phrase) — changing
+  # the active languages here does NOT change the phrase MEDO wakes to. To wake
+  # in a different language, train a new wake model (see docs/Wake Word Training).
+
+stt:                                # M1
+  engine: "faster-whisper"
+  # large-v3-turbo: near-large accuracy at ~medium size (~1.6 GB download on
+  # first run). "small" was the Macedonian bottleneck — fine for "Како си?",
+  # garbled anything complex. Runs on the GPU (float16) when CUDA's math libs
+  # are loadable (pip install nvidia-cublas-cu12 nvidia-cudnn-cu12 — the run
+  # environment has them); falls back to CPU int8, slower but correct.
+  model: "large-v3-turbo"           # tiny | base | small | medium | large-v3-turbo
+  device: "auto"                    # auto | cuda | cpu
+  compute_type: "auto"
+  language: null                    # null = auto-detect per utterance (Macedonian + English)
+  # Manual language selection. "auto" detects per utterance (the default);
+  # any code below FORCES it — Whisper stops guessing, decodes as that
+  # language, and MEDO answers in it. A real code here wins over `language:`
+  # above; "auto" means "no override from here" — it defers to `language:`
+  # (which is null = real auto-detect by default, but is respected if you set
+  # it, e.g. language: "mk").
+  #
+  # Reliable to force: en, mk, de, fr, es, it, pt, nl, pl, ru, tr, el, ja, ko,
+  # zh, hi — every language in core/languages.py has a matching neural voice.
+  # Anything else falls back to auto-detect with a warning in the log.
+  #
+  # Worth forcing when auto-detect keeps guessing wrong: short commands carry
+  # little signal, and close neighbours (mk vs bg/sr, es vs pt, hi vs ur) are
+  # where it actually fails. The cost is that MEDO stops understanding your
+  # other languages until you set this back to "auto".
+  language_mode: "auto"             # auto | en | mk | de | ja | ...
+  # Auto-detect clamp: Whisper regularly hears Macedonian as Bulgarian/Serbian
+  # and then decodes garbage. Detections outside this list trigger ONE forced
+  # re-transcription as "mk". Empty list = no clamp.
+  # Languages MEDO listens for. This is a CLAMP, not a wish list: Whisper
+  # picks from these only, which is what keeps Macedonian from decoding as
+  # Bulgarian. Trim it to the languages you actually speak and accuracy rises.
+  allowed_languages: ["en", "mk", "de", "fr", "es", "it", "pt", "nl", "pl",
+                      "ru", "tr", "el", "zh", "ja", "ko", "hi"]
+  beam_size: 5                      # beam search — more accurate than greedy (1)
+  vad_filter: true                  # drop non-speech frames before decoding
+  condition_on_previous_text: false # avoids runaway repeats on short clips
+  filter_hallucinations: true       # drop low-confidence/junk Whisper segments
+  no_speech_threshold: 0.6          # whisper non-speech gate
+  # initial_prompt biases decoding toward command words but skews non-English
+  # transcripts — keep it null while language auto-detect is on. If you pin
+  # language: "en", restore the example prompt from the README.
+  initial_prompt: null
+
+tts:                                # M1
+  engine: "piper"
+  voice_model: "models/piper/en_US-lessac-medium.onnx"   # relative to project root
+  speed: 1.0
+  multilingual: true                # Cyrillic replies -> Macedonian neural voice (edge-tts, online)
+  mk_voice: "mk-MK-MarijaNeural"    # or mk-MK-AleksandarNeural (male)
+
+wakeword:                           # M1
+  engine: "openwakeword"
+  # Either a bundled openWakeWord model name ("hey_jarvis") or a PATH to your
+  # own trained model, .onnx or .tflite — absolute, ~, or relative to the
+  # project root, e.g. "models/wakeword/hey_medo.onnx". To make "hey MEDO":
+  #   1) generate a diverse sample set (edge-tts + Piper):
+  #        .venv\Scripts\python -m voice.train_wakeword --generate
+  #   2) train it (~1 h on a free Colab GPU) — the script prints the steps;
+  #      see docs/Wake Word Training.md for the full runbook.
+  #   3) drop hey_medo.onnx in models/wakeword/ and set phrase to it below.
+  phrase: "models/wakeword/hey_medo.onnx"   # custom model, fires on BOTH "medo"
+                                    # and "hey medo". Retrained 2026-07-24 on the
+                                    # OWNER'S REAL captured voice (scripts/
+                                    # capture_wake_samples.py) folded into the
+                                    # synthetic set: on real mic clips it fires
+                                    # on 95% of genuine "medo" (the synthetic-only
+                                    # model caught 0% of natural, quiet "medo")
+                                    # and false-fires on ~7% of ordinary speech
+                                    # (all rejected by stt_confirm). To retune to
+                                    # a new voice/room, recapture + retrain with
+                                    # scripts/train_wakeword_deep.py --real-dir.
+  # Lower = easier to trigger (0.5 is openWakeWord's default; 0.4 helps a
+  # non-native "hey jarvis"). Watch your live score with:
+  #   .venv\Scripts\python -m voice.wakeword
+  # If the mic level stays ~0 there, it's the input device, not the threshold.
+  # 0.4 for the retrained hey_medo model: it scores ~1.0 on "medo"/"hey medo"
+  # and ~0 on ordinary speech, so the gap is wide — 0.4 gives your real (quieter
+  # than TTS) voice extra head-room to trigger without letting normal talk in.
+  # Watch your live score with `.venv\Scripts\python -m voice.wakeword`; nudge
+  # up toward 0.5 if it ever false-fires, down toward 0.3 if it under-triggers.
+  # 0.20: tuned VERY SENSITIVE (was 0.4 -> 0.3 -> 0.25 -> 0.20) so even a faint,
+  # quiet "medo" that used to score just under the bar now reaches the confirm
+  # stage. This lets more ordinary speech blip a raw trigger, but stt_confirm
+  # (below) re-transcribes each one and only wakes on a real "medo", so the extra
+  # blips cost a short STT pass, not a false wake. Raise toward 0.4 if that STT
+  # work feels heavy or noise sneaks through; drop toward 0.15 for even more
+  # reach (at more STT passes on ambient sound).
+  threshold: 0.20
+  # WAKING ON RANDOM SOUNDS? This is the main fix, no retraining needed. MEDO
+  # only wakes when the score stays above `threshold` for this many consecutive
+  # ~80 ms frames. A clap or a stray word spikes for ONE frame; a real
+  # "hey medo" holds for several. 1 = the old twitchy single-frame trigger.
+  # Raise to 3-4 if it still wakes to noise; lower toward 1 if it starts
+  # missing a genuine "hey medo".
+  # 1: MOST SENSITIVE (was 3 -> 2 -> 1) — a single over-threshold frame triggers,
+  # so the shortest "medo" wakes it. This is the twitchy single-frame mode; it's
+  # only safe here because stt_confirm rejects the one-frame claps/doors that get
+  # through. Raise back toward 2-3 if you want fewer STT passes / firmer noise
+  # rejection without relying on stt_confirm alone.
+  trigger_frames: 1
+  # Speech gate (0 = off). Set ~0.5 to make MEDO ignore anything that isn't
+  # SPEECH — music, door bangs, keyboard clatter never even get scored. Uses
+  # openWakeWord's VAD model; if it can't load, MEDO warns and runs without it.
+  vad_threshold: 0.0
+  # DIAGNOSIS: log every wake activation (real or false) + save the ~1.5 s of
+  # audio that triggered it to logs/wake_captures/. Turn on, then for a day slam
+  # doors, play music, and say the wake word; then:
+  #   .venv\Scripts\python -m voice.wakeword --report
+  # to see where the noise scores vs the real wake word, and set `threshold`
+  # from that (above the noise cluster, below the real one). The captures are
+  # your own voice — logs/ is git-ignored. Watch it live meanwhile with:
+  #   .venv\Scripts\python -m voice.wakeword --monitor
+  debug_capture: false
+  # STRONGEST loud-noise defence (on by default). After the wake score crosses
+  # the threshold, MEDO re-transcribes the ~1.5 s that triggered it and only
+  # actually wakes if "medo" is really in the audio. A door slam, music or a
+  # clap transcribes to nothing -> discarded silently. Verifies WORDS, not just
+  # a score, so a loud transient can't fake it. One short STT pass per trigger.
+  # Turn OFF only if a real "hey medo" is being wrongly rejected.
+  stt_confirm: true
+  # Still too many false wakes after tuning? The model itself can be retrained
+  # with HARD NEGATIVES (your room's loud sounds), NOT just more epochs — see
+  # docs/Wake Word Training.md. More training time != fewer loud-noise triggers;
+  # better negatives do.
+
+audio:                              # M1
+  # Which microphone the wake word listens on — a PRIORITY LIST: the first
+  # available device wins, and MEDO hot-swaps within ~2 s when a higher-priority
+  # one connects. "A25" = the Bluetooth headphones' hands-free mic (used the
+  # moment the headset connects to the PC for calls/voice); the webcam mic is
+  # the fallback so voice keeps working when the headphones are off. Entries
+  # can be an index or a name substring; run
+  #   .venv\Scripts\python -m voice.wakeword
+  # to list devices + watch live levels. null = system default.
+  input_device: ["A25", "FHD Webcam"]
+  output_device: null
+  sample_rate: 16000
+  # How much quiet ends an utterance, and the hard ceiling on one. 1.0/12 s cut
+  # people off mid-question; raise silence_duration_s if MEDO stops while you
+  # are still thinking, and max_utterance_s for genuinely long questions.
+  silence_threshold: 0.015
+  silence_duration_s: 1.4
+  max_utterance_s: 30.0
+  # What may interrupt MEDO mid-reply:
+  #   wake  = ONLY the wake word ("medo") or the HUD/watch interrupt button;
+  #           a random word or background noise won't cut it off (default).
+  #   voice = also any sustained speech/noise over the reply — talk over MEDO
+  #           without saying its name (older, twitchier behaviour).
+  #   off   = only the HUD/watch button; the mic never interrupts playback.
+  barge_mode: "wake"
+  # The knobs below apply to the wake/voice detectors. The energy bar (used
+  # only in "voice" mode) is your voice vs MEDO's own sound leaking back into
+  # the mic, so it depends on your speakers and room. On this machine leakage
+  # measures ~0.011 rms; barge_rms_ratio 2.0 puts the bar at ~0.022. Lower
+  # barge_wake_threshold if saying "medo" over MEDO doesn't stop it; raise it
+  # if MEDO cuts itself off. Run: .venv\Scripts\python -m voice.bargecheck
+  barge_wake_threshold: 0.25
+  # Consecutive "medo" frames needed to interrupt a reply — DECOUPLED from the
+  # idle wakeword.trigger_frames (which is 1 for hyper-sensitive waking). Keeping
+  # this at 3 means MEDO's own speaker-leakage / a one-frame blip can't cut its
+  # reply off; only a real, sustained "medo" over the reply does. Raise if it
+  # still cuts itself off; lower toward 1 if it's hard to interrupt on purpose.
+  barge_wake_frames: 3
+  barge_rms_ratio: 2.0
+  barge_min_rms: 0.02
+  barge_hold_frames: 3
+  # RMS below this counts as silence (speech onset gate). Quiet webcam/onboard
+  # mics peak at only a few percent — 0.015 was above their speech level, so
+  # recording never "started" and MEDO seemed deaf after waking. The adaptive
+  # floor (ambient*2.5) still raises this automatically in noisy rooms.
+  silence_threshold: 0.006
+  # Stop recording after this much continuous quiet. 1.0 s cut complex
+  # sentences off at natural mid-thought pauses ("Кажи ми... [pause] ...какво
+  # ќе биде времето") — 1.4 s trades a touch of snappiness for whole sentences.
+  silence_duration_s: 1.4
+
+safety:                             # M2
+  confirm_destructive: true
+  # Master switch: may MEDO ACT on this computer (type, click, open apps and
+  # websites, move files, power)? Toggle it live from the HUD CONFIG tab
+  # ("PC control") — the live choice persists per machine in
+  # secrets.local.yaml. Sensing (vision, weather, questions) always works.
+  pc_control_enabled: true
+  whitelist_dirs:                   # files.py may only touch these trees
+    - "~/Documents"
+    - "~/Downloads"
+    - "~/Desktop"
+
+mode:
+  # Expert PROFILES — presentation + which skills are surfaced. NOT safety
+  # switches: none of these relax the confirmation gate, the whitelist, or the
+  # PC-control switch.
+  #
+  # MEDO LION MODE — the defensive-security profile. Off, and it resets to off
+  # on every restart. While on it reskins the HUD deep red, shows a LION
+  # indicator, and surfaces read-only, LOCAL-machine audit skills: a listening-
+  # port check, a firewall audit, a process explainer, a file-permission
+  # explainer, and an update/hygiene check. It is DEFENSIVE-ONLY — it will not
+  # scan other machines, write exploits, crack credentials, or disable MEDO's
+  # own guards, and it changes nothing about safety. Turn on by voice:
+  # "lion mode on".
+  lion: false
+
+self_dev:
+  # MEDO editing its OWN code (core/self_dev.py). The master consent: only when
+  # this is on is the skill registered at all. It still only SURFACES in Lion
+  # mode ("lion mode on"), builds every change in an isolated git worktree gated
+  # by the test suite, refuses to touch the denylist (its own engine, the
+  # safety/auth code, secrets), and never merges or restarts without your
+  # approval. Turn off to remove the capability entirely.
+  enabled: true
+
+app_builder:
+  # MEDO building standalone apps ("make an app that ...") with the coding agent.
+  # Unlike self_dev, it never touches MEDO's own code — it scaffolds a NEW,
+  # self-contained project in its own folder under apps_dir. The agent runs on
+  # this machine (writing files only, no shell), so this is opt-in.
+  enabled: true
+  apps_dir: "~/MEDO-apps"
+
+skills:
+  # Your own wording for any skill, without touching Python. Each phrase below
+  # becomes one more fast-path trigger for that skill — matched literally (not
+  # as a regex), case-insensitively, anywhere in the sentence, and tried BEFORE
+  # the built-in patterns. Works in any language MEDO listens to.
+  #
+  # Skill names are the ones printed by `python main.py --list-skills`; a name
+  # that doesn't exist is logged as a warning at startup, not silently ignored.
+  # Phrases shorter than 3 characters are rejected — "go" would shadow half the
+  # router. A custom phrase does NOT bypass safety: a skill that asks for
+  # confirmation still asks.
+  #
+  # Examples (uncomment and edit):
+  # triggers:
+  #   news:      ["што има ново", "catch me up"]
+  #   weather:   ["дали ќе врне", "do i need a jacket"]
+  #   documents: ["што пишува во", "look it up in my files"]
+  triggers: {}
+
+  # apps.py — logical name -> per-platform launch command.
+  # Cross-platform defaults; edit for your machine.
+  apps:
+    chrome:
+      darwin:  "open -a 'Google Chrome'"
+      windows: "start chrome"
+      linux:   "google-chrome"
+    browser:
+      darwin:  "open -a Safari"
+      windows: "start msedge"
+      linux:   "xdg-open https://"
+    editor:
+      darwin:  "open -a 'Visual Studio Code'"
+      windows: "code"
+      linux:   "code"
+    terminal:
+      darwin:  "open -a Terminal"
+      windows: "start cmd"
+      linux:   "x-terminal-emulator"
+    spotify:
+      darwin:  "open -a Spotify"
+      windows: "start spotify"
+      linux:   "spotify"
+    explorer:                       # "open explorer" / "отвори експлорер"
+      darwin:  "open -a Finder"
+      windows: "start explorer"
+      linux:   "xdg-open ."
+    calculator:
+      darwin:  "open -a Calculator"
+      windows: "start calc"
+      linux:   "gnome-calculator"
+    notepad:
+      darwin:  "open -a TextEdit"
+      windows: "start notepad"
+      linux:   "gedit"
+    steam:
+      darwin:  "open -a Steam"
+      windows: "start steam://open/main"
+      linux:   "steam"
+    discord:
+      darwin:  "open -a Discord"
+      windows: "start discord"
+      linux:   "discord"
+
+  # sites.py — extra search targets on top of the built-in table (YouTube,
+  # Gmail, Reddit, Steam, GitHub, Amazon, Wikipedia, Maps, Thingiverse …).
+  # "{q}" is replaced with the spoken query, URL-escaped. `aliases` are the
+  # spoken forms to listen for — include the Macedonian ones, since Whisper
+  # writes site names in Cyrillic when you speak Macedonian. Reusing a
+  # built-in key overrides it.
+  sites: {}
+  #  pazar3:
+  #    label:   "Pazar3"
+  #    search:  "https://www.pazar3.mk/oglasi?q={q}"
+  #    home:    "https://www.pazar3.mk"
+  #    aliases: ["пазар3", "пазар три"]
+
+browser:                            # skills/browser.py — a browser MEDO can CLICK
+  # Needs `pip install playwright` in the MEDO venv. Off => the browser skills
+  # say so politely and "open youtube" keeps using your system browser.
+  enabled: true
+  channel: "chrome"                 # drive installed Chrome; "" = Playwright's Chromium
+  headless: false                   # watch what it clicks
+  profile_dir: "browser-profile"    # persistent: log in once, stay logged in (git-ignored)
+  max_steps: 8                      # cap on one autonomous "do X on the site" task
+  timeout_s: 20.0
+  route_opens: true                 # "open youtube" lands in the controlled window
+  blocked_domains: []               # hostname substrings MEDO must never drive
+  #  - "bank"
+  #  - "paypal"
+
+council:                            # core/council.py — one expert per major
+  # A bench of specialists MEDO can put a question to. They don't listen and
+  # don't converse: MEDO picks who is relevant, asks them, and synthesizes.
+  # A discipline is a SYSTEM PROMPT, not a process — so on Ollama this costs
+  # no extra processes at all, just one model round-trip per specialist.
+  #   "ask the electrical engineer about grounding"   -> one specialist
+  #   "convene the council on battery sizing"         -> 2-3, then synthesis
+  enabled: true
+  default_agent: "software"         # who answers when no field matches
+  max_members: 3                    # specialists per "convene" (latency dial)
+  disabled: []                      # keys to switch off, e.g. ["law", "finance"]
+  # "Second opinion" / "are you sure?" — the council red-teams MEDO's OWN last
+  # answer, tags each claim, and returns a deterministic fail-safe verdict that
+  # retracts anything unsupported. skills/second_opinion.py. Costs nothing until
+  # you ask for it.
+  second_opinion: true
+  # Built in: electrical, robotics, mechanical, physics, quantum, mathematics,
+  # software, law, finance, economics, marketing, design, data, cybersecurity,
+  # chemistry, medicine, biology, writing. Add your own without touching code:
+  extra: {}
+  #  metallurgy:
+  #    title: "the metallurgist"
+  #    prompt: "You are a metallurgist. You reason about alloys, heat ..."
+  #    triggers: ["alloy", "steel", "anneal", "weld"]
+
+
+weather:                            # M3
+  default_city: "Skopje"
+  latitude: 41.9973
+  longitude: 21.4280
+
+news:                               # M3
+  feeds:
+    - "https://feeds.bbci.co.uk/news/rss.xml"
+    - "https://hnrss.org/frontpage"
+  # Used when the question was asked in Macedonian ("најсвежи вести") — asking
+  # in Macedonian usually means you want local news, which BBC doesn't carry.
+  # Empty => `feeds` serves both languages.
+  feeds_mk:
+    - "https://meta.mk/feed/"
+    - "https://a1on.mk/feed/"
+    - "https://makfax.com.mk/feed/"
+    - "https://www.slobodenpecat.mk/feed/"
+    - "https://kanal5.com.mk/rss.aspx"
+
+web_fetch:                          # skills/webfetch.py — READ a page, not just open it
+  # "read https://…", "what does this page say about X", "summarize <url>",
+  # "прочитај ја страницата", "земи <url>", "што пишува на <url>".
+  #
+  # SAFETY: only a URL YOU supplied is fetched silently. A link that arrived
+  # from an imported document or from tool output is untrusted third-party
+  # text, so MEDO names the host and asks first; file://, javascript: and
+  # data: links are refused outright, never offered. See docs/Decisions.md.
+  enabled: true                     # false removes the skill entirely — no patterns,
+                                    # no tool the model can call. Turn it off if MEDO
+                                    # must never make outbound requests you didn't
+                                    # initiate from the browser yourself.
+  timeout_s: 15                     # whole-read deadline, not just connect. Raise for
+                                    # slow news sites; lower if you would rather be
+                                    # told "it took too long" than sit through a pause.
+  max_bytes: 2000000                # ~2 MB of HTML is already a very long article. The
+                                    # download is ABORTED mid-stream past this, so
+                                    # raising it spends real memory and time on
+                                    # endless/hostile pages; lower it on a small box.
+  max_redirects: 3                  # enough for http -> https -> www. Raise only if a
+                                    # site you actually read hides behind a longer
+                                    # chain; more hops is usually a tracker or a loop.
+  # Sent as-is on every request. Change it if a site you read blocks this one
+  # (some 403 unknown clients) — but a UA that claims to be a person's Chrome
+  # is a lie that also breaks the moment their fingerprinting tightens.
+  user_agent: "Mozilla/5.0 (compatible; MEDO/2.0; local voice assistant)"
+
+vision_llm:                         # "what do you see" / "read my screen" / bench
+  # qwen2.5vl:3b replaced moondream (2026-07-20): the re-published moondream
+  # decodes to 2-token garbage on every runtime/endpoint (fresh pull, GPU and
+  # CPU, old and new Ollama — see Bug Log 28). qwen2.5vl also reads text far
+  # better, which the see_bench part-marking answers benefit from.
+  model: "qwen2.5vl:3b"             # local Ollama vision model
+  timeout_s: 60                     # describe calls are slow on first load
+
+memory:                             # M4
+  db_path: "medo.db"                # renamed from jarvis.db (auto-migrated on start)
+  max_turns: 10                     # rolling conversation window sent to the LLM
+  max_facts: 20                     # remembered facts injected into the system prompt
+  embed_model: "nomic-embed-text"   # semantic fact recall via local Ollama embeddings
+                                    # ("" disables -> newest-N only)
+
+mcp:                                # Model Context Protocol client (core/mcp.py)
+  # Connect ANY application that exposes an MCP server: its tools automatically
+  # become MEDO skills the LLM can call — no per-app code. Two transports:
+  #   command/args  spawn a local server over stdio (npx/uvx/binary)
+  #   url           connect to a running server over Streamable HTTP
+  # Requires `pip install mcp` (in requirements.txt). Examples:
+  #
+  #   servers:
+  #     filesystem:                 # give MEDO file tools over ~/Documents
+  #       command: "npx"
+  #       args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Documents"]
+  #     fetch:                      # web page fetching
+  #       command: "uvx"
+  #       args: ["mcp-server-fetch"]
+  #     my-app:                     # anything already serving MCP over HTTP
+  #       url: "http://localhost:3000/mcp"
+  enabled: true
+  connect_timeout_s: 15
+  call_timeout_s: 60
+  # TURNING ONE ON: 1) flip its `enabled: true`; 2) if it needs a secret, put it
+  # in the git-ignored secrets.local.yaml under `mcp_env:` (NEVER here) — MEDO
+  # injects those into the environment before spawning servers; 3) restart.
+  # Each server DOWNLOADS on first run via npx; that first download can exceed
+  # connect_timeout_s above (just restart — it's cached after, or pre-run
+  # `npx -y <package>` once). Only Node servers are listed: this machine has
+  # npx but not uvx/Docker. `npx` must be on MEDO's PATH (Node here lives in
+  # Downloads, so add it to PATH or MEDO can't spawn these). Example secrets:
+  #
+  #   # secrets.local.yaml (git-ignored, per machine):
+  #   mcp_env:
+  #     GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_…"
+  #     GOOGLE_MAPS_API_KEY: "AIza…"
+  #     BRAVE_API_KEY: "BSA…"
+  servers:
+    # GitHub — repos, issues, PRs, file + code search. Token (scopes: repo) from
+    # github.com/settings/tokens -> mcp_env.GITHUB_PERSONAL_ACCESS_TOKEN. (This
+    # is the reference npx server; GitHub's newer official server needs Docker,
+    # which isn't installed here.)
+    github:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-github"]
+
+    # Google Maps — geocode, directions, place search. Needs GOOGLE_MAPS_API_KEY.
+    google-maps:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-google-maps"]
+
+    # Google Drive — search + read your Drive files. Needs a Google OAuth app
+    # (one-time consent, then it caches a token) — see docs/Decisions.md.
+    gdrive:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-gdrive"]
+
+    # Sequential thinking — a structured step-by-step reasoning tool for the
+    # brain. No secret, actively maintained: the easiest one to try first.
+    sequential-thinking:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+
+    # Filesystem — richer file tools over ONE folder you choose (edit the path).
+    # No secret. MEDO already has file skills; use this for heavier file work.
+    filesystem:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "~/Documents"]
+
+    # Knowledge-graph memory — persistent entities/relations the brain stores
+    # and recalls across sessions. No secret.
+    memory:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-memory"]
+
+    # Brave Search — independent web search. Needs BRAVE_API_KEY
+    # (brave.com/search/api). An alternative to MEDO's built-in search.
+    brave-search:
+      enabled: false
+      command: "npx"
+      args: ["-y", "@modelcontextprotocol/server-brave-search"]
+
+    # Fusion 360 — there is NO official/Anthropic MCP server. Autodesk exposes
+    # no MCP; community bridges run an add-in INSIDE Fusion that serves a local
+    # endpoint an MCP server proxies. NOT a drop-in npx install. To wire it up:
+    # install a community "Fusion 360 MCP" add-in + bridge, have it serve MCP
+    # over HTTP, then set the `url` below to its endpoint and enable. Placeholder:
+    fusion360:
+      enabled: false
+      url: "http://127.0.0.1:9000/mcp"   # <- your Fusion add-in's MCP endpoint
+
+routines:                           # proactive schedule (core/routines.py)
+  - name: "morning briefing"
+    at: "08:00"                     # HH:MM local time
+    days: []                        # empty = every day; or [mon, tue, wed, thu, fri]
+    ask:
+      - "morning briefing"          # the M8 briefing skill: one flowing summary
+    enabled: true
+
+briefing:                           # morning briefing content (skills/briefing.py)
+  # Sections in speaking order; remove one to drop it. Each degrades on its
+  # own (offline weather, empty reminders, ...) — the briefing never fails.
+  # Also on demand: say "morning briefing", "brief me", or "добро утро медо".
+  sections: ["weather", "news", "reminders", "upcoming"]
+
+logging:
+  level: "INFO"                     # DEBUG for state transitions + routing detail
+  routing_stats: true               # tally fast-path vs LLM-path for the README

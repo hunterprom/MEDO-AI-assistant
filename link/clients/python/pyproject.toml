@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medolink"
+version = "0.1.0"
+description = "EXPERIMENTAL MEDO Link client: register a device and receive commands from the MEDO voice assistant over LAN."
+requires-python = ">=3.9"
+dependencies = ["aiohttp>=3.9"]
+
+[tool.setuptools.packages.find]
+include = ["medolink*"]

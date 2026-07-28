@@ -1,0 +1,15 @@
+# English 'let me think' fillers spoken while a SLOW LLM answer is composing
+# (core/filler.py). `opening` is the first line; `waiting` is the one follow-up
+# on a very long wait. Butler-toned to match MEDO's dry manner.
+opening:
+  - "Let me think about that…"
+  - "One moment…"
+  - "Give me a second to work this out…"
+  - "Let me look into that…"
+  - "Right — let me consider that…"
+  - "Hmm, let me put that together…"
+waiting:
+  - "Still working on it…"
+  - "Bear with me a moment…"
+  - "Nearly there…"
+  - "Just pulling this together…"

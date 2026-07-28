@@ -1,0 +1,18 @@
+# TEMPLATE — adding a language's yes/no words is a data change, not a code one.
+#
+# 1. Copy this to <code>.yaml where <code> is the ISO-639-1 code that appears in
+#    core/languages.py (e.g. fr.yaml, it.yaml).
+# 2. Fill the lists with CLEAR, UNAMBIGUOUS words only — this gate stands in
+#    front of destructive actions, so err toward too few, never too many.
+# 3. Add <code> to languages.available (and to languages.active to use it) in
+#    config.yaml. The gate loads banks for the ACTIVE languages only.
+#
+# Matching rules: entries are compared against the WHOLE normalized reply
+# (lower-cased, punctuation stripped), never as substrings. Quote bare
+# yes/no/on/off/true/false — YAML parses them as booleans otherwise.
+affirmative:
+  - "<a clear spoken yes>"
+  - "<another>"
+negative:
+  - "<a clear spoken no>"
+  - "<another>"

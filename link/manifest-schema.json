@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MEDO Link device manifest",
+  "description": "What a device uploads to POST /link/register. Each capability becomes (a) an LLM tool - its 'description' IS the tool description the model reads, so write it for the model - and (b) optional fast-path voice patterns. Capabilities with requires_confirmation route through MEDO's spoken yes/no safety gate (bilingual).",
+  "type": "object",
+  "required": ["device_id", "name", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "device_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,31}$",
+      "description": "Stable lowercase identifier, e.g. 'robodog'. Also the poll URL segment."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "description": "Human name spoken by MEDO, e.g. 'the robot dog'."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "One-line summary of the device (shown in the HUD)."
+    },
+    "transport": {
+      "enum": ["http_poll", "websocket"],
+      "default": "http_poll",
+      "description": "http_poll: device polls GET /link/commands/{device_id}. websocket: device holds /link/ws open and commands are pushed."
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "required": ["name", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_]{0,31}$",
+            "description": "Capability id, e.g. 'walk_forward'. Tool name becomes '<device_id>_<name>'."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "THE LLM TOOL DESCRIPTION. Tell the model when to call this and what it physically does."
+          },
+          "params": {
+            "type": "object",
+            "description": "JSON-schema style properties for the tool arguments, e.g. {\"steps\": {\"type\": \"integer\", \"description\": \"how many steps\"}}. Values are passed through to the device verbatim.",
+            "additionalProperties": {"type": "object"}
+          },
+          "fast_patterns": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {"type": "string"},
+            "description": "Optional case-insensitive regexes for the no-LLM fast path, e.g. '\\\\b(robo)?dog,? sit\\\\b'."
+          },
+          "requires_confirmation": {
+            "type": "boolean",
+            "default": false,
+            "description": "true = MEDO asks a spoken yes/no before dispatching (use for anything that moves, heats, or spends)."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# German yes/no words for the spoken-confirmation gate (core/safety.py).
+# Conservative and unambiguous — only clear affirmations/refusals.
+affirmative:
+  - ja
+  - klar
+  - sicher
+  - mach es
+  - bestätige
+  - bestatige
+  - in ordnung
+  - na klar
+  - jawohl
+negative:
+  - nein
+  - abbrechen
+  - stopp
+  - halt
+  - vergiss es
+  - nicht
+  - negativ
+  - nein danke

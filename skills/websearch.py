@@ -1,0 +1,133 @@
+"""Web search via DuckDuckGo (keyless), summarized by the local LLM.
+
+Two routes, one skill:
+
+* **Fast path** ("search for X"): fetch results, then summarize them with the
+  injected ``summarize`` coroutine so the spoken answer is a paragraph, not a list.
+* **LLM tool path**: the model calls ``web_search`` and gets the raw results back
+  to summarize itself (``via=tool`` in the context), avoiding a double LLM hop.
+
+Offline, DuckDuckGo raises and we return a clean spoken message.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from core import mk
+from skills.base import Skill, SkillRequest, SkillResult
+
+Summarize = Callable[[str, str], Awaitable[str]]
+_OFFLINE = "I can't search the web right now. I appear to be offline."
+_OFFLINE_MK = "Не можам да пребарувам сега — изгледа дека сум офлајн."
+_MAX_RESULTS = 5
+
+
+def ddg_text_search(query: str, max_results: int = _MAX_RESULTS) -> list[dict[str, str]] | None:
+    """Raw DuckDuckGo text results (None when unreachable/offline).
+
+    The single ddgs entry point — this skill summarizes them for voice, and the
+    companion API's /search/web serves them to the HUD. When the ddgs API or
+    parser changes again, this is the only place to fix.
+    """
+    try:
+        from ddgs import DDGS
+
+        with DDGS() as ddgs:
+            return list(ddgs.text(query, max_results=max_results))
+    except Exception:  # network down, rate limit, parser change, etc.
+        return None
+
+
+class WebSearchSkill(Skill):
+    name = "web_search"
+    description = "Search the web and summarize the results for a query."
+    # Reached by MEANING for factual/current-info questions that trip no
+    # search verb ("who composed the music for Gran Turismo", "how much is a
+    # Raspberry Pi 5") — exactly the questions a small LLM answers from stale
+    # memory or invents. semantic_from_text: the whole utterance is the query.
+    semantic_from_text = True
+    routing_phrases = [
+        "who composed the music for that game",
+        "how much does a raspberry pi cost right now",
+        "when is the next spacex launch",
+        "find out who won the match last night",
+        "look into the best beginner soldering iron",
+        "what year did the first arduino come out",
+        "what's the current price of a spool of filament",
+        "find out what's going on with the new graphics cards",
+    ]
+
+    patterns = [
+        # The lookahead keeps the phrasal "look up TO (your heroes)", "look up
+        # WHEN/AT", "google IS a great company", and "search your feelings/heart"
+        # idioms off the fast path — search/google/look-up are otherwise verbs.
+        re.compile(r"\b(?:search|google|look\s+up)\s+(?:the\s+web\s+for\s+|for\s+)?"
+                   r"(?!(?:to|when|at|is|are|was|were)\b|your\s+(?:feelings?|heart|soul)\b)"
+                   r"(?P<q>.+)", re.IGNORECASE),
+        re.compile(r"\bwhat\s+is\s+the\s+latest\s+(?:on|about)\s+(?P<q2>.+)", re.IGNORECASE),
+        # MK: "барај рецепт за пица", "гугни цена на филамент". Registered last
+        # in the registry, so the site/file/app skills have already had their
+        # turn at these verbs — whatever reaches here really is a web search.
+        re.compile(rf"\b(?:{mk.SEARCH}){mk.CLITICS}\s+(?:на\s+интернет\s+(?:за\s+)?)?(?P<q3>.+)",
+                   re.IGNORECASE),
+        re.compile(r"\bшто\s+(?:е\s+)?ново\s+(?:за|околу|со)\s+(?P<q4>.+)", re.IGNORECASE),
+    ]
+
+    def __init__(self, summarize: Summarize | None = None) -> None:
+        self._summarize = summarize
+
+    def _search(self, query: str) -> list[dict[str, str]] | None:
+        return ddg_text_search(query, _MAX_RESULTS)
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        gd = request.match.groupdict() if request.match else {}
+        speak_mk = mk.is_cyrillic(request.text)
+        query = (request.args.get("query") or gd.get("q") or gd.get("q2")
+                 or gd.get("q3") or gd.get("q4") or "").strip(" ?.!")
+        if not query and not request.match and not request.args:
+            # Reached by MEANING (semantic tier): no regex groups and no tool
+            # args, so the whole utterance IS the query.
+            query = request.text.strip(" ?.!")
+        if not query:
+            return SkillResult(
+                "Што да пребарам?" if speak_mk else "What should I search for?",
+                success=False)
+
+        results = await asyncio.to_thread(self._search, query)
+        if results is None:
+            return SkillResult(_OFFLINE_MK if speak_mk else _OFFLINE, success=False)
+        if not results:
+            return SkillResult(
+                f"Не најдов ништо за {query}." if speak_mk
+                else f"I couldn't find anything about {query}.", success=False)
+
+        block = "\n".join(
+            f"- {r.get('title', '')}: {r.get('body', '')}" for r in results
+        )
+
+        # Called by the model as a tool: hand back raw results for it to summarize.
+        if request.context.get("via") == "tool" or self._summarize is None:
+            return SkillResult(block, data={"query": query, "results": results})
+
+        summary = await self._summarize(query, block)
+        return SkillResult(summary, data={"query": query, "results": results})
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "the search query"}
+                    },
+                    "required": ["query"],
+                },
+            },
+        }

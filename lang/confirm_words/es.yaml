@@ -1,0 +1,23 @@
+# Spanish yes/no words for the spoken-confirmation gate (core/safety.py).
+# Conservative and unambiguous — this gate stands in front of destructive
+# actions, so only clear affirmations/refusals belong here.
+affirmative:
+  - sí
+  - si
+  - vale
+  - claro
+  - adelante
+  - confirmo
+  - hazlo
+  - de acuerdo
+  - por supuesto
+negative:
+  - "no"
+  - cancela
+  - cancelar
+  - para
+  - detente
+  - olvídalo
+  - olvidalo
+  - negativo
+  - no gracias

@@ -1,0 +1,60 @@
+# Python 3.12 (voice stack needs onnxruntime, which has no 3.14 wheels).
+#
+# --- M0: text brain ---
+pydantic>=2.6
+pydantic-settings>=2.2
+PyYAML>=6.0
+httpx>=0.27          # Ollama REST client (async, streaming-capable)
+truststore>=0.9      # trust the OS cert store (this network intercepts TLS)
+rich>=13.7           # console output / terminal UI (M5)
+aiohttp>=3.13        # companion API server (watch app) — remote/server.py
+
+# --- M1: voice pipeline ---
+openwakeword>=0.6    # wake word ("Hey Jarvis"); pulls onnxruntime
+faster-whisper>=1.0  # STT; pulls ctranslate2
+sounddevice>=0.4     # mic/speaker I/O (macOS wheel bundles PortAudio)
+numpy>=1.26
+piper-tts>=1.2       # local neural TTS; pulls onnxruntime
+
+# --- M2: PC skills ---
+psutil>=5.9          # battery / CPU / RAM
+pyautogui>=0.9       # screenshots + volume keys on Windows/Linux
+Pillow>=10.0         # REQUIRED for screenshots: pyautogui.screenshot() needs it,
+                     # and vision_skill/bench use PIL directly (grab, shrink, OCR
+                     # crops). Without it every screen/vision feature throws.
+pyperclip>=1.8       # clipboard skills + Cyrillic-safe typing (paste path)
+pycaw>=20230407; sys_platform == "win32"   # precise Windows volume (get/set/mute); media-key fallback if absent
+comtypes>=1.2; sys_platform == "win32"     # COM backend pycaw talks to Core Audio through
+
+# --- integrations ---
+mcp>=1.0             # Model Context Protocol client — connect any app's MCP server
+
+# --- M3: web skills ---
+ddgs>=6.0            # DuckDuckGo web search (no key)
+edge-tts>=6.1        # neural voices for EVERY non-English active language (free
+                     # MS voices: Slavic, Japanese, Chinese, Korean…). Needs the
+                     # OS trust store (truststore, injected in main.py) on TLS-
+                     # intercepting networks, else it falls back to English Piper.
+pypdf>=4.0           # text extraction for the documents RAG index
+feedparser>=6.0      # news via RSS
+
+# --- browser control (skills/browser.py) ---
+# Drives real Chrome over the DOM so MEDO can click buttons and fill fields.
+# Optional: without it every browser skill degrades to a spoken message and the
+# rest of MEDO is unaffected. Uses the Chrome you already have (channel:
+# "chrome"); only if you have none do you need `playwright install chromium`.
+playwright>=1.44
+
+# --- document / presentation generation (skills/documents_gen.py) ---
+# Small pure-Python packages (lxml + Pillow, already pulled by the voice/vision
+# stack, are their only heavy deps). HTML/Markdown output needs neither.
+python-docx>=1.1     # Word .docx
+python-pptx>=1.0     # PowerPoint .pptx
+
+# --- tooling ---
+pytest>=8.0
+pytest-asyncio>=0.23
+# GPU speech recognition (Windows/NVIDIA): ctranslate2 needs cuBLAS 12 + cuDNN 9.
+# Already installed in this machine's venv; uncomment on a fresh GPU setup (~1.5 GB):
+# nvidia-cublas-cu12
+# nvidia-cudnn-cu12

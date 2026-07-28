@@ -1,0 +1,32 @@
+# English yes/no words for the spoken-confirmation gate (core/safety.py).
+# Matched against the WHOLE normalized reply (lower-cased, punctuation stripped),
+# NEVER as substrings — so "I don't know" is neither yes nor no.
+# NOTE: bare yes/no/on/off must be quoted (YAML parses them as booleans).
+affirmative:
+  - "yes"
+  - yeah
+  - yep
+  - yup
+  - sure
+  - ok
+  - okay
+  - confirm
+  - confirmed
+  - do it
+  - go ahead
+  - affirmative
+  - please do
+  - yes please
+negative:
+  - "no"
+  - nope
+  - nah
+  - cancel
+  - stop
+  - don't
+  - dont
+  - abort
+  - never mind
+  - nevermind
+  - negative
+  - no thanks
