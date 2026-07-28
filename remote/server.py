@@ -23,6 +23,11 @@ Model/provider endpoints let clients switch the LLM at runtime.
     GET  /search/web?q=   -> {"results": [{"title", "url", "snippet"}, …]}
     POST /pair/start      -> {"ok", "expires_in", "name"}   (code shown on THIS pc)
     POST /pair/confirm {"code": …} -> {"ok", "token", "name"}   (watch pairing)
+    POST /pair/request {"name","kind"} -> {"ok","request_id","name"}  (approve-on-PC)
+    GET  /pair/poll?request_id= -> {"status": pending|approved|denied|expired, "token"?}
+    GET  /pair/pending    -> {"ok", "pending": [...]}   (HUD; loopback/token only)
+    POST /pair/approve {"request_id": …} -> {"ok", "name"}   (approve at the PC)
+    POST /pair/deny {"request_id": …}    -> {"ok"}          (dismiss at the PC)
 
 A UDP responder on the same port answers ``MEDO_DISCOVER_V1`` broadcasts with
 ``{"service": "medo", "name", "port"}`` so the watch finds this machine
@@ -106,13 +111,25 @@ def _apply_cors(headers, allow_origin: str | None) -> None:
 _LOCAL_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
 #: Paths reachable WITHOUT a token: the pairing bootstrap. /pair/start only
-#: flashes a code on this PC's screen; /pair/confirm needs that code — so
-#: neither leaks anything to a LAN peer who can't see the screen.
-_AUTH_EXEMPT_PATHS = ("/pair/start", "/pair/confirm")
+#: flashes a code on this PC's screen; /pair/confirm needs that code. The
+#: approve-on-PC pair: /pair/request only ENQUEUES a request a human must
+#: approve on the PC, and /pair/poll returns the token only to whoever holds
+#: the unguessable request_id AND only after that approval — so none of these
+#: leak anything to a LAN peer who can't see (or act at) the screen. The
+#: approve/deny/pending side is deliberately NOT here: it stays loopback-only
+#: (or token-authed), which is what makes "approve at the PC" a real gate.
+_AUTH_EXEMPT_PATHS = ("/pair/start", "/pair/confirm", "/pair/request", "/pair/poll")
 
 #: Watch pairing: code lifetime and how many wrong guesses invalidate it.
 PAIR_CODE_TTL_S = 120.0
 PAIR_MAX_ATTEMPTS = 5
+
+#: Approve-on-PC pairing: how long an un-approved request lingers, and a cap so
+#: a LAN peer can't flood the pending list. The request_id is a 192-bit secret,
+#: so the token is delivered only to the device that made the request and only
+#: after a human clicks Approve in the HUD.
+PAIR_REQUEST_TTL_S = 300.0
+PAIR_MAX_PENDING = 12
 
 #: UDP discovery probe the watch broadcasts; anything else is ignored.
 DISCOVERY_PROBE = b"MEDO_DISCOVER_V1"
@@ -189,6 +206,10 @@ class RemoteServer:
         # Active watch-pairing session: {"code", "expires", "attempts"}.
         # None when no pairing is in progress.
         self._pair: dict | None = None
+        # Approve-on-PC pairing: request_id -> {name, kind, peer, created,
+        # status: pending|approved|denied, token}. A device enqueues here and
+        # polls; a human approves in the HUD. Pruned on every touch by TTL.
+        self._pair_requests: dict[str, dict] = {}
         self._udp_transport: asyncio.DatagramTransport | None = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
@@ -275,6 +296,13 @@ class RemoteServer:
         app.router.add_get("/link/ws", self._handle_link_ws)
         app.router.add_post("/pair/start", self._handle_pair_start)
         app.router.add_post("/pair/confirm", self._handle_pair_confirm)
+        # Approve-on-PC pairing (phone + watch, no typing). The two device-facing
+        # routes are auth-exempt; approve/deny/pending stay loopback-or-token.
+        app.router.add_post("/pair/request", self._handle_pair_request)
+        app.router.add_get("/pair/poll", self._handle_pair_poll)
+        app.router.add_get("/pair/pending", self._handle_pair_pending)
+        app.router.add_post("/pair/approve", self._handle_pair_approve)
+        app.router.add_post("/pair/deny", self._handle_pair_deny)
         app.router.add_get("/facts", self._handle_facts_list)
         app.router.add_post("/facts", self._handle_facts_add)
         app.router.add_post("/facts/delete", self._handle_facts_delete)
@@ -588,6 +616,120 @@ class RemoteServer:
         return web.json_response(
             {"ok": True, "token": token, "name": self._settings.personality.name}
         )
+
+    # --- approve-on-PC pairing (phone + watch, no code typing) ---
+
+    def _prune_pair_requests(self) -> None:
+        """Drop pairing requests older than the TTL (called on every touch)."""
+        cutoff = time.monotonic() - PAIR_REQUEST_TTL_S
+        stale = [rid for rid, r in self._pair_requests.items()
+                 if r["created"] < cutoff]
+        for rid in stale:
+            self._pair_requests.pop(rid, None)
+
+    async def _handle_pair_request(self, request: web.Request) -> web.Response:
+        """A device asks to connect; a human approves it on the PC (no code).
+
+        Enqueues a pending request the HUD's Device-fleet panel surfaces with an
+        Approve button. Returns an unguessable ``request_id`` the device polls —
+        the token is handed back only once someone clicks Approve, and only to
+        the holder of that id. Auth-exempt (a new device has no token yet), but
+        capped and TTL'd so a LAN peer can't flood the queue.
+        """
+        try:
+            payload = await _json_dict(request)
+        except ValueError:
+            payload = {}
+        name = str(payload.get("name") or "").strip()[:60] or "A device"
+        kind = str(payload.get("kind") or "").strip().lower()
+        if kind not in ("phone", "watch", ""):
+            kind = ""
+        self._prune_pair_requests()
+        pending = [r for r in self._pair_requests.values() if r["status"] == "pending"]
+        if len(pending) >= PAIR_MAX_PENDING:
+            return _error(429, "too many pending connection requests — approve or wait")
+        request_id = secrets_mod.token_urlsafe(24)
+        self._pair_requests[request_id] = {
+            "name": name,
+            "kind": kind,
+            "peer": request.remote or "?",
+            "created": time.monotonic(),
+            "status": "pending",
+            "token": None,
+        }
+        logger.info("pair request from %s (%r) — awaiting approval on this PC",
+                    request.remote, name)
+        return web.json_response(
+            {"ok": True, "request_id": request_id,
+             "name": self._settings.personality.name, "poll_after": 2}
+        )
+
+    async def _handle_pair_poll(self, request: web.Request) -> web.Response:
+        """Device polls the outcome of its request; token delivered on approval."""
+        self._prune_pair_requests()
+        rid = request.query.get("request_id", "")
+        req = self._pair_requests.get(rid) if rid else None
+        if req is None:
+            # Unknown or expired — tell the device to start over, don't 404-spam.
+            return web.json_response({"status": "expired"})
+        if req["status"] == "approved":
+            return web.json_response(
+                {"status": "approved", "token": req["token"] or "",
+                 "name": self._settings.personality.name}
+            )
+        if req["status"] == "denied":
+            return web.json_response({"status": "denied"})
+        return web.json_response({"status": "pending"})
+
+    async def _handle_pair_pending(self, request: web.Request) -> web.Response:
+        """HUD list of devices waiting for approval (loopback/token only)."""
+        self._prune_pair_requests()
+        now = time.monotonic()
+        pending = [
+            {"request_id": rid, "name": r["name"], "kind": r["kind"],
+             "peer": r["peer"], "age_s": round(now - r["created"], 1)}
+            for rid, r in self._pair_requests.items() if r["status"] == "pending"
+        ]
+        pending.sort(key=lambda p: p["age_s"])
+        return web.json_response({"ok": True, "pending": pending})
+
+    async def _handle_pair_approve(self, request: web.Request) -> web.Response:
+        """Approve a pending request and mint/hand back the token (at the PC)."""
+        try:
+            payload = await _json_dict(request)
+        except ValueError:
+            return _error(400, "body must be JSON like {\"request_id\": \"…\"}")
+        self._prune_pair_requests()
+        rid = str(payload.get("request_id") or "")
+        req = self._pair_requests.get(rid)
+        if req is None:
+            return _error(404, "no such request — it may have expired")
+        if req["status"] == "denied":
+            return _error(409, "that request was denied")
+        token = self._settings.remote.token
+        if not token:  # auth disabled / first run — mint one so pairing works
+            from core.config import ensure_remote_token
+
+            token = ensure_remote_token(self._settings)
+        req["status"] = "approved"
+        req["token"] = token
+        logger.info("pair request %r approved (%s)", req["name"], req["peer"])
+        return web.json_response({"ok": True, "name": req["name"]})
+
+    async def _handle_pair_deny(self, request: web.Request) -> web.Response:
+        """Deny/dismiss a pending request (at the PC)."""
+        try:
+            payload = await _json_dict(request)
+        except ValueError:
+            return _error(400, "body must be JSON like {\"request_id\": \"…\"}")
+        rid = str(payload.get("request_id") or "")
+        req = self._pair_requests.get(rid)
+        if req is None:
+            return web.json_response({"ok": True})  # already gone — idempotent
+        req["status"] = "denied"
+        req["token"] = None
+        logger.info("pair request %r denied (%s)", req["name"], req["peer"])
+        return web.json_response({"ok": True})
 
     async def _handle_mcp_status(self, request: web.Request) -> web.Response:
         """Connected MCP servers + their tools (HUD CONFIG tab)."""

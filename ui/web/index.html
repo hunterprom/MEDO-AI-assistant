@@ -940,6 +940,12 @@
         <div class="info"><span class="name" data-i18n="file_map">File map</span><span class="desc" id="dirs-desc">FOLDER BEACONS ON THE SPHERE · RESCAN AFTER MOVING TO A NEW MACHINE</span></div>
         <button class="btn-sm" id="dirs-rescan">SCAN THIS PC</button>
       </div>
+      <div class="head" style="margin-top:8px">CONNECT · PHONE &amp; WATCH</div>
+      <div class="setting">
+        <div class="info"><span class="name" data-i18n="connect_devices">Easy connect</span><span class="desc" id="pair-desc">OPEN MEDO ON YOUR PHONE OR WATCH · TAP CONNECT · APPROVE IT HERE</span></div>
+        <button class="btn-sm" id="pair-refresh">REFRESH</button>
+      </div>
+      <div id="pair-pending"></div>
       <div class="head" style="margin-top:8px">MEDO LINK · DEVICES</div>
       <div class="setting">
         <div class="info"><span class="name" data-i18n="devices">Device fleet</span><span class="desc" id="link-desc">EXPERIMENTAL ESP32 / RPI SDK · SEE docs/MEDO Link.md</span></div>
@@ -1092,7 +1098,7 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'core') scrollChat();    // the chat panel lives here now
-    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadRoutines(); loadWebhooks(); loadSelfDev(); loadLinkDevices(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadRoutines(); loadWebhooks(); loadSelfDev(); loadLinkDevices(); loadPairPending(); }
     clusterOnShow(screen === 'cluster');   // start/stop the animation loop
   }
   $('tab-core').onclick = () => go('core');
@@ -1569,13 +1575,13 @@
           continuous:'Continuous conversation', interpreter:'Interpreter mode', lion:'MEDO Lion mode', council:'Specialist council',
           semantic:'Semantic tier',
           camera_feed:'Camera feed', scanlines:'Scanlines', appearance:'Appearance', brain:'Brain',
-          facts:'Remembered facts', documents:'Documents index', file_map:'File map', devices:'Device fleet', ui_language:'Interface language' },
+          facts:'Remembered facts', documents:'Documents index', file_map:'File map', devices:'Device fleet', connect_devices:'Easy connect', ui_language:'Interface language' },
     mk: { core:'ЈАДРО', config:'ПОСТАВКИ', send:'ПРАТИ', ask:'НАПИШИ КОМАНДА ИЛИ ПРАШАЊЕ…', search:'БАРАЈ СИСТЕМИ, ДАТОТЕКИ, ВЕБ…',
           voice_activation:'Гласовна активација', microphone:'Микрофон', spoken_languages:'Јазици за зборување', pointer_mode:'Режим на покажувач', pc_control:'Контрола на компјутерот',
           continuous:'Континуиран разговор', interpreter:'Режим на преведувач', lion:'МЕДО лав режим', council:'Совет на специјалисти',
           semantic:'Семантички слој',
           camera_feed:'Слика од камера', scanlines:'Скен-линии', appearance:'Изглед', brain:'Мозок',
-          facts:'Запаметени факти', documents:'Индекс на документи', file_map:'Мапа на датотеки', devices:'Флота уреди', ui_language:'Јазик на интерфејсот' },
+          facts:'Запаметени факти', documents:'Индекс на документи', file_map:'Мапа на датотеки', devices:'Флота уреди', connect_devices:'Лесно поврзување', ui_language:'Јазик на интерфејсот' },
     de: { core:'KERN', config:'EINSTELLUNGEN', send:'SENDEN', ask:'BEFEHL ODER FRAGE EINGEBEN…', search:'SYSTEME, DATEIEN, WEB DURCHSUCHEN…',
           voice_activation:'Sprachaktivierung', microphone:'Mikrofon', spoken_languages:'Gesprochene Sprachen', pointer_mode:'Zeigermodus', pc_control:'PC-Steuerung',
           continuous:'Fortlaufendes Gespräch', interpreter:'Dolmetschermodus', lion:'MEDO Löwenmodus', council:'Fachrat', semantic:'Semantische Ebene',
@@ -2332,6 +2338,50 @@
     } catch { $('link-desc').textContent = 'API OFFLINE'; }
   }
   $('link-refresh').onclick = loadLinkDevices;
+
+  /* ---- Easy connect: approve a phone/watch pairing at the PC (no code) ---- */
+  async function loadPairPending() {
+    const list = $('pair-pending');
+    if (!list) return;
+    try {
+      const d = await (await fetch(`${API}/pair/pending`)).json();
+      const pending = d.pending || [];
+      list.innerHTML = '';
+      $('pair-desc').textContent = pending.length
+        ? `${pending.length} WAITING · APPROVE TO CONNECT`
+        : 'OPEN MEDO ON YOUR PHONE OR WATCH · TAP CONNECT · APPROVE IT HERE';
+      for (const p of pending) {
+        const row = document.createElement('div');
+        row.className = 'setting';
+        row.innerHTML =
+          '<div class="info"><span class="name"></span><span class="desc"></span></div>' +
+          '<div class="rowbtns"><button class="btn-sm" data-approve>APPROVE</button>' +
+          '<button class="btn-sm" data-deny>DENY</button></div>';
+        row.querySelector('.name').textContent = (p.name || 'A DEVICE').toUpperCase();
+        const kind = p.kind ? `${p.kind.toUpperCase()} · ` : '';
+        row.querySelector('.desc').textContent = `${kind}${p.peer} · ${Math.round(p.age_s)}s AGO`;
+        row.querySelector('[data-approve]').onclick = () => decidePair(p.request_id, true, p.name);
+        row.querySelector('[data-deny]').onclick = () => decidePair(p.request_id, false, p.name);
+        list.appendChild(row);
+      }
+    } catch { /* API offline — leave the hint as-is */ }
+  }
+  async function decidePair(id, approve, name) {
+    try {
+      await fetch(`${API}/pair/${approve ? 'approve' : 'deny'}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: id }),
+      });
+      log(`${(name || 'DEVICE').toUpperCase()} ${approve ? 'CONNECTED' : 'DENIED'}`);
+    } catch { /* best-effort; the poll below re-syncs the list */ }
+    loadPairPending();
+  }
+  $('pair-refresh').onclick = loadPairPending;
+  // Live-ish: while the CONFIG screen is open, poll for devices asking to connect
+  // so an approval request appears within a couple of seconds of the tap.
+  setInterval(() => {
+    if (document.body.dataset.screen === 'config') loadPairPending();
+  }, 2500);
 
   // --- spoken-languages picker (constrained two-language mode, S4) ----------
   const langCfg = CFG.languages || { available: [], active: [], primary: 'en', detection: 'auto_pair' };

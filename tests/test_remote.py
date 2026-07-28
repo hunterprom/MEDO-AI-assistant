@@ -12,7 +12,7 @@ from core.config import load_settings
 from core.events import EventBus, StateMachine
 from core.router import Router
 from llm.client import OllamaClient
-from remote.server import MAX_TEXT_CHARS, RemoteServer
+from remote.server import MAX_TEXT_CHARS, PAIR_MAX_PENDING, RemoteServer
 from skills.base import SkillRegistry
 from skills.datetime_skill import DateTimeSkill
 
@@ -315,6 +315,88 @@ async def test_pair_confirm_expired_code(lan_client: TestClient):
 async def test_pair_confirm_without_start_is_409(lan_client: TestClient):
     resp = await lan_client.post("/pair/confirm", json={"code": "123456"})
     assert resp.status == 409
+
+
+# --- approve-on-PC pairing (phone + watch, no code typing) ---------------
+
+
+@pytest.mark.asyncio
+async def test_pair_request_approve_delivers_token(server_client):
+    client, server = server_client
+    server._settings.remote.token = "the-token"
+    # 1) the device asks to connect
+    resp = await client.post("/pair/request", json={"name": "Pixel", "kind": "phone"})
+    assert resp.status == 200
+    rid = (await resp.json())["request_id"]
+    # 2) it polls: still pending, no token yet
+    body = await (await client.get(f"/pair/poll?request_id={rid}")).json()
+    assert body["status"] == "pending" and "token" not in body
+    # 3) it shows up in the HUD's pending list (with its name + peer)
+    pend = (await (await client.get("/pair/pending")).json())["pending"]
+    assert any(p["request_id"] == rid and p["name"] == "Pixel"
+               and p["kind"] == "phone" for p in pend)
+    # 4) a human approves it at the PC
+    assert (await client.post("/pair/approve", json={"request_id": rid})).status == 200
+    # 5) the next poll returns approved + the token
+    body = await (await client.get(f"/pair/poll?request_id={rid}")).json()
+    assert body["status"] == "approved" and body["token"] == "the-token"
+    # 6) it's no longer pending
+    assert (await (await client.get("/pair/pending")).json())["pending"] == []
+
+
+@pytest.mark.asyncio
+async def test_pair_deny_never_hands_over_a_token(server_client):
+    client, server = server_client
+    server._settings.remote.token = "the-token"
+    rid = (await (await client.post(
+        "/pair/request", json={"name": "X"})).json())["request_id"]
+    assert (await client.post("/pair/deny", json={"request_id": rid})).status == 200
+    body = await (await client.get(f"/pair/poll?request_id={rid}")).json()
+    assert body["status"] == "denied" and "token" not in body
+
+
+@pytest.mark.asyncio
+async def test_approve_and_pending_require_being_at_the_pc(lan_client: TestClient):
+    # A LAN device (no token) may request + poll — the auth-exempt bootstrap...
+    rid = (await (await lan_client.post(
+        "/pair/request", json={"name": "Rogue"})).json())["request_id"]
+    assert (await (await lan_client.get(
+        f"/pair/poll?request_id={rid}")).json())["status"] == "pending"
+    # ...but it CANNOT approve itself or list the queue without the token: that
+    # is exactly what makes "approve at the PC" a real gate, not decoration.
+    assert (await lan_client.post(
+        "/pair/approve", json={"request_id": rid})).status == 401
+    assert (await lan_client.get("/pair/pending")).status == 401
+    # An already-trusted client (holds the token) can approve.
+    hdr = {"Authorization": "Bearer watch-secret"}
+    assert (await lan_client.post(
+        "/pair/approve", json={"request_id": rid}, headers=hdr)).status == 200
+
+
+@pytest.mark.asyncio
+async def test_poll_unknown_request_reads_as_expired(client: TestClient):
+    body = await (await client.get("/pair/poll?request_id=nonexistent")).json()
+    assert body["status"] == "expired"
+
+
+@pytest.mark.asyncio
+async def test_pending_requests_are_capped(server_client):
+    client, _ = server_client
+    for _ in range(PAIR_MAX_PENDING):
+        assert (await client.post("/pair/request", json={"name": "d"})).status == 200
+    # one more over the cap is refused, so a LAN peer can't flood the queue
+    assert (await client.post("/pair/request", json={"name": "d"})).status == 429
+
+
+@pytest.mark.asyncio
+async def test_expired_request_is_pruned(server_client):
+    client, server = server_client
+    rid = (await (await client.post(
+        "/pair/request", json={"name": "d"})).json())["request_id"]
+    server._pair_requests[rid]["created"] -= 10_000  # far past the TTL
+    body = await (await client.get(f"/pair/poll?request_id={rid}")).json()
+    assert body["status"] == "expired"
+    assert (await (await client.get("/pair/pending")).json())["pending"] == []
 
 
 def test_discovery_protocol_answers_probe():
