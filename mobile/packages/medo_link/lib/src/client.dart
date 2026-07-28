@@ -50,6 +50,17 @@ class MedoException implements Exception {
   String toString() => message;
 }
 
+/// One poll of an approve-on-PC pairing request.
+class PairResult {
+  const PairResult(this.status, this.token);
+
+  /// `pending` | `approved` | `denied` | `expired`.
+  final String status;
+
+  /// The bearer token — set only when [status] is `approved`.
+  final String token;
+}
+
 class MedoClient {
   MedoClient(this.address, [this.token = '']);
 
@@ -110,6 +121,72 @@ class MedoClient {
           .timeout(_pingTimeout),
     );
     return body['token'] as String? ?? '';
+  }
+
+  // --- approve-on-PC pairing (no code to type) -------------------------------
+
+  /// Enqueue an approve-on-PC request; returns the `request_id` to poll.
+  ///
+  /// The user then taps *Approve* in the desktop HUD's Device-fleet panel —
+  /// no 6-digit code. [kind] is `phone` or `watch` (shown next to the request).
+  Future<String> pairRequest({required String name, String kind = ''}) async {
+    final body = await _request(
+      () => http
+          .post(
+            _uri('/pair/request'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'name': name, if (kind.isNotEmpty) 'kind': kind}),
+          )
+          .timeout(_pingTimeout),
+    );
+    return body['request_id'] as String? ?? '';
+  }
+
+  /// Poll a pairing request once. Token is present only when approved.
+  Future<PairResult> pairPoll(String requestId) async {
+    final body = await _request(
+      () => http
+          .get(_uri('/pair/poll?request_id='
+              '${Uri.encodeQueryComponent(requestId)}'))
+          .timeout(_pingTimeout),
+    );
+    return PairResult(
+      body['status'] as String? ?? 'expired',
+      body['token'] as String? ?? '',
+    );
+  }
+
+  /// The whole approve-on-PC flow: request, then poll until the user approves
+  /// on the PC. Calls [onWaiting] once the request is enqueued. Returns the
+  /// token, or throws [MedoException] on denial, expiry, or timeout.
+  Future<String> connectViaApproval({
+    required String name,
+    String kind = '',
+    Duration timeout = const Duration(minutes: 2),
+    Duration pollEvery = const Duration(seconds: 2),
+    void Function()? onWaiting,
+  }) async {
+    final id = await pairRequest(name: name, kind: kind);
+    if (id.isEmpty) throw const MedoException('MEDO refused the request.');
+    onWaiting?.call();
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(pollEvery);
+      final r = await pairPoll(id);
+      if (r.status == 'approved') {
+        if (r.token.isEmpty) {
+          throw const MedoException('Approved, but no token came back.');
+        }
+        return r.token;
+      }
+      if (r.status == 'denied') {
+        throw const MedoException('Connection denied on the PC.');
+      }
+      if (r.status == 'expired') {
+        throw const MedoException('The request expired — try again.');
+      }
+    }
+    throw const MedoException('Timed out waiting for approval on the PC.');
   }
 
   Future<Map<String, dynamic>> _request(

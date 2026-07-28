@@ -25,4 +25,13 @@ void main() {
     const e = MedoException("Can't reach Medo at 1.2.3.4:8710.");
     expect(e.toString(), contains('1.2.3.4'));
   });
+
+  test('PairResult carries the approve-on-PC status and token', () {
+    const pending = PairResult('pending', '');
+    expect(pending.status, 'pending');
+    expect(pending.token, isEmpty);
+    const approved = PairResult('approved', 'tok_abc');
+    expect(approved.status, 'approved');
+    expect(approved.token, 'tok_abc');
+  });
 }

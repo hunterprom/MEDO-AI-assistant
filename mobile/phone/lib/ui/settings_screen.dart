@@ -263,20 +263,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ],
           const SizedBox(height: 8),
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
             children: [
-              _smallBtn(s.linked ? 'RE-PAIR' : 'DISCOVER & PAIR', _discoverAndPair),
-              const SizedBox(width: 8),
+              // Primary path: approve on the PC — no code to read and type.
+              _smallBtn(s.linked ? 'RE-CONNECT' : 'CONNECT', _connectApprove),
+              // Fallback: the classic 6-digit code, and manual address entry.
+              _smallBtn('USE CODE', _discoverAndPair),
               _smallBtn('MANUAL', _manualEntry),
-              if (s.linked) ...[
-                const SizedBox(width: 8),
-                _smallBtn('UNLINK', _unlink, danger: true),
-              ],
+              if (s.linked) _smallBtn('UNLINK', _unlink, danger: true),
             ],
           ),
         ],
       ),
     );
+  }
+
+  /// Approve-on-PC: discover MEDO, ask to connect, and wait for the user to
+  /// tap Approve in the desktop HUD — no code to read off the screen and type.
+  Future<void> _connectApprove() async {
+    _toast('Searching the network…');
+    final server = await MedoDiscovery.discover();
+    if (!mounted) return;
+    if (server == null) {
+      _toast('No MEDO found. Same Wi-Fi? Try MANUAL.', bad: true);
+      return;
+    }
+    try {
+      final token = await MedoClient(server.address).connectViaApproval(
+        name: 'Phone',
+        kind: 'phone',
+        onWaiting: () {
+          if (mounted) {
+            _toast('Approve on the PC: MEDO HUD → CONFIG → Easy connect.');
+          }
+        },
+      );
+      AppSettings.I
+        ..medoAddress = server.address
+        ..medoToken = token
+        ..useMedo = true;
+      if (mounted) setState(() {});
+      _toast('Linked to ${server.name}.', ok: true);
+    } on MedoException catch (e) {
+      if (mounted) _toast(e.message, bad: true);
+    }
   }
 
   Future<void> _discoverAndPair() async {

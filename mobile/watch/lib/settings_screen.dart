@@ -65,6 +65,45 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  /// Approve-on-PC: find MEDO and wait for the user to tap Approve in the
+  /// desktop HUD — nothing to type on the watch at all (no code, no IP).
+  Future<void> _connectApprove() async {
+    setState(() {
+      _pairing = true;
+      _awaitingCode = false;
+    });
+    _setStatus('Looking for MEDO…', Colors.white54);
+    try {
+      final found = await MedoDiscovery.discover();
+      if (found == null) {
+        _setStatus('No MEDO found — same Wi-Fi as the PC?', Colors.orangeAccent);
+        return;
+      }
+      _controller.text = found.address;
+      final token = await MedoClient(found.address).connectViaApproval(
+        name: 'Watch',
+        kind: 'watch',
+        onWaiting: () {
+          if (mounted) {
+            _setStatus('Found ${found.name} ✓ — tap Approve on the PC',
+                Colors.cyanAccent);
+          }
+        },
+      );
+      await AppSettings.saveAddress(found.address);
+      await AppSettings.saveToken(token);
+      if (!mounted) return;
+      _tokenController.text = token;
+      final name = await MedoClient(found.address, token).ping();
+      if (!mounted) return;
+      _setStatus('Connected to $name ✓', Colors.greenAccent);
+    } on MedoException catch (e) {
+      if (mounted) _setStatus(e.message, Colors.orangeAccent);
+    } finally {
+      if (mounted) setState(() => _pairing = false);
+    }
+  }
+
   /// One-tap pairing: discover MEDO on the LAN, have it flash a code on the
   /// PC, and swap that code for the token — no typing of IPs or tokens.
   Future<void> _pairWithMedo() async {
@@ -176,17 +215,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                // The happy path: find MEDO + fetch the token, zero typing
-                // (besides the 6-digit code MEDO shows on the PC screen).
+                // The happy path: find MEDO, then just tap Approve on the PC —
+                // zero typing on the watch (no code, no IP, no token).
                 FilledButton.icon(
-                  onPressed: _pairing ? null : _pairWithMedo,
+                  onPressed: _pairing ? null : _connectApprove,
                   icon: const Icon(Icons.wifi_tethering, size: 14),
-                  label: const Text('Pair with MEDO',
+                  label: const Text('Connect to MEDO',
                       style: TextStyle(fontSize: 12)),
                   style: FilledButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                     backgroundColor: Colors.cyan.shade700,
                   ),
+                ),
+                // Fallback: the classic 6-digit code shown on the PC screen.
+                TextButton(
+                  onPressed: _pairing ? null : _pairWithMedo,
+                  child: const Text('Pair with a code',
+                      style: TextStyle(fontSize: 10, color: Colors.white54)),
                 ),
                 if (_awaitingCode) ...[
                   const SizedBox(height: 8),
