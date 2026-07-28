@@ -21,6 +21,9 @@ dependencies:
   shared_preferences: ^2.2.3
   # Accelerometer access for the hands-free double wrist-flick trigger.
   sensors_plus: ^4.0.2
+  # Shared MEDO connection: discovery + pairing + /ask (also used by phone/).
+  medo_link:
+    path: ../packages/medo_link
 
 dev_dependencies:
   flutter_test:

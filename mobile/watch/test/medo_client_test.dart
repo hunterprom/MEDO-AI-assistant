@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jarvis_watch/medo_client.dart';
+import 'package:medo_link/medo_link.dart';
 
 void main() {
   test('MedoReply parses a full server payload', () {

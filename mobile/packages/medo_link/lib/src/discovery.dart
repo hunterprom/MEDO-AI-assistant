@@ -2,8 +2,8 @@
 ///
 /// Broadcasts `MEDO_DISCOVER_V1` over UDP to the companion-API port; the
 /// server answers with `{"service": "medo", "name": …, "port": …}` and the
-/// datagram's source address tells us where it lives. Pure dart:io — no
-/// plugins, no Gradle changes.
+/// datagram's source address tells us where it lives. Pure `dart:io` — no
+/// plugins.
 library;
 
 import 'dart:async';
@@ -64,8 +64,8 @@ class MedoDiscovery {
 
     send();
     final resend = Timer.periodic(const Duration(seconds: 1), (_) => send());
-    final result = await completer.future
-        .timeout(timeout, onTimeout: () => null);
+    final result =
+        await completer.future.timeout(timeout, onTimeout: () => null);
     resend.cancel();
     await sub.cancel();
     socket.close();

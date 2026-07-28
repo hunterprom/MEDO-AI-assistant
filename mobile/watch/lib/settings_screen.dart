@@ -11,8 +11,7 @@ library;
 
 import 'package:flutter/material.dart';
 
-import 'discovery.dart';
-import 'medo_client.dart';
+import 'package:medo_link/medo_link.dart';
 import 'settings.dart';
 
 class SettingsScreen extends StatefulWidget {

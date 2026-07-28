@@ -16,7 +16,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import 'gesture_trigger.dart';
 import 'ilioski_logo.dart';
-import 'medo_client.dart';
+import 'package:medo_link/medo_link.dart';
 import 'settings.dart';
 import 'settings_screen.dart';
 

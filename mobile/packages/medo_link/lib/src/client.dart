@@ -1,8 +1,9 @@
-/// HTTP client for the Medo v2 companion API (`remote/server.py`).
+/// HTTP client for MEDO's companion API (`remote/server.py`).
 ///
-/// The API is tiny: `GET /ping` to check the server is there, `POST /ask`
-/// with `{"text": …}` to route one utterance. Both live on the LAN, so
-/// every call gets a short timeout — a watch should fail fast, not hang.
+/// Tiny surface: `GET /ping` to check the server, `POST /ask {"text": …}` to
+/// route one utterance, and `POST /pair/start` + `/pair/confirm` for the
+/// presence-code pairing that delivers the auth token. LAN-only, so calls fail
+/// fast rather than hang.
 library;
 
 import 'dart:async';
@@ -10,7 +11,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-/// One routed reply from Medo.
+/// One routed reply from MEDO.
 class MedoReply {
   const MedoReply({
     required this.speech,
@@ -19,16 +20,16 @@ class MedoReply {
     this.latencyMs = 0,
   });
 
-  /// The text Medo wants spoken.
+  /// The text MEDO wants spoken.
   final String speech;
 
-  /// Which brain answered: `FAST` (rule-based skill) or `LLM` (Ollama).
+  /// Which brain answered: `FAST` (rule-based skill) or `LLM`/`CHAT`.
   final String path;
 
-  /// Skill name when the fast path handled it.
+  /// Skill name when a fast-path skill handled it.
   final String? skill;
 
-  /// Server-side routing latency.
+  /// Server-side routing latency (ms).
   final double latencyMs;
 
   factory MedoReply.fromJson(Map<String, dynamic> json) => MedoReply(
@@ -39,8 +40,8 @@ class MedoReply {
       );
 }
 
-/// Raised for anything that stops us reaching Medo, with a message short
-/// enough to show on a watch face.
+/// Raised for anything that stops us reaching MEDO, with a message short
+/// enough to show on a small screen.
 class MedoException implements Exception {
   const MedoException(this.message);
   final String message;
@@ -78,7 +79,7 @@ class MedoClient {
     return body['name'] as String? ?? 'MEDO';
   }
 
-  /// Sends one utterance and returns Medo's reply.
+  /// Sends one utterance and returns MEDO's reply.
   Future<MedoReply> ask(String text) async {
     final body = await _request(
       () => http
@@ -94,9 +95,7 @@ class MedoClient {
 
   /// Ask the server to show a pairing code on its own screen.
   Future<void> pairStart() async {
-    await _request(
-      () => http.post(_uri('/pair/start')).timeout(_pingTimeout),
-    );
+    await _request(() => http.post(_uri('/pair/start')).timeout(_pingTimeout));
   }
 
   /// Exchange the code the user read off the PC for the API token.
