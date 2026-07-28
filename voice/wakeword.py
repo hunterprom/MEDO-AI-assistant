@@ -77,8 +77,17 @@ def wake_phrase_confirmed(transcript: str, phrase: str) -> bool:
             return True
         floor = max(3, len(want) - 1)              # don't fuzzy-match tiny words
         for tok in tokens:
-            if len(tok) >= floor and \
-                    difflib.SequenceMatcher(None, tok, want).ratio() >= 0.7:
+            if len(tok) < floor:
+                continue
+            ratio = difflib.SequenceMatcher(None, tok, want).ratio()
+            # Length-aware leniency (favours NOT missing a genuine wake): a real
+            # mishearing of the wake word is about the SAME length as it ("medo"
+            # -> "metho", "midoh", "mido"), so those pass on a low ratio. A
+            # LONGER word that merely shares a few letters ("medium", "melody",
+            # "method") is a different word, not a mis-spelling, and must clear a
+            # stricter bar — otherwise raising sensitivity would wake on them.
+            near = abs(len(tok) - len(want)) <= 1
+            if ratio >= (0.62 if near else 0.72):
                 return True
     return False
 

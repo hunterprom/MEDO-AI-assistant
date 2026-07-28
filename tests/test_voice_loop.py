@@ -275,6 +275,10 @@ from voice.wakeword import wake_phrase_confirmed  # noqa: E402
 @pytest.mark.parametrize("text", [
     "hey medo", "hey medo what time is it", "medo", "Hey, Medo!",
     "hey meadow", "hey medoh", "медо",
+    # Faint, same-length mishearings of "medo" — Whisper spells a quiet wake
+    # word oddly; the length-aware confirm keeps these (sensitivity over a
+    # missed wake) since they are as short as the real word.
+    "metho", "hey midoh", "mido", "meddo",
 ])
 def test_wake_confirm_accepts_a_real_wake(text):
     assert wake_phrase_confirmed(text, "models/wakeword/hey_medo.onnx") is True
@@ -283,6 +287,10 @@ def test_wake_confirm_accepts_a_real_wake(text):
 @pytest.mark.parametrize("text", [
     "", "   ", "you", "thanks for watching", "let me go", "hello there",
     "the meeting is at ten",
+    # LONGER real words that merely share a few letters with "medo" must NOT
+    # wake it — the length-aware confirm holds them to a stricter bar, so the
+    # extra sensitivity never turns "medium"/"melody"/"method" into a wake.
+    "play some melody", "turn the medium up", "use that method",
 ])
 def test_wake_confirm_rejects_noise_and_unrelated_speech(text):
     # empty = non-speech (door slam / music / clap); the rest lack the phrase.

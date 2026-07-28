@@ -385,12 +385,14 @@ wakeword:                           # M1
   # than TTS) voice extra head-room to trigger without letting normal talk in.
   # Watch your live score with `.venv\Scripts\python -m voice.wakeword`; nudge
   # up toward 0.5 if it ever false-fires, down toward 0.3 if it under-triggers.
-  # 0.25: tuned VERY SENSITIVE (was 0.4 -> 0.3 -> 0.25) so even a faint "medo"
-  # triggers. This lets more ordinary speech blip a raw trigger, but stt_confirm
+  # 0.20: tuned VERY SENSITIVE (was 0.4 -> 0.3 -> 0.25 -> 0.20) so even a faint,
+  # quiet "medo" that used to score just under the bar now reaches the confirm
+  # stage. This lets more ordinary speech blip a raw trigger, but stt_confirm
   # (below) re-transcribes each one and only wakes on a real "medo", so the extra
   # blips cost a short STT pass, not a false wake. Raise toward 0.4 if that STT
-  # work feels heavy or noise sneaks through.
-  threshold: 0.25
+  # work feels heavy or noise sneaks through; drop toward 0.15 for even more
+  # reach (at more STT passes on ambient sound).
+  threshold: 0.20
   # WAKING ON RANDOM SOUNDS? This is the main fix, no retraining needed. MEDO
   # only wakes when the score stays above `threshold` for this many consecutive
   # ~80 ms frames. A clap or a stray word spikes for ONE frame; a real
