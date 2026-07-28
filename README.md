@@ -35,12 +35,27 @@ can put a question to — or turn loose on its *own* answers.
 - 🧩 **Extensible** — drop a `.py` in `plugins/`, plug in any **MCP** server, or
   pair the Wear OS **watch app**; a HUD at `localhost:8730` renders it all live.
 
-## Quick start (Windows)
+## Install
 
-Double-click **`run.bat`** — first launch builds the venvs, fetches the models,
-starts Ollama and the vision sidecar, and opens the HUD at
-<http://localhost:8730>. Then say **"medo"**, or type into the HUD.
-(macOS/Linux: `run.command`.)
+**Prerequisites:** Python 3.12, and a package manager for the automatic app
+installs — **winget** (built into Windows 11) or **Homebrew** (macOS/Linux).
+Leave ~30 GB free for the local models; an NVIDIA GPU is nice but not required.
+
+```
+git clone https://github.com/hunterprom/MEDO.git
+cd MEDO
+```
+
+Then double-click **`run.bat`** (Windows) or **`run.command`** (macOS/Linux). The
+**first** launch is a one-time setup (~24 GB, be patient): it installs Ollama +
+Obsidian, pulls the four local models (`nomic-embed-text`, `llama3.2:3b`,
+`qwen2.5vl:3b`, `qwen3:30b`), builds the two virtualenvs and the voice models,
+then opens the HUD at <http://localhost:8730>. Every later launch skips setup and
+boots straight to the app. Say **"medo"**, or type into the HUD.
+
+No winget/Homebrew? Install [Ollama](https://ollama.com/download) and
+[Obsidian](https://obsidian.md) by hand and re-run. Full walkthrough:
+**[README-detailed.md → Install & first run](README-detailed.md#install--first-run)**.
 
 ```
 .venv\Scripts\python -m pytest      # run the tests

@@ -242,14 +242,78 @@ between — one embed, no LLM round-trip.
 
 ---
 
-## One-click run (Windows)
+## Install & first run
 
-Double-click **`run.bat`**. First launch creates two virtualenvs, installs
-dependencies, downloads the wake-word + Piper voice models, starts Ollama with
-the right environment (`OLLAMA_MODELS=D:\OllamaModels`, `GGML_CUDA_NO_PINNED=1`),
-launches the vision sidecar, and opens the HUD at <http://localhost:8730>.
+### Prerequisites
 
-Then say **"medo"** — or type into the HUD. (macOS/Linux: `run.command`.)
+- **Windows 10/11**, or **macOS/Linux**.
+- **Python 3.12** on PATH — `py -3.12` (Windows) or `python3.12` (macOS/Linux).
+- A package manager for the automatic app installs: **winget** (ships with
+  Windows 11) or **Homebrew** (macOS/Linux). Without one MEDO still runs — the
+  launcher prints the Ollama/Obsidian download links and continues.
+- **~30 GB free disk** for the local models; an NVIDIA GPU helps but the 30B
+  brain runs on CPU too (slower). On Windows the model store defaults to
+  `D:\OllamaModels` — change `OLLAMA_MODELS` at the top of `run.bat` if you have
+  no D: drive.
+
+### 1. Get the code
+
+```
+git clone https://github.com/hunterprom/MEDO.git
+cd MEDO
+```
+
+### 2. First launch — installs everything
+
+Double-click **`run.bat`** (Windows) or **`run.command`** (macOS/Linux). The
+**first** run is a one-time setup (~24 GB — be patient) that, in order:
+
+1. installs **Ollama** and **Obsidian** if missing (winget / Homebrew);
+2. pulls the four local models MEDO uses, smallest first so it's usable quickly
+   (see the table below);
+3. creates the two virtualenvs (`.venv`, `.venv-vision`) and installs the pip deps;
+4. downloads the wake-word and Piper voice models;
+5. starts Ollama (with `OLLAMA_MODELS=D:\OllamaModels`, `GGML_CUDA_NO_PINNED=1`),
+   launches the vision sidecar, and opens the HUD at <http://localhost:8730>.
+
+| Model | Size | Used for |
+|-------|------|----------|
+| `nomic-embed-text` | ~275 MB | semantic routing + fact memory |
+| `llama3.2:3b` | ~2 GB | fast fallback brain |
+| `qwen2.5vl:3b` | ~3 GB | vision — "what do you see" |
+| `qwen3:30b` | ~18 GB | the main brain |
+
+Setup is **marker-gated and idempotent**: it writes `.medo-setup-done` only once
+`qwen3:30b` has landed, so **every later launch skips setup and boots straight to
+the app**, while an interrupted first run simply resumes on the next launch
+(`ollama pull` continues partial downloads; winget/pull steps no-op for anything
+already present).
+
+Then say **"medo"** — or type into the HUD.
+
+> **Don't want the 18 GB `qwen3:30b`?** Create the marker yourself to skip the
+> heavy pull — `type nul > .medo-setup-done` (Windows) or
+> `touch .medo-setup-done` (macOS/Linux) — then point `llm.default_model` in
+> `config.yaml` at a smaller model (e.g. `llama3.2:3b`). Delete the marker to
+> re-run the full setup.
+
+### If winget / Homebrew is missing
+
+Install the two apps by hand, then re-launch (it detects them and jumps to the
+model pulls):
+
+- **Ollama** — <https://ollama.com/download>
+- **Obsidian** — <https://obsidian.md>
+
+### Updating
+
+```
+git pull
+```
+
+Re-launch; the venvs and models are reused. If `requirements.txt` changed, delete
+`.venv` (and `.venv-vision` if `requirements-vision.txt` changed) and the next
+launch rebuilds them.
 
 ## Configuration
 
