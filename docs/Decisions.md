@@ -548,3 +548,14 @@ exception. `app/profiles.py` selection is pure and exhaustively tested.
 Per-user, atomic writes, corrupt-file tolerant; records the profile + whether it
 was a manual override (so a re-detect won't overwrite a deliberate choice). The
 dev config.yaml keeps working for the CLI.
+
+## App packaging S3: first-run wizard (testable state machine + copy) (2026-07-30)
+
+**Decision: the wizard LOGIC is a pure state machine; the HUD renders it.** Steps
+welcome → ollama → models → microphone → done, each advance/fail/retry. The setup
+OPERATIONS (install Ollama, pull models, test mic) are injected (app/setup_ops.py,
+integration/best-effort), so every transition is unit-tested with fakes — no real
+downloads. Model step is RESUMABLE (pulls only missing tags). Every failure is a
+friendly localized message (EN + MK); the traceback goes to Step.detail for the
+log, never the screen. VERIFY the Ollama installer URL/flag + /api/pull shape on a
+build machine before release (marked in setup_ops).
