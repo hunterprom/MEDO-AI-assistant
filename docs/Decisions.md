@@ -559,3 +559,30 @@ downloads. Model step is RESUMABLE (pulls only missing tags). Every failure is a
 friendly localized message (EN + MK); the traceback goes to Step.detail for the
 log, never the screen. VERIFY the Ollama installer URL/flag + /api/pull shape on a
 build machine before release (marked in setup_ops).
+
+## App packaging S4/S5: settings backend + one-click installer (2026-07-30)
+
+**S4 — friendly Settings backend** (`app/app_settings.py`): the fields a normal
+user touches (language pair, voice+volume, wake-word SLIDER, start-on-boot,
+profile) persist to the per-user file with validation — an out-of-range/unknown
+value is never written. Slider↔wakeword-threshold and profile-override translation
+live here so the HUD stays dumb.
+
+**S5 — packaging** (`winsetup/`): three PyInstaller bundles — MEDO.exe (launcher/
+tray), medo-engine.exe (main.py), medo-vision.exe (vision, SEPARATE because
+mediapipe pins numpy<2) — plus an Inno Setup installer (Program Files\MEDO,
+Start-menu + desktop "MEDO" shortcut, uninstaller that ASKS before deleting
+models/data, launches the wizard post-install). The big model isn't shipped — the
+wizard downloads it. Named `winsetup/` not `packaging/` to avoid shadowing the
+PyPI `packaging` lib (which would break the test run). A CI-ish test
+(`tests/test_packaging_manifest.py`) enforces the installer, specs, and manifest
+stay consistent, and that the mediapipe/numpy + signing/SmartScreen gotchas are
+documented. Real builds happen on a Windows machine (can't run PyInstaller/Inno in
+CI here) — `docs/Packaging.md` has the build steps + a manual install-test
+checklist.
+
+**Intertec note:** packaged a multi-process, GPU-orchestrating local AI app into a
+one-click installer with hardware-aware auto-setup for non-technical users —
+process supervisor with restart/backoff + clean teardown, hardware→profile
+auto-fitting (30B only where it fits), a resumable first-run wizard, and a
+separate-bundle answer to the mediapipe/numpy packaging conflict.

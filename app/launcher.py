@@ -51,7 +51,9 @@ def ollama_command() -> List[str]:
 
 def engine_command() -> List[str]:
     if is_frozen():
-        return [str(Path(sys.executable).parent / _exe("medo-engine"))]
+        # Installed layout (see winsetup/installer.iss): the engine bundle sits
+        # in an `engine\` subfolder beside MEDO.exe.
+        return [str(Path(sys.executable).parent / "engine" / _exe("medo-engine"))]
     return [_venv_python(".venv"), str(_project_root() / "main.py"),
             "--voice", "--hud", "--serve"]
 
@@ -60,7 +62,7 @@ def vision_command() -> List[str]:
     # The vision sidecar lives in its OWN environment (mediapipe pins numpy<2), so
     # it is frozen as a SEPARATE bundle — never merged into the engine.
     if is_frozen():
-        return [str(Path(sys.executable).parent / _exe("medo-vision"))]
+        return [str(Path(sys.executable).parent / "vision" / _exe("medo-vision"))]
     return [_venv_python(".venv-vision"), "-m", "vision.run"]
 
 
