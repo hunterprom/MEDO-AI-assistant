@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import pytest
 
+from skills.lion import LionModeSkill
 from skills.system import PowerSkill, SystemInfoSkill
-from skills.weather import WeatherSkill
+from skills.weather import WeatherSkill, _looks_like_city
 
 
 def _matches(skill_cls, text: str) -> bool:
@@ -73,6 +74,54 @@ def test_weather_ignores_non_weather(text):
 ])
 def test_weather_still_matches_real_questions(text):
     assert _matches(WeatherSkill, text)
+
+
+# --- Round-3 audit regressions -------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "кое е најдоброто место",           # "which is the best place" — bare место
+    "нема доволно место во собата",     # "not enough room in the room"
+    "open my google drive",             # bare "drive" means Google Drive, not disk
+    "take me for a drive",
+])
+def test_systeminfo_ignores_bare_place_and_drive(text):
+    assert not _matches(SystemInfoSkill, text)
+
+
+@pytest.mark.parametrize("text", [
+    "колку простор имам",               # framed MK disk question
+    "слободен простор на дискот",
+    "how much disk space", "hard drive", "storage usage",
+])
+def test_systeminfo_still_matches_framed_disk(text):
+    assert _matches(SystemInfoSkill, text)
+
+
+@pytest.mark.parametrize("candidate,ok", [
+    ("work", False), ("home", False), ("next quarter", False),
+    ("the office", False), ("my house", False),
+    ("London", True), ("New York", True), ("Скопје", True),
+])
+def test_weather_nonplace_capture_falls_back(candidate, ok):
+    assert _looks_like_city(candidate) is ok
+
+
+def _lion_dir(text):
+    m = next((p.search(text) for p in LionModeSkill.patterns if p.search(text)), None)
+    assert m is not None, text
+    gd = m.groupdict()
+    return bool(gd.get("on") or gd.get("on2")), bool(gd.get("off") or gd.get("off2"))
+
+
+@pytest.mark.parametrize("text,want_on", [
+    ("enable lion mode", True), ("activate lion mode", True),
+    ("disable lion mode", False), ("deactivate lion mode", False),
+])
+def test_lion_reversed_order_keeps_direction(text, want_on):
+    on, off = _lion_dir(text)
+    # Reversed word order ("enable lion mode") must set a direction, not fall
+    # through to the bare-"lion mode" toggle branch.
+    assert on is want_on and off is (not want_on)
 
 
 if __name__ == "__main__":  # pragma: no cover

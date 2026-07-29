@@ -111,9 +111,15 @@ class BriefingSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         mk = bool(_CYRILLIC.search(request.text))
         parts = [self._greeting(mk)]
+        # Ask each sub-skill in the briefing's language: they derive their own
+        # wording *and* source selection (news feeds_mk vs feeds) from this
+        # request text, so an English ask would give a Macedonian briefing
+        # English weather and foreign headlines.
         gather = {
-            "weather": lambda: self._from_skill(self._weather, "what's the weather"),
-            "news": lambda: self._from_skill(self._news, "what's the news"),
+            "weather": lambda: self._from_skill(
+                self._weather, "какво е времето" if mk else "what's the weather"),
+            "news": lambda: self._from_skill(
+                self._news, "кои се вестите" if mk else "what's the news"),
         }
         for section in self._sections:
             try:

@@ -52,9 +52,13 @@ _STATUS_HOW = re.compile(
     r"\bhow(?:'s| is)\s+(?:the\s+)?(?P<proj>.+?)\s+project\b(?:\s+(?:going|doing|coming))?"
     r"|\bhow(?:'s| is)\s+project\s+(?P<proj2>.+?)(?:\s+(?:going|doing|coming))?\s*[?.!]*$",
     re.IGNORECASE)
+# "break down" is deliberately not a bare trigger: everyday phrases like "break
+# down the cost" or "break down the lyrics" aren't planning requests, and
+# claiming one would create a project as a side effect. "plan …" stays, since
+# asking to plan a goal is unambiguous.
 _PLAN = re.compile(
     r"\b(?:plan\s+out|make\s+(?:me\s+)?a\s+plan\s+for|draft\s+a\s+plan\s+for|"
-    r"break\s+down|plan)\s+(?:a\s+|my\s+|the\s+|an\s+)?(?:project\s+)?"
+    r"plan)\s+(?:a\s+|my\s+|the\s+|an\s+)?(?:project\s+)?"
     r"(?:to\s+|for\s+|called\s+|named\s+)?(?P<goal>.+)", re.IGNORECASE)
 
 

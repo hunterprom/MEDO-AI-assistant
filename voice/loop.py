@@ -632,7 +632,10 @@ class VoiceLoop:
             "src": src, "src_text": text, "dst": dst, "dst_text": translated,
         }))
         await self._sm.transition(AssistantState.SPEAKING)
-        await self._speak(translated)
+        # Voice the translation in the DESTINATION language, not self._turn_language
+        # (the SOURCE code Whisper detected) — otherwise the Cyrillic reply is read
+        # by the English-only Piper voice.
+        await self._speak(translated, language=dst)
         return True
 
     async def _translate(self, text: str, src: str, dst: str) -> str:
@@ -795,6 +798,11 @@ class VoiceLoop:
         self._ui.turn(result, self._log.turns[-1])
         next_require_wake = not self._should_relisten(self._barged_in)
         self._barged_in = False
+        # The turn's language voiced its reply above; clear it so a later
+        # timer/reminder announcement (or the dictation-exit line) — spoken via
+        # _speak with no language — falls back to detect_script(text) instead of
+        # this turn's voice, rather than reusing the stale prior-turn language.
+        self._turn_language = None
         return next_require_wake
 
     def _should_relisten(self, barged_in: bool) -> bool:

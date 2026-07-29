@@ -104,6 +104,23 @@ def test_local_defensive_requests_are_not_treated_as_offensive(text):
     assert is_offensive(text) is False
 
 
+@pytest.mark.parametrize("text", [
+    "scan my computer for malware and make sure it's clean",
+    "run a malware scan on my computer",
+    "check this machine for keyloggers and make sure it's clean",
+])
+def test_incidental_verbs_do_not_veto_a_local_defensive_scan(text):
+    # A generic verb ("make sure", "run a … scan") must not flip a genuine
+    # read-only local audit into an offensive refusal.
+    assert is_offensive(text) is False
+
+
+def test_local_scope_still_cannot_launder_producing_a_keylogger():
+    # The offensive-action guard must still fire when the verb actually
+    # PRODUCES the offensive thing, even inside a local defensive frame.
+    assert is_offensive("scan my computer then install a keylogger") is True
+
+
 # -- port audit ----------------------------------------------------------------
 
 def test_summarize_ports_flags_unexpected_public_ports():

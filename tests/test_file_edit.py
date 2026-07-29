@@ -150,6 +150,24 @@ async def test_macedonian_dictation(skill, workspace):
     assert "сирење" in workspace.joinpath("shopping.txt").read_text(encoding="utf-8")
 
 
+@pytest.mark.asyncio
+async def test_possessive_my_is_not_folded_into_the_file_name(skill, workspace):
+    """"add to MY shopping.txt" — 'my' is a possessive, not part of the name.
+
+    Without stripping it the name resolves to "my shopping.txt", which the
+    substring search never finds, so a real whitelisted file gets refused.
+    """
+    r = await _say(skill, "add to my shopping.txt: milk")
+    assert r.success, r.speech
+    assert "milk" in workspace.joinpath("shopping.txt").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_possessive_my_in_replace_finds_the_file(skill, workspace):
+    r = await _say(skill, "in my config.yaml replace 8710 with 9000")
+    assert r.needs_confirmation is True
+
+
 # --- replacing (the destructive one) ------------------------------------------
 
 
@@ -250,6 +268,18 @@ async def test_editor_launches_the_configured_command(workspace, monkeypatch):
     r = await _say(skill, "edit notes.md")
     assert r.success and len(launched) == 1
     assert "notes.md" in launched[0] and launched[0].startswith("code ")
+
+
+@pytest.mark.asyncio
+async def test_editor_handles_possessive_my(workspace, monkeypatch):
+    """"edit MY notes.md" — the possessive must not become part of the name."""
+    launched = []
+    monkeypatch.setattr("skills.file_edit.run_detached", lambda c: launched.append(c))
+    skill = OpenInEditorSkill(PathWhitelist([str(workspace)]),
+                              {"editor": {"windows": "code", "darwin": "code",
+                                          "linux": "code"}})
+    r = await _say(skill, "edit my notes.md")
+    assert r.success and len(launched) == 1 and "notes.md" in launched[0]
 
 
 @pytest.mark.asyncio

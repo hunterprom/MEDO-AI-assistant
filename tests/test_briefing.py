@@ -6,6 +6,7 @@ from datetime import datetime
 
 import pytest
 
+from core import mk
 from skills.base import Skill, SkillRequest, SkillResult
 from skills.briefing import BriefingSkill
 
@@ -123,6 +124,32 @@ async def test_macedonian_trigger_gets_macedonian_greeting_and_flag():
     assert r.speech.startswith("Добро утро.")
     assert "понеделник" in r.speech  # Monday, in Macedonian
     assert "Потсетници" in r.speech
+
+
+@pytest.mark.asyncio
+async def test_macedonian_briefing_asks_sub_skills_in_macedonian():
+    # The weather/news skills derive their language AND source selection (news
+    # feeds_mk vs feeds) from the request text, so a Macedonian briefing must
+    # ask them in Macedonian — a hard-coded English ask leaked English weather
+    # wording and the wrong (foreign) headlines into an MK briefing.
+    class _LangEcho(Skill):
+        name = "lang-echo"
+        description = "answers in the language it was asked in"
+
+        def __init__(self, mk_speech: str, en_speech: str):
+            self._mk_speech, self._en_speech = mk_speech, en_speech
+
+        async def execute(self, request: SkillRequest) -> SkillResult:
+            speak_mk = mk.is_cyrillic(request.text)
+            return SkillResult(self._mk_speech if speak_mk else self._en_speech)
+
+    r = await _skill(
+        weather=_LangEcho("Во Скопје е 26 степени и ведро.",
+                          "It's 26 degrees and clear in Skopje."),
+        news=_LangEcho("Еве ги главните вести.", "Here are the top headlines."),
+    ).execute(SkillRequest(text="добро утро медо"))
+    assert "26 степени" in r.speech and "Еве ги главните вести" in r.speech
+    assert "degrees" not in r.speech and "top headlines" not in r.speech
 
 
 def test_fast_path_patterns_cover_the_spec_triggers():

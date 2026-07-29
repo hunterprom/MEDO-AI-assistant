@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 
 import pytest
@@ -12,7 +13,13 @@ from core.config import load_settings
 from core.events import EventBus, StateMachine
 from core.router import Router
 from llm.client import OllamaClient
-from remote.server import MAX_TEXT_CHARS, PAIR_MAX_PENDING, RemoteServer
+from remote.server import (
+    MAX_TEXT_CHARS,
+    PAIR_MAX_PENDING,
+    PAIR_MAX_PENDING_PER_PEER,
+    PAIR_REQUEST_TTL_S,
+    RemoteServer,
+)
 from skills.base import SkillRegistry
 from skills.datetime_skill import DateTimeSkill
 
@@ -386,6 +393,39 @@ async def test_pending_requests_are_capped(server_client):
         assert (await client.post("/pair/request", json={"name": "d"})).status == 200
     # one more over the cap is refused, so a LAN peer can't flood the queue
     assert (await client.post("/pair/request", json={"name": "d"})).status == 429
+
+
+@pytest.mark.asyncio
+async def test_a_single_lan_peer_cannot_flood_the_pending_queue(lan_client: TestClient):
+    # One LAN peer is capped well below the global PAIR_MAX_PENDING, so it can no
+    # longer occupy every slot and deny pairing to every other device.
+    accepted = 0
+    for _ in range(PAIR_MAX_PENDING_PER_PEER + 3):
+        if (await lan_client.post("/pair/request", json={"name": "flood"})).status == 200:
+            accepted += 1
+    assert accepted == PAIR_MAX_PENDING_PER_PEER
+    assert accepted < PAIR_MAX_PENDING          # only a slice of the shared queue
+    # A loopback/local peer (the HUD flows) stays governed by the global cap only.
+    lan_client.medo_server._is_local = lambda request: True
+    assert (await lan_client.post("/pair/request", json={"name": "hud"})).status == 200
+
+
+@pytest.mark.asyncio
+async def test_late_approval_stays_claimable_past_original_ttl(server_client):
+    # A human approves a request that is a heartbeat from its TTL; approval must
+    # refresh its lifetime, or the just-minted token is pruned and lost before
+    # the device can poll for it.
+    client, server = server_client
+    server._settings.remote.token = "the-token"
+    rid = (await (await client.post(
+        "/pair/request", json={"name": "d"})).json())["request_id"]
+    server._pair_requests[rid]["created"] = time.monotonic() - (PAIR_REQUEST_TTL_S - 1)
+    assert (await client.post("/pair/approve", json={"request_id": rid})).status == 200
+    # ~2s later the device polls. On the OLD creation time this entry would now
+    # be past its TTL and pruned -> "expired"; the refresh keeps it claimable.
+    server._pair_requests[rid]["created"] -= 2.0
+    body = await (await client.get(f"/pair/poll?request_id={rid}")).json()
+    assert body["status"] == "approved" and body["token"] == "the-token"
 
 
 @pytest.mark.asyncio

@@ -155,7 +155,9 @@ class AppsSkill(Skill):
                 f"Отворам {key}." if speak_mk else f"Opening {key}.",
                 data={"app": key, "action": "open"})
 
-        # close / quit / kill — best-effort, cross-platform.
+        # close / quit / kill — best-effort, cross-platform. Graceful, never a
+        # force-kill: an app with unsaved work must get its "save changes?"
+        # prompt, the same courtesy the other destructive ops here extend.
         self._close(key)
         return SkillResult(
             f"Затворам {key}." if speak_mk else f"Closing {key}.",
@@ -190,7 +192,9 @@ class AppsSkill(Skill):
     def _close(self, key: str) -> None:
         os_name = current_os()
         if os_name == "windows":
-            subprocess.Popen(["taskkill", "/IM", self._win_image_name(key), "/F"])
+            # No /F: bare taskkill sends WM_CLOSE, so a doc with unsaved edits
+            # still gets to prompt. /F would force-terminate and lose the work.
+            subprocess.Popen(["taskkill", "/IM", self._win_image_name(key)])
         elif os_name == "darwin":
             subprocess.Popen(["osascript", "-e", f'tell application "{key}" to quit'])
         else:

@@ -127,9 +127,12 @@ PAIR_MAX_ATTEMPTS = 5
 #: Approve-on-PC pairing: how long an un-approved request lingers, and a cap so
 #: a LAN peer can't flood the pending list. The request_id is a 192-bit secret,
 #: so the token is delivered only to the device that made the request and only
-#: after a human clicks Approve in the HUD.
+#: after a human clicks Approve in the HUD. The per-peer cap is the smaller gate
+#: so one LAN peer can't occupy every global slot and deny pairing to everyone
+#: else (loopback — the HUD/local flows — is trusted and exempt from it).
 PAIR_REQUEST_TTL_S = 300.0
 PAIR_MAX_PENDING = 12
+PAIR_MAX_PENDING_PER_PEER = 3
 
 #: UDP discovery probe the watch broadcasts; anything else is ignored.
 DISCOVERY_PROBE = b"MEDO_DISCOVER_V1"
@@ -648,11 +651,18 @@ class RemoteServer:
         pending = [r for r in self._pair_requests.values() if r["status"] == "pending"]
         if len(pending) >= PAIR_MAX_PENDING:
             return _error(429, "too many pending connection requests — approve or wait")
+        # Per-peer cap: one flooding LAN peer must not fill the shared queue and
+        # lock out every legitimate device. Loopback (HUD/local flows) is trusted
+        # and only bounded by the global cap above.
+        peer = request.remote or "?"
+        if not self._is_local(request) and sum(
+                1 for r in pending if r["peer"] == peer) >= PAIR_MAX_PENDING_PER_PEER:
+            return _error(429, "too many pending requests from this device — approve or wait")
         request_id = secrets_mod.token_urlsafe(24)
         self._pair_requests[request_id] = {
             "name": name,
             "kind": kind,
-            "peer": request.remote or "?",
+            "peer": peer,
             "created": time.monotonic(),
             "status": "pending",
             "token": None,
@@ -713,6 +723,11 @@ class RemoteServer:
             token = ensure_remote_token(self._settings)
         req["status"] = "approved"
         req["token"] = token
+        # Refresh the lifetime so a human who approves near the TTL still leaves
+        # the device a full window to poll and claim the token — otherwise the
+        # entry is pruned on its ORIGINAL creation time and the minted token is
+        # silently discarded (/pair/poll then wrongly reports "expired").
+        req["created"] = time.monotonic()
         logger.info("pair request %r approved (%s)", req["name"], req["peer"])
         return web.json_response({"ok": True, "name": req["name"]})
 

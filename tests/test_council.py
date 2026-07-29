@@ -344,6 +344,28 @@ async def test_lion_mode_macedonian(settings):
     assert settings.mode.lion is False and "Лав" in r.speech
 
 
+@pytest.mark.asyncio
+async def test_reversed_order_enable_honours_direction_not_toggle(settings):
+    # "activate lion mode" must turn it ON even when it is already on, not
+    # toggle it off.
+    settings.mode.lion = True
+    skill = LionModeSkill(settings)
+    r = await skill.execute(SkillRequest(text="activate lion mode",
+                                         match=skill.match("activate lion mode")))
+    assert settings.mode.lion is True and r.data["lion_mode"] is True
+
+
+@pytest.mark.asyncio
+async def test_reversed_order_disable_honours_direction_not_toggle(settings):
+    # "disable lion mode" must turn it OFF even when it is already off, not
+    # toggle it on.
+    settings.mode.lion = False
+    skill = LionModeSkill(settings)
+    r = await skill.execute(SkillRequest(text="disable lion mode",
+                                         match=skill.match("disable lion mode")))
+    assert settings.mode.lion is False and r.data["lion_mode"] is False
+
+
 def test_lion_mode_defaults_off_every_start():
     # It is a mode for a task, not a setting you leave behind.
     assert load_settings().mode.lion is False

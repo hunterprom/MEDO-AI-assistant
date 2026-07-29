@@ -63,6 +63,18 @@ _NOT_A_CITY = {"the moment", "the minute", "now", "home", "work",
                "the weekend", "the week", "the day", "school"}
 
 
+def _looks_like_city(candidate: str) -> bool:
+    """A captured place is a real city only when it isn't a common non-place
+    ('work', 'home', 'next quarter') and carries no leading determiner — those
+    phrasings mean the default location, not a foreign place to geocode."""
+    candidate = candidate.strip(" ?.!")
+    if not candidate or candidate.lower() in _NOT_A_CITY:
+        return False
+    return not re.match(
+        r"(?:the|this|that|a|an|my|your|our|his|her|their|next|last)\b",
+        candidate, re.IGNORECASE)
+
+
 def _city_from_tail(text: str) -> str | None:
     """A trailing 'in/for/at <place>' -> the place, when it looks like a real
     city, else None. A real city is a proper noun with no leading determiner —
@@ -73,12 +85,7 @@ def _city_from_tail(text: str) -> str | None:
     if not tail:
         return None
     candidate = tail.group("c").strip(" ?.!")
-    if not candidate or candidate.lower() in _NOT_A_CITY:
-        return None
-    if re.match(r"(?:the|this|that|a|an|my|your|our|his|her|their)\b",
-                candidate, re.IGNORECASE):
-        return None
-    return candidate
+    return candidate if _looks_like_city(candidate) else None
 
 
 class WeatherSkill(Skill):
@@ -170,6 +177,11 @@ class WeatherSkill(Skill):
             (request.args.get("city") or gd.get("city") or gd.get("cityb")
              or gd.get("city2") or gd.get("city3") or gd.get("city4")
              or gd.get("city5") or "").strip(" ?.!"))
+        if city and not _looks_like_city(city):
+            # A pattern's greedy city group can capture a non-place ("weather at
+            # work", "forecast for next quarter"); treat it as the default
+            # location instead of geocoding it as a foreign city.
+            city = ""
         if not city:
             # Several patterns ("how hot is it in Dubai", "is it raining in
             # Paris", "do I need a jacket in London") carry no city GROUP, so

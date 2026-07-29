@@ -125,6 +125,30 @@ _OFFENSIVE_ACTION = re.compile(
     r"\b(?:write|create|build|make|generate|develop|code|install|deploy|plant|"
     r"run|use|launch|execute|craft|напиши|создад\w*|направи|инсталира\w*)\b",
     re.IGNORECASE)
+#: Only filler (articles/pronouns) may sit between the action verb and its
+#: object for the verb to still count as PRODUCING the offensive thing.
+_ACTION_FILLER = re.compile(
+    r"^\s*(?:(?:me|a|an|the|some|my|your|this|that)\s+)*$", re.IGNORECASE)
+#: A defensive noun the offensive word can MODIFY ("malware scan", "keylogger
+#: detector", "rootkit removal") — then it's the audit's subject, not the object
+#: being made.
+_DEFENSIVE_HEAD = re.compile(
+    r"\s+(?:scan\w*|check\w*|audit\w*|detect\w*|remov\w*|cleanup|sweep|"
+    r"protection|defen\w*)\b", re.IGNORECASE)
+
+
+def _offensive_action_produces(text: str) -> bool:
+    """True only when an offensive-action verb actually GOVERNS the offensive
+    keyword — "write a keylogger", "install a rootkit" — as opposed to a generic
+    verb that merely co-occurs ("scan for malware and make sure it's clean") or
+    the keyword used as a modifier of a defensive noun ("run a malware scan")."""
+    for m in _OFFENSIVE.finditer(text):
+        if _DEFENSIVE_HEAD.match(text[m.end():]):
+            continue                       # "malware scan" — the audit's subject
+        for a in _OFFENSIVE_ACTION.finditer(text[:m.start()]):
+            if _ACTION_FILLER.match(text[a.end():m.start()]):
+                return True                # verb directly produces the keyword
+    return False
 
 
 def is_offensive(text: str) -> bool:
@@ -139,7 +163,7 @@ def is_offensive(text: str) -> bool:
         return True
     if _OFFENSIVE.search(text):
         defensive_local = (_LOCAL_SCOPE.search(text) and _DEFENSIVE_VERB.search(text)
-                           and not _OFFENSIVE_ACTION.search(text))
+                           and not _offensive_action_produces(text))
         return not defensive_local
     return False
 

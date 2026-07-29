@@ -203,6 +203,17 @@ async def test_closing_an_app_invokes_the_platform_killer(monkeypatch):
     assert killed == ["chrome"] and result.data["action"] == "close"
 
 
+def test_windows_close_is_graceful_not_a_force_kill(monkeypatch):
+    """Closing must send WM_CLOSE (no /F), so unsaved work can prompt to save."""
+    invoked = []
+    monkeypatch.setattr("skills.apps.current_os", lambda: "windows")
+    monkeypatch.setattr("skills.apps.subprocess.Popen",
+                        lambda cmd, *a, **k: invoked.append(cmd))
+    AppsSkill(APPS)._close("chrome")
+    assert invoked == [["taskkill", "/IM", "chrome.exe"]]
+    assert "/F" not in invoked[0]
+
+
 @pytest.mark.asyncio
 async def test_an_app_missing_for_this_os_is_reported_not_launched(monkeypatch):
     launched = []

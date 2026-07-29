@@ -126,12 +126,12 @@ class FileEditSkill(Skill):
     patterns = [
         # --- replace (destructive; asks first) ---------------------------
         # "in config.yaml replace 8710 with 9000"
-        re.compile(rf"\bin\s+(?:the\s+)?(?:file\s+)?(?P<rfile>{_NAME}?)[,\s]+"
+        re.compile(rf"\bin\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<rfile>{_NAME}?)[,\s]+"
                    r"(?:replace|change|swap)\s+(?P<old>.+?)\s+(?:with|to|for)\s+"
                    r"(?P<new>.+?)\s*$", re.IGNORECASE),
         # "replace 8710 with 9000 in config.yaml"
         re.compile(rf"\b(?:replace|change|swap)\s+(?P<old>.+?)\s+(?:with|to|for)\s+"
-                   rf"(?P<new>.+?)\s+in\s+(?:the\s+)?(?:file\s+)?(?P<rfile>{_NAME})\s*$",
+                   rf"(?P<new>.+?)\s+in\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<rfile>{_NAME})\s*$",
                    re.IGNORECASE),
         # MK: "во config.yaml замени 8710 со 9000"
         re.compile(rf"\bво\s+(?:датотеката\s+|фајлот\s+)?(?P<rfile>{_NAME}?)[,\s]+"
@@ -139,16 +139,16 @@ class FileEditSkill(Skill):
 
         # --- dictate to the top ------------------------------------------
         re.compile(rf"\b(?:prepend|add)\s+(?P<text>.+?)\s+to\s+the\s+"
-                   rf"(?:top|start|beginning)\s+of\s+(?:the\s+)?(?:file\s+)?"
+                   rf"(?:top|start|beginning)\s+of\s+(?:the\s+|my\s+)?(?:file\s+)?"
                    rf"(?P<pfile>{_NAME})\s*$", re.IGNORECASE),
 
         # --- dictate (append) --------------------------------------------
         # "add to shopping.txt: milk" — colon form, the natural dictation shape
-        re.compile(rf"\b(?:add|append|write|save)\s+to\s+(?:the\s+)?(?:file\s+)?"
+        re.compile(rf"\b(?:add|append|write|save)\s+to\s+(?:the\s+|my\s+)?(?:file\s+)?"
                    rf"(?P<afile>{_NAME}?)\s*[:,]\s*(?P<text>.+)$", re.IGNORECASE),
         # "append milk to shopping.txt"
         re.compile(rf"\b(?:add|append|write|save)\s+(?P<text>.+?)\s+to\s+"
-                   rf"(?:the\s+(?:end\s+of\s+)?)?(?:file\s+)?(?P<afile>{_NAME})\s*$",
+                   rf"(?:the\s+(?:end\s+of\s+)?|my\s+)?(?:file\s+)?(?P<afile>{_NAME})\s*$",
                    re.IGNORECASE),
         # MK: "додај во листа.txt: млеко" / "запиши млеко во листа.txt"
         re.compile(rf"\b(?:додај|запиши|напиши)\s+во\s+(?:датотеката\s+|фајлот\s+)?"
@@ -477,9 +477,9 @@ class OpenInEditorSkill(Skill):
     )
 
     patterns = [
-        re.compile(rf"\bedit\s+(?:the\s+)?(?:file\s+)?(?P<file>{_NAME})\s*$",
+        re.compile(rf"\bedit\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<file>{_NAME})\s*$",
                    re.IGNORECASE),
-        re.compile(rf"\bopen\s+(?:the\s+)?(?:file\s+)?(?P<file>{_NAME}?)\s+in\s+"
+        re.compile(rf"\bopen\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<file>{_NAME}?)\s+in\s+"
                    r"(?:the\s+|my\s+)?(?:editor|text\s+editor|vs\s?code|notepad)\b",
                    re.IGNORECASE),
         # MK: "уреди белешки.md", "отвори белешки.md во уредувач"

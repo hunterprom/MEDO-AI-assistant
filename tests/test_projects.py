@@ -118,6 +118,18 @@ def test_status_how_needs_a_project_marker(tmp_path):
     assert skill.match("how is project taxes coming") is not None
 
 
+def test_plan_ignores_everyday_break_down_phrases(tmp_path):
+    skill = _skill(tmp_path)
+    # "break down X" is an everyday phrase, not a request to plan a project — it
+    # must NOT be claimed (which would create a bogus project as a side effect).
+    assert skill.match("break down the cost for me") is None
+    assert skill.match("break down the lyrics of this song") is None
+    assert skill.match("break down what happened yesterday") is None
+    # ...but genuine "plan …" requests still route to the planner.
+    assert skill.match("plan a trip to Japan") is not None
+    assert skill.match("plan a project to launch a podcast") is not None
+
+
 @pytest.mark.asyncio
 async def test_skill_plans_a_goal_into_tasks(tmp_path):
     async def fake_plan(goal):

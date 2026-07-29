@@ -39,10 +39,11 @@ logger = logging.getLogger(__name__)
 
 _DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 _CAP_NAME = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
-#: Heuristic for a catastrophic-backtracking regex: a quantifier INSIDE a group
-#: that is itself quantified — (a+)+, (a*)*, (.+)*. Not exhaustive, but it
-#: rejects the classic ReDoS shapes a device manifest could smuggle in.
-_REDOS = re.compile(r"\([^()]*[+*][^()]*\)[+*]")
+#: Heuristic for a catastrophic-backtracking regex: a quantified group whose
+#: body holds a quantifier, optional, or alternation — (a+)+, (a*)*, (.+)*,
+#: (a?)+, (a|a)+. Not exhaustive, but it rejects the classic ReDoS shapes a
+#: device manifest could smuggle in.
+_REDOS = re.compile(r"\([^()]*[+*?|][^()]*\)[+*]")
 TRANSPORTS = ("http_poll", "websocket")
 
 #: A device is offline when it hasn't polled/connected for this long.

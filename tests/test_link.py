@@ -56,6 +56,21 @@ def test_invalid_manifests_report_every_problem():
         {"device_id": "x1", "name": "x", "capabilities": []}))
 
 
+def test_redos_alternation_and_optional_patterns_are_rejected():
+    # Beyond (a+)+, the heuristic must also reject optional- and alternation-
+    # based catastrophic backtracking; search()'d against every utterance these
+    # would hang the single-threaded router (e.g. "aaaaaaaaaaaaaaaa!" vs
+    # "(a|a|a)+$"). They compile fine, so re.compile alone won't stop them.
+    for evil in ["(a|a|a)+$", "(a?)+", "(a?)*", "([a-z]|[a-z])+"]:
+        cap = {"name": "go", "description": "do it", "fast_patterns": [evil]}
+        errors = validate_manifest({**LAMP, "capabilities": [cap]})
+        assert any("catastrophic-backtracking" in e for e in errors), evil
+    # A quantified *safe* alternation (no overlap, followed by \b) still passes.
+    ok = {"name": "go", "description": "do it",
+          "fast_patterns": [r"\bdog,?\s+(stand|up)\b"]}
+    assert validate_manifest({**LAMP, "capabilities": [ok]}) == []
+
+
 # --- registration -> tools + fast patterns ----------------------------------
 
 

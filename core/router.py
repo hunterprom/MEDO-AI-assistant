@@ -158,6 +158,11 @@ class Router:
         #: path, so the follow-up chain survives web_search's skill_name-less
         #: synthesis result. Reset at the top of every route().
         self._turn_used_live_info = False
+        #: Set within a turn when an ambiguous confirmation reply (neither yes nor
+        #: no) is cancelled and RE-ROUTED as a genuine command — so route() records
+        #: that fresh command as a normal turn instead of suppressing it like a
+        #: yes/no answer. Reset at the top of every route().
+        self._rerouted_from_confirmation = False
         #: Active model for the LLM path; set by the app / model picker.
         self.model: str | None = settings.llm.default_model
         #: Routing tallies (this session) + persisted per-request metrics that
@@ -465,6 +470,7 @@ class Router:
             and self._pending[1].context.get("source")
             == (context or {}).get("source"))
         self._turn_used_live_info = False
+        self._rerouted_from_confirmation = False
         # Cleared each turn so a stale embedding can never attach to a later
         # learned route; set by _semantic_route when it embeds this utterance.
         self._last_query_vec = None
@@ -473,6 +479,12 @@ class Router:
         await self._bus.emit(Event(EventType.TRANSCRIPT, text))
         result = await self._route_inner(text, context or {}, on_delta, on_llm_start)
         result.latency_ms = (time.perf_counter() - started) * 1000.0
+
+        # An ambiguous confirmation reply (neither yes nor no) was cancelled and
+        # re-routed by _route_inner as a fresh command — that command is a normal
+        # turn, so record it and arm the follow-up chain rather than suppress it.
+        if self._rerouted_from_confirmation:
+            answering_confirmation = False
 
         self.stats[result.path] += 1
         if self.metrics is not None:
@@ -622,6 +634,12 @@ class Router:
         skill, request = self._pending  # type: ignore[misc]
         if is_affirmative(text):
             self._pending = None
+            if skill.controls_pc and not self._settings.safety.pc_control_enabled:
+                # PC control may have been switched off while this action waited
+                # on a yes — re-apply the gate the fast/LLM paths enforce so a
+                # confirmed destructive action can't slip past a now-off switch.
+                return RouteResult(path=RoutePath.FAST, speech=PC_CONTROL_OFF_REPLY,
+                                  skill_name=skill.name)
             request.context = {**request.context, "confirmed": True}
             outcome = await self._safe_execute(skill, request)  # performs the action
             return RouteResult(
@@ -635,6 +653,7 @@ class Router:
             return RouteResult(path=RoutePath.FAST, speech=CANCELLED_REPLY)
         # Anything else: don't guess with a destructive action — cancel and re-route.
         self._pending = None
+        self._rerouted_from_confirmation = True
         logger.info("ambiguous confirmation %r; cancelling pending action", text)
         return await self._route_inner(text, context)
 

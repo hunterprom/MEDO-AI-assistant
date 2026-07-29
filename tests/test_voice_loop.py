@@ -245,6 +245,76 @@ async def test_fast_path_turn_does_not_hang_on_the_filler():
     assert AssistantState.SPEAKING in states                  # reached SPEAKING, not stuck
 
 
+@pytest.mark.asyncio
+async def test_interpret_speaks_translation_in_destination_language():
+    """Regression: interpreter mode must voice the TRANSLATION in the
+    destination language, not the SOURCE language of the spoken input.
+    English 'hello' -> Macedonian 'здраво' was spoken with _turn_language='en'
+    (the source), so the Cyrillic came out of the English-only Piper voice."""
+    loop = _make_loop()
+
+    class _Stt:
+        def transcribe_with_language(self, audio):
+            return ("hello", "en")
+    loop._stt = _Stt()
+    loop._modes.interpreter_langs = ("en", "mk")
+
+    async def _translate(text, src, dst):
+        return "здраво"
+    loop._translate = _translate
+    loop._sm.transition = AsyncMock()
+    loop._sm.bus.emit = AsyncMock()
+
+    spoken: list[tuple[str, str | None]] = []
+
+    async def _speak(text, language=None):
+        spoken.append((text, language))
+        return 10.0
+    loop._speak = _speak
+
+    audio = np.full(1600, 50, dtype=np.int16)
+    await loop._interpret_turn(audio)
+
+    # translated text, voiced in the DESTINATION language (not the source 'en').
+    assert spoken == [("здраво", "mk")]
+
+
+@pytest.mark.asyncio
+async def test_turn_language_cleared_after_turn():
+    """Regression: _turn_language is set from STT each turn but must be cleared
+    once the turn ends — otherwise a later timer/reminder (or the dictation-exit
+    line), spoken via _speak with no language, reuses the previous turn's voice
+    instead of falling back to detect_script(text). An English command left it
+    'en', so a Macedonian reminder was read by the English-only Piper voice."""
+    from core.events import RoutePath
+    from core.router import RouteResult
+
+    loop = _make_loop()
+
+    class _Stt:
+        def transcribe_with_language(self, audio):
+            return ("what time is it", "en")
+    loop._stt = _Stt()
+
+    async def _route(text, context=None, on_delta=None, on_llm_start=None):
+        return RouteResult(path=RoutePath.FAST, speech="It's 3 PM.",
+                           skill_name="datetime", streamed_reply=False)
+    loop._router.route = _route
+    loop._router.awaiting_confirmation = False
+    loop._modes.continuous = False
+    loop._sm.transition = AsyncMock()
+
+    async def _speak(text, language=None):
+        return 10.0
+    loop._speak = _speak
+
+    audio = np.full(1600, 50, dtype=np.int16)
+    await asyncio.wait_for(loop._run_turn(audio, 0.0, True), timeout=5)
+
+    # The turn detected 'en'; it must NOT linger for the next announcement.
+    assert loop._turn_language is None
+
+
 def test_wake_has_an_anti_false_wake_guard_by_default():
     # A single-frame idle trigger is only safe with stt_confirm to reject a
     # non-"medo" spike; the shipped config must keep at least one of the two

@@ -279,13 +279,19 @@ class SystemInfoSkill(Skill):
         re.compile(r"\bsystem\s+(?:status|stats|info)\b", re.IGNORECASE),
         # Disk / storage. Deliberately broad on the words people actually use
         # for it ("how much space do I have", "free space", "storage left").
-        re.compile(r"\b(?:disk|drive|storage)\s*(?:space|usage)?\b", re.IGNORECASE),
+        # "drive" needs a storage frame ("drive space", "hard drive"): bare
+        # "drive" usually means Google Drive (see files.py), not the local disk.
+        re.compile(r"\b(?:disk|storage)\s*(?:space|usage)?\b|"
+                   r"\b(?:hard\s+drive|drive\s+(?:space|usage))\b", re.IGNORECASE),
         re.compile(r"\b(?:free|available|much|enough)\s+(?:space|storage|room)\b",
                    re.IGNORECASE),
         re.compile(r"\bspace\s+(?:left|remaining|free|do\s+i\s+have|on\s+(?:my|the)"
                    r"\s+(?:pc|computer|drive|disk|machine))\b", re.IGNORECASE),
-        # MK: "колку простор/место имам", "слободен простор"
-        re.compile(r"\b(?:простор|место)\b", re.IGNORECASE),
+        # MK: "колку простор/место имам", "слободен простор" — framed like the
+        # English disk patterns above, so the very common bare word "место"
+        # (place/spot) doesn't hijack unrelated speech to a disk report.
+        re.compile(r"\b(?:колку|слободен|слободно|диск\w*)\b.*\b(?:простор|место)\b",
+                   re.IGNORECASE),
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:

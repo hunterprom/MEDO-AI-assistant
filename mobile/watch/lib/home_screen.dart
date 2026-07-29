@@ -69,7 +69,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     _tts.setCompletionHandler(() {
       if (mounted && _phase == Phase.speaking) {
-        setState(() => _phase = Phase.idle);
+        _setPhase(Phase.idle); // re-arms the flick detector via _syncGestureDetection
       }
     });
 
