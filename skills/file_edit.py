@@ -30,6 +30,7 @@ from typing import Any
 from core import mk
 from core.platform import pick_for_os, run_detached
 from core.safety import PathWhitelist
+from security.capabilities import Capability
 from skills.base import Skill, SkillRequest, SkillResult
 from skills.files import search_files
 
@@ -117,6 +118,7 @@ class FileEditSkill(Skill):
 
     name = "edit_file"
     controls_pc = True
+    capabilities = frozenset({Capability.WRITE_FILES})
     description = (
         "Edit a text file in the user's whitelisted folders: append dictated "
         "text to it, or replace one string with another. Use when the user "

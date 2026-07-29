@@ -773,6 +773,40 @@ class SafetyConfig(BaseModel):
         return [expand_path(d) for d in self.whitelist_dirs]
 
 
+class SecurityConfig(BaseModel):
+    """Central security-layer policy (see security/policy.py + docs/Security.md).
+
+    S1 wires the actuation master-switch gate through the policy engine (behaviour
+    identical to today's ``controls_pc`` check) and DEFINES the rest. The fields
+    below are read by the engine's pure decision and unit-tested, but their
+    ENFORCEMENT at the confirmation prompt / cloud egress / owner-voice paths
+    lands in later sub-steps (S2, S3, S5). Until then confirmation stays
+    skill-driven, so the default install behaves exactly as before.
+    """
+
+    #: Master switch for the NEW policy layer. False keeps ONLY the existing
+    #: safety floor (the PC-control actuation gate) — it never fails open.
+    enabled: bool = True
+    #: What to do when an action is PROPOSED from untrusted external content
+    #: (a document, web page, tool output): "confirm" (ask first) or "deny".
+    untrusted_action_policy: Literal["confirm", "deny"] = "confirm"
+    #: Per-capability confirmation policy (high-impact -> confirm). Seeds S3;
+    #: in S1 the per-skill ``needs_confirmation`` remains the actual trigger, so
+    #: these values don't change today's prompts. Keys are Capability.value.
+    requires_confirmation: dict[str, bool] = Field(default_factory=lambda: {
+        "write_files": True, "run_command": True, "control_input": True,
+        "power_control": True, "control_browser": True, "control_device": True,
+        "install_plugin": True, "modify_self": True,
+        "session_control": False, "network": False, "read_files": False,
+        "use_cloud_brain": False,
+    })
+    #: S2: require the OWNER's verified voice for high-impact actions. Off by
+    #: default so everyday use isn't gated on voice enrolment.
+    owner_voice: bool = False
+    #: S5: per-cloud-brain opt-in to send local RAG/memory/file context out.
+    cloud_egress_optin: dict[str, bool] = Field(default_factory=dict)
+
+
 class BrowserConfig(BaseModel):
     """Controlled browser — skills/browser.py (Playwright driving real Chrome).
 
@@ -1068,6 +1102,7 @@ class Settings(BaseSettings):
     wakeword: WakeWordConfig = Field(default_factory=WakeWordConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     mode: ModeConfig = Field(default_factory=ModeConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)

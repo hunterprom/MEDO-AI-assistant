@@ -22,10 +22,11 @@ from core.events import Event, EventBus, EventType, RoutePath
 from core.facts import FactsStore
 from core.memory import ConversationMemory
 from core.metrics import MetricsStore
-from core.safety import is_affirmative, is_negative
+from core.safety import PathWhitelist, is_affirmative, is_negative
 from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
 from llm.tools import build_tools, coerce_args, dispatch_tool
+from security.policy import Actor, PolicyEngine
 from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: A query "needs live info" (search the web, current events) when it trips one
@@ -139,6 +140,13 @@ class Router:
         self._registry = registry
         self._llm = llm
         self._bus = bus
+        #: The central deny-by-default policy engine (S1). Every side-effectful
+        #: route is gated through it; it reads settings.security/safety live, so a
+        #: runtime PC-control toggle is honoured at once. Built here (not injected)
+        #: so existing callers that construct a Router unchanged keep working.
+        self._policy = PolicyEngine(
+            settings.security, settings.safety,
+            PathWhitelist(settings.safety.whitelist_dirs))
         #: Lazily-built local Ollama client used to answer live-info queries when
         #: the selected brain is a CLI agent that can't use MEDO's tools.
         self._tool_brain: OllamaClient | None = None
@@ -710,9 +718,11 @@ class Router:
         on or off — see docs/Decisions.md. ``path`` only labels the result
         (FAST vs SEMANTIC); the safety checks are the same either way.
         """
-        if skill.controls_pc and not self._settings.safety.pc_control_enabled:
-            return RouteResult(path=path, speech=PC_CONTROL_OFF_REPLY,
-                              skill_name=skill.name)
+        gate = self._policy.gate_skill(skill)
+        if gate.denied():
+            speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
+                      else gate.reason)
+            return RouteResult(path=path, speech=speech, skill_name=skill.name)
         outcome = await self._safe_execute(skill, request)
         if outcome.await_reply:
             # The skill asked a question; capture the NEXT utterance as its answer.
@@ -741,11 +751,14 @@ class Router:
         skill, request = self._pending  # type: ignore[misc]
         if is_affirmative(text):
             self._pending = None
-            if skill.controls_pc and not self._settings.safety.pc_control_enabled:
+            gate = self._policy.gate_skill(skill)
+            if gate.denied():
                 # PC control may have been switched off while this action waited
-                # on a yes — re-apply the gate the fast/LLM paths enforce so a
-                # confirmed destructive action can't slip past a now-off switch.
-                return RouteResult(path=RoutePath.FAST, speech=PC_CONTROL_OFF_REPLY,
+                # on a yes — re-apply the policy gate so a confirmed destructive
+                # action can't slip past a now-off switch.
+                speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
+                          else gate.reason)
+                return RouteResult(path=RoutePath.FAST, speech=speech,
                                   skill_name=skill.name)
             request.context = {**request.context, "confirmed": True}
             outcome = await self._safe_execute(skill, request)  # performs the action
@@ -1035,10 +1048,12 @@ class Router:
             return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
         tools = build_tools(self._registry)
-        if not self._settings.safety.pc_control_enabled:
-            # PC control is off: actuation tools aren't even offered, so the
-            # model answers around them instead of calling and being refused.
-            gated = {s.name for s in self._registry.all() if s.controls_pc}
+        # Don't even OFFER a tool the policy would refuse this turn (e.g. an
+        # actuation tool while PC control is off) — the model answers around it
+        # instead of calling and being refused. One authority, the policy engine.
+        gated = {s.name for s in self._registry.all()
+                 if self._policy.gate_skill(s, actor=Actor.MODEL).denied()}
+        if gated:
             tools = [t for t in tools if t["function"]["name"] not in gated]
         try:
             facts = await asyncio.to_thread(
@@ -1137,11 +1152,15 @@ class Router:
             # Coerce string-typed args now, so a stashed confirmation request
             # (re-executed on "yes") carries clean args too — not just dispatch.
             args = coerce_args(gated_skill, args)
-            if (gated_skill is not None and gated_skill.controls_pc
-                    and not self._settings.safety.pc_control_enabled):
-                # Belt to the tool-filter's braces: even a hallucinated call
-                # to an actuation tool is refused when PC control is off.
-                result = SkillResult(PC_CONTROL_OFF_REPLY, success=False)
+            gate = (self._policy.gate_skill(gated_skill, actor=Actor.MODEL)
+                    if gated_skill is not None else None)
+            if gate is not None and gate.denied():
+                # Belt to the tool-filter's braces: even a hallucinated call to a
+                # gated tool is refused (e.g. an actuation tool while PC control
+                # is off) — the policy engine is the single authority.
+                speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
+                          else gate.reason)
+                result = SkillResult(speech, success=False)
             else:
                 try:
                     result = await dispatch_tool(self._registry, name, args, context)

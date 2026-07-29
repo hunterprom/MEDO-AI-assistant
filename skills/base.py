@@ -15,7 +15,10 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # no runtime import — security.capabilities stays a leaf module
+    from security.capabilities import Capability
 
 
 @dataclass
@@ -70,6 +73,12 @@ class Skill(ABC):
     #: (safety.pc_control_enabled) blocks them all at one router choke point;
     #: purely sensing/answering skills stay available either way.
     controls_pc: bool = False
+    #: The security capabilities this skill needs (security/capabilities.py). The
+    #: policy engine grants only declared + permitted ones; read-only sensing
+    #: declares nothing. ADDITIVE and backward-compatible: ``controls_pc`` still
+    #: works and is the derived truth (any actuation capability => controls_pc),
+    #: so un-migrated skills keep their coarse gating via ``effective_capabilities``.
+    capabilities: "frozenset[Capability]" = frozenset()
     #: Example utterances that should route here — the skill's SEMANTIC surface
     #: for the Tier-2 router (M2.5). Plain phrases a person says, NOT regex, and
     #: NOT synonyms of the fast-path patterns: those stay in ``patterns``. This

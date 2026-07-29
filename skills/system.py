@@ -20,6 +20,7 @@ from typing import Any
 import psutil
 
 from core.platform import IS_MACOS, IS_WINDOWS, current_os
+from security.capabilities import Capability
 from skills.base import Skill, SkillRequest, SkillResult
 
 
@@ -412,6 +413,7 @@ _POWER_ACTIONS = ("lock", "sleep", "shutdown", "restart")
 class PowerSkill(Skill):
     name = "power"
     controls_pc = True
+    capabilities = frozenset({Capability.POWER_CONTROL})
     description = "Lock, sleep, shut down, or restart the machine."
 
     #: A power skill is destructive (it arms a confirmation gate), so its verbs
@@ -549,6 +551,7 @@ class QuitSkill(Skill):
     name = "quit"
     controls_pc = False
     requires_confirmation = True
+    capabilities = frozenset({Capability.SESSION_CONTROL})
     description = "Close MEDO itself — end the assistant session (not the computer)."
 
     # "medo" and its frequent STT mishearings: the name is short and often quiet,

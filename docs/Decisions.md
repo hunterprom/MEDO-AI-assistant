@@ -426,3 +426,55 @@ same: anchor to a request/command frame, gate a broad object on an exact resolve
 RUNNING the skill over a corpus of adversarial everyday utterances, not by
 reasoning. Three verification passes (two workflows + an agent) drove the fences,
 each testing by running `.match()` over ~130 everyday utterances.
+
+## Security layer S1: one deny-by-default policy engine (2026-07-29)
+
+MEDO's protections were real but scattered — a single `controls_pc` bit gating
+everything actuating, the confirmation gate in the router, the path whitelist in
+each file skill, token auth in the server, and (crucially) exactly one real trust
+boundary in the whole codebase (WebFetch's `url_source`). S1 introduces
+`security/policy.py`: the single authority every side-effectful action routes
+through, over a capability vocabulary (`security/capabilities.py`).
+
+**Decision: the engine is a PURE function; call sites do the side effects.**
+`PolicyEngine.check(ActionRequest) -> Decision(allow|confirm|deny, reason, code)`
+reads only its injected config + whitelist and the request. No prompting,
+executing, or logging inside it — so the crown jewel is trivially unit-tested
+(19 cases in `tests/test_policy.py`). ANY exception in a check degrades to DENY,
+never allow.
+
+**Decision: `controls_pc` stays and is DERIVED, not replaced.** `capabilities`
+is the richer, additive declaration; a not-yet-migrated skill that only sets
+`controls_pc=True` is bridged to `LEGACY_ACTUATION` via
+`effective_capabilities()`, so it gates exactly as before. The invariant
+`controls_pc == bool(effective & ACTUATION_CAPS)` is asserted over the LIVE
+registry (`tests/test_security_wiring.py`), so a future migration can't silently
+change what the PC-control switch gates. Chosen over a wholesale rewrite to keep
+~40 actuation skills and their tests untouched and let migration be incremental.
+
+**Decision: `SESSION_CONTROL`, `NETWORK`, and `USE_CLOUD_BRAIN` are NOT
+actuation.** They don't act on the machine, so the PC-control master switch never
+hides closing MEDO, fetching a URL, or using a cloud brain — matching today's
+`controls_pc=False` on QuitSkill / WebFetchSkill. Only machine-actuation caps
+sit in `ACTUATION_CAPS`.
+
+**Decision: S1 mirrors today's UX exactly.** The router enforces only the DENY
+from `gate_skill` (identical to the old `controls_pc and not pc_control_enabled`
+check) at its four choke points (`_run_skill`, `_resolve_confirmation`, the LLM
+tool-offer filter, and per-tool-call in `_run_tool_calls`). The engine's CONFIRM
+decisions and the `security.requires_confirmation` map are DEFINED and
+unit-tested but not yet the router's confirmation trigger — per-skill
+`needs_confirmation` still drives prompts. The trust-boundary (`provenance`),
+owner-voice, and cloud-egress fields are likewise declared and tested but wired
+in S3/S2/S5. The default install therefore behaves precisely as before.
+
+**Decision: `security.enabled=False` is an escape hatch, not fail-open.** It
+turns off only the NEW policy layer; the actuation master-switch baseline is
+enforced regardless, so disabling the layer can never widen access.
+
+**Staged fold-in (honest scope):** the engine OWNS the PathWhitelist and its
+`read_files`/`write_files` decisions delegate to it (unit-tested), but file
+skills still call the shared whitelist instance directly as their mechanism —
+there is ONE whitelist and one `is_allowed`, no duplicated policy. Routing each
+file skill's call site through `engine.check()` (so file ops get provenance /
+owner gating too) lands with S3, where that gating first matters.
