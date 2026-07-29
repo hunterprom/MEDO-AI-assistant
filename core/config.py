@@ -810,6 +810,20 @@ class SecurityConfig(BaseModel):
     cloud_egress_optin: dict[str, bool] = Field(default_factory=dict)
 
 
+class SoftwareConfig(BaseModel):
+    """Controlling OTHER local apps by command (software/ connectors). Direct
+    local control, NOT MCP. Off by default so it's purely additive — flipping it
+    on registers the connector actions as skills (each gated by the policy
+    engine). See docs/Software Connectors.md."""
+
+    enabled: bool = False
+    #: Per-connector opt-out: {app_id: false} hides that connector.
+    connectors: dict[str, bool] = Field(default_factory=dict)
+    #: Override how to launch an app: {app_id: ["C:/path/app.exe", ...]}. Common
+    #: paths are auto-detected; this is the escape hatch for non-standard installs.
+    exe_paths: dict[str, list[str]] = Field(default_factory=dict)
+
+
 class BrowserConfig(BaseModel):
     """Controlled browser — skills/browser.py (Playwright driving real Chrome).
 
@@ -1106,6 +1120,7 @@ class Settings(BaseSettings):
     audio: AudioConfig = Field(default_factory=AudioConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    software: SoftwareConfig = Field(default_factory=SoftwareConfig)
     mode: ModeConfig = Field(default_factory=ModeConfig)
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)

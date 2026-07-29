@@ -495,6 +495,28 @@ def build_registry(
         registry.register(WebFetchSkill(settings.web_fetch, summarize))
     registry.register(WebSearchSkill(summarize))
 
+    # Software connectors (control local apps by command; NOT MCP). Off by
+    # default — flipping software.enabled on registers each connector action as a
+    # skill, gated by the policy engine like everything else. Guarded so a missing
+    # desktop dep never breaks startup.
+    if settings.software.enabled:
+        try:
+            from security.policy import PolicyEngine
+            from software.mechanisms import Mechanisms
+            from software.registry import register_software
+            from software.win32_backend import Win32Backend
+
+            # PathWhitelist is already imported at module scope (used above).
+            policy = PolicyEngine(settings.security, settings.safety,
+                                  PathWhitelist(settings.safety.whitelist_dirs))
+            mech = Mechanisms(Win32Backend(), policy,
+                              exe_paths=settings.software.exe_paths)
+            n = register_software(registry, settings, mech)
+            logging.getLogger(__name__).info("software connectors: %d actions", n)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "software connectors failed to load", exc_info=True)
+
     # Last, once every skill exists: the user's own trigger phrases from
     # config.yaml (skills.triggers). They are appended to the very same
     # `patterns` list the built-ins use, so nothing downstream — the router,

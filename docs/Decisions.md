@@ -586,3 +586,27 @@ one-click installer with hardware-aware auto-setup for non-technical users —
 process supervisor with restart/backoff + clean teardown, hardware→profile
 auto-fitting (30B only where it fits), a resumable first-run wizard, and a
 separate-bundle answer to the mediapipe/numpy packaging conflict.
+
+## Software connectors: control local apps by command, NOT MCP (2026-07-30)
+
+**Decision: connector actions ARE skills (the MEDO Link pattern), gated by the
+policy engine.** `software/` — a `SoftwareConnector` declares an app + `Action`s;
+`ConnectorActionSkill` turns each into a fast-path + LLM-tool skill, so it flows
+through the router's `gate_skill` policy check like everything else (its declared
+capabilities are what `effective_capabilities` reads). Direct local control — no
+MCP, no servers. Off by default (`software.enabled`), purely additive.
+
+**Decision: the control ladder is shared, injectable, and honest.** `mechanisms.py`
+provides native-API/CLI → app-hotkey (focus→act→restore) → accessibility
+(reusing M7's `vision/snap.py`). OS layer injected → all unit-tested with a fake
+backend. The CLI + local-API adapters ALWAYS route through the policy engine
+(`run_command` / `network`); localhost-only APIs; never a raw shell. Media keys
+are reported UNVERIFIED (can't confirm a global key landed) — never faked success.
+
+**Decision: send/post always confirms; untrusted content never triggers control.**
+Any send/post action sets `requires_confirmation`; closing an app confirms too.
+The trust boundary: an instruction from `context["untrusted"]` / untrusted
+provenance is refused — only the user's own voice/text drives software. Three
+reference connectors (media, window, browser) + a documented template; adding an
+app is a new file, not a core edit. docs/Software Connectors.md has the ladder,
+template, and security rules.
