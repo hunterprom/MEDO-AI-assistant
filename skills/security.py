@@ -125,17 +125,21 @@ _OFFENSIVE_ACTION = re.compile(
     r"\b(?:write|create|build|make|generate|develop|code|install|deploy|plant|"
     r"run|use|launch|execute|craft|напиши|создад\w*|направи|инсталира\w*)\b",
     re.IGNORECASE)
-#: A break between the producing verb and the offensive keyword means the verb
-#: governs something ELSE, not the keyword: a clause boundary ("scan for malware,
-#: then write a report"), or an object/oblique marker showing the keyword is not
-#: the verb's DIRECT object ("generate a report ON a keylogger", "a summary OF
-#: malware", "make SURE no rootkit"). Plain modifiers (a/simple/two/new) are NOT
-#: breaks — "write a simple keylogger" still reads as producing it. Datives like
-#: "for me" are deliberately NOT breaks, so "install for me a keylogger" stays
-#: refused.
-_SPAN_BREAK = re.compile(
-    r"[,;.]|\b(?:and|then|or|but|so|after|before|while|because|"
-    r"on|of|about|against|behind|sure|that|which)\b", re.IGNORECASE)
+#: A real clause boundary between the producing verb and the keyword means the
+#: verb governs a DIFFERENT clause ("scan for malware, then write a report").
+#: "sure" is here for the "make sure no rootkit" idiom. Plain modifiers
+#: (a/simple/two/new) and relative markers (that/which) are NOT breaks — the
+#: keyword can still be the object ("build a program that is a keylogger").
+_CLAUSE_BREAK = re.compile(
+    r"[,;.]|\b(?:and|then|or|but|so|after|before|while|because|sure)\b",
+    re.IGNORECASE)
+#: The keyword is the oblique object of a REPORT-style noun, not the verb's
+#: direct object ("generate a report ON a keylogger", "a summary OF malware") —
+#: then the verb produces the report, not the malware. A bare on/of is NOT a
+#: break (so "make use OF a keylogger" / "install ON it a rootkit" stay refused).
+_REPORT_OBLIQUE = re.compile(
+    r"\b(?:report|summary|write[- ]?up|analysis|overview|assessment|note|log|"
+    r"breakdown|list)\b.*\b(?:on|of|about|for)\b", re.IGNORECASE)
 #: A defensive noun the offensive word can MODIFY ("malware scan", "keylogger
 #: detector", "rootkit removal") — then it's the audit's subject, not the object
 #: being made.
@@ -154,11 +158,14 @@ def _offensive_action_produces(text: str) -> bool:
             continue                       # "malware scan" — the audit's subject
         for a in _OFFENSIVE_ACTION.finditer(text[:m.start()]):
             span = text[a.end():m.start()]
-            # The verb governs the keyword as its DIRECT object when nothing
-            # breaks the span and they're close — "write a simple keylogger" is
-            # producing it; "generate a report on a keylogger" / "make sure no
-            # rootkit" are not.
-            if not _SPAN_BREAK.search(span) and len(span) <= 40:
+            # The verb governs the keyword as its DIRECT object when no clause
+            # boundary and no report-oblique construction sit between them, and
+            # they're close — "write a simple keylogger" / "build a program that
+            # is a keylogger" produce it; "generate a report on a keylogger" /
+            # "make sure no rootkit" do not.
+            if (not _CLAUSE_BREAK.search(span)
+                    and not _REPORT_OBLIQUE.search(span)
+                    and len(span) <= 40):
                 return True                # verb produces the keyword
     return False
 
