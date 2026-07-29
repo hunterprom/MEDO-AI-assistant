@@ -65,11 +65,22 @@ def test_actuation_skill_is_denied_when_pc_control_off():
         assert engine.gate_skill(weather).allowed()        # sensing -> unaffected
 
 
-def test_model_actor_is_gated_identically_in_s1():
-    # The LLM proposing an action is re-checked exactly like the local user.
+def test_router_resolves_the_acting_principal():
+    # owner_verified -> OWNER; a remote client -> LAN_CLIENT; else LOCAL_USER.
+    assert Router._actor_for({"owner_verified": True}) is Actor.OWNER
+    assert Router._actor_for({"source": "remote"}) is Actor.LAN_CLIENT
+    assert Router._actor_for({"source": "watch"}) is Actor.LAN_CLIENT
+    assert Router._actor_for({"language": "en"}) is Actor.LOCAL_USER
+    assert Router._actor_for(None) is Actor.LOCAL_USER
+
+
+def test_owner_voice_gates_high_impact_end_to_end():
+    # With owner_voice on, a local (unverified) user can't power off; the owner can.
     settings = load_settings()
-    settings.safety.pc_control_enabled = False
+    settings.security.owner_voice = True
     engine = PolicyEngine(settings.security, settings.safety, whitelist=None)
     _settings, reg = _registry()
     power = reg.get("power")
-    assert engine.gate_skill(power, actor=Actor.MODEL).denied()
+    assert engine.gate_skill(power, actor=Actor.LOCAL_USER).denied()
+    assert engine.gate_skill(power, actor=Actor.LOCAL_USER).code == "owner_required"
+    assert not engine.gate_skill(power, actor=Actor.OWNER).denied()

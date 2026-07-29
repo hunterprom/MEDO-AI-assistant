@@ -707,6 +707,23 @@ class Router:
                 logger.debug("on_llm_start hook raised", exc_info=True)
         return await self._llm_reply(text, context, on_delta)
 
+    @staticmethod
+    def _actor_for(context: dict[str, Any] | None) -> Actor:
+        """Resolve WHO is acting, for the policy engine's owner-voice gate (S2).
+
+        The verified owner (the voice loop sets ``owner_verified`` after a
+        speaker check) is OWNER; a token-authed LAN client (watch/phone/device)
+        is LAN_CLIENT; anything else at the machine is LOCAL_USER. While
+        ``security.owner_voice`` is off this never changes a decision — the actor
+        only matters once high-impact actions are owner-gated."""
+        ctx = context or {}
+        if ctx.get("owner_verified"):
+            return Actor.OWNER
+        src = ctx.get("source")
+        if src in ("remote", "watch", "phone", "lan", "device", "link"):
+            return Actor.LAN_CLIENT
+        return Actor.LOCAL_USER
+
     async def _run_skill(self, skill: Skill, request: SkillRequest,
                          path: RoutePath = RoutePath.FAST) -> RouteResult:
         """Execute a fast-path (or semantic-tier) skill, deferring for
@@ -718,7 +735,7 @@ class Router:
         on or off — see docs/Decisions.md. ``path`` only labels the result
         (FAST vs SEMANTIC); the safety checks are the same either way.
         """
-        gate = self._policy.gate_skill(skill)
+        gate = self._policy.gate_skill(skill, actor=self._actor_for(request.context))
         if gate.denied():
             speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
                       else gate.reason)
@@ -751,7 +768,7 @@ class Router:
         skill, request = self._pending  # type: ignore[misc]
         if is_affirmative(text):
             self._pending = None
-            gate = self._policy.gate_skill(skill)
+            gate = self._policy.gate_skill(skill, actor=self._actor_for(context))
             if gate.denied():
                 # PC control may have been switched off while this action waited
                 # on a yes — re-apply the policy gate so a confirmed destructive
@@ -1051,8 +1068,9 @@ class Router:
         # Don't even OFFER a tool the policy would refuse this turn (e.g. an
         # actuation tool while PC control is off) — the model answers around it
         # instead of calling and being refused. One authority, the policy engine.
+        actor = self._actor_for(context)
         gated = {s.name for s in self._registry.all()
-                 if self._policy.gate_skill(s, actor=Actor.MODEL).denied()}
+                 if self._policy.gate_skill(s, actor=actor).denied()}
         if gated:
             tools = [t for t in tools if t["function"]["name"] not in gated]
         try:
@@ -1152,7 +1170,8 @@ class Router:
             # Coerce string-typed args now, so a stashed confirmation request
             # (re-executed on "yes") carries clean args too — not just dispatch.
             args = coerce_args(gated_skill, args)
-            gate = (self._policy.gate_skill(gated_skill, actor=Actor.MODEL)
+            gate = (self._policy.gate_skill(gated_skill,
+                                            actor=self._actor_for(context))
                     if gated_skill is not None else None)
             if gate is not None and gate.denied():
                 # Belt to the tool-filter's braces: even a hallucinated call to a

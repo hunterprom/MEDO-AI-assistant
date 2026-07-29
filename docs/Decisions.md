@@ -478,3 +478,20 @@ skills still call the shared whitelist instance directly as their mechanism —
 there is ONE whitelist and one `is_allowed`, no duplicated policy. Routing each
 file skill's call site through `engine.check()` (so file ops get provenance /
 owner gating too) lands with S3, where that gating first matters.
+
+## Security layer S2: local owner-voice + actor model (2026-07-29)
+
+**Decision: identity is the ``actor`` the engine already takes; owner-voice is
+config-gated and off by default.** `security/identity.py` does FULLY-LOCAL
+speaker verification via an INJECTED embedder (real one — resemblyzer/ECAPA — is
+an optional dep MEDO does not bundle). Enrolment stores ONLY the voiceprint
+embedding (owner-only file), never raw audio. With no embedder or no enrolment,
+`verify()` returns False and the engine denies high-impact actions — fail closed.
+
+**Decision: only HIGH-IMPACT capabilities are owner-gated** (power, run_command,
+write_files, control_device, install_plugin, modify_self). Typing, fetching, and
+closing MEDO stay open to a local user. The router resolves the actor from
+context (owner_verified->OWNER, remote/watch->LAN_CLIENT, else LOCAL_USER); with
+owner_voice OFF the actor never changes a decision. Live voice-loop verification
+(needs the optional embedder + audio) is a documented integration hook; the gate,
+identity module, and actor resolution are unit-tested with a fake embedder.

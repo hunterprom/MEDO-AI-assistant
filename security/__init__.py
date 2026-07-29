@@ -13,6 +13,7 @@ plugin sandboxing (S4), secrets/egress (S5), and the audit log + HUD (S6).
 
 from security.capabilities import (
     ACTUATION_CAPS,
+    HIGH_IMPACT_CAPS,
     SIDE_EFFECT_CAPS,
     Capability,
     effective_capabilities,
@@ -28,6 +29,7 @@ from security.policy import (
 
 __all__ = [
     "ACTUATION_CAPS",
+    "HIGH_IMPACT_CAPS",
     "SIDE_EFFECT_CAPS",
     "Capability",
     "effective_capabilities",

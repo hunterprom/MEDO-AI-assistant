@@ -79,6 +79,22 @@ SIDE_EFFECT_CAPS: frozenset[Capability] = ACTUATION_CAPS | frozenset({
 })
 
 
+#: The heavy hitters. When ``security.owner_voice`` is on (S2), only the verified
+#: OWNER may invoke these — not just any voice in the room. Deliberately a SUBSET
+#: of side-effects: typing (control_input), fetching (network), and closing MEDO
+#: (session_control) stay open to a local user so everyday use isn't gated on
+#: voice enrolment. Losing your session or your files, installing code, or
+#: driving a device is where owner proof earns its keep.
+HIGH_IMPACT_CAPS: frozenset[Capability] = frozenset({
+    Capability.POWER_CONTROL,
+    Capability.RUN_COMMAND,
+    Capability.WRITE_FILES,
+    Capability.CONTROL_DEVICE,
+    Capability.INSTALL_PLUGIN,
+    Capability.MODIFY_SELF,
+})
+
+
 def effective_capabilities(skill: object) -> frozenset[Capability]:
     """The capabilities a skill effectively holds, bridging un-migrated skills.
 

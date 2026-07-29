@@ -25,10 +25,11 @@ from security.policy import (
 
 # -- fakes --------------------------------------------------------------------
 
-def _sec(enabled=True, confirm=None, untrusted="confirm"):
+def _sec(enabled=True, confirm=None, untrusted="confirm", owner_voice=False):
     return SimpleNamespace(enabled=enabled,
                            requires_confirmation=dict(confirm or {}),
-                           untrusted_action_policy=untrusted)
+                           untrusted_action_policy=untrusted,
+                           owner_voice=owner_voice)
 
 
 def _safety(pc=True):
@@ -163,6 +164,35 @@ def test_untrusted_pure_read_is_not_side_effect_gated():
     d = e.check(_req(Capability.READ_FILES, target="C:/ok/f.txt",
                      provenance=Provenance.UNTRUSTED))
     assert d.effect is Effect.ALLOW
+
+
+# -- owner-voice gate (S2) ----------------------------------------------------
+
+def test_owner_voice_blocks_high_impact_from_a_non_owner():
+    e = _engine(sec=_sec(owner_voice=True))
+    d = e.check(ActionRequest(actor=Actor.LOCAL_USER,
+                              capability=Capability.POWER_CONTROL))
+    assert d.effect is Effect.DENY and d.code == "owner_required"
+
+
+def test_owner_voice_allows_the_verified_owner():
+    e = _engine(sec=_sec(owner_voice=True))
+    d = e.check(ActionRequest(actor=Actor.OWNER,
+                              capability=Capability.POWER_CONTROL))
+    assert d.effect is not Effect.DENY
+
+
+def test_owner_voice_leaves_low_impact_open_to_a_local_user():
+    # Typing, fetching, and closing MEDO stay open so daily use isn't gated.
+    e = _engine(sec=_sec(owner_voice=True))
+    for cap in (Capability.CONTROL_INPUT, Capability.NETWORK,
+                Capability.SESSION_CONTROL):
+        assert e.check(_req(cap)).code != "owner_required", cap
+
+
+def test_owner_voice_off_does_not_gate_high_impact():
+    e = _engine(sec=_sec(owner_voice=False))
+    assert e.check(_req(Capability.POWER_CONTROL)).code != "owner_required"
 
 
 # -- gate_skill folds to the strongest decision -------------------------------

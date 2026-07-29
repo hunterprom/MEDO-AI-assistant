@@ -803,6 +803,9 @@ class SecurityConfig(BaseModel):
     #: S2: require the OWNER's verified voice for high-impact actions. Off by
     #: default so everyday use isn't gated on voice enrolment.
     owner_voice: bool = False
+    #: Cosine-similarity bar a fresh voice sample must clear against the enrolled
+    #: voiceprint. Higher = stricter (fewer false accepts, more false rejects).
+    owner_voice_threshold: float = 0.75
     #: S5: per-cloud-brain opt-in to send local RAG/memory/file context out.
     cloud_egress_optin: dict[str, bool] = Field(default_factory=dict)
 

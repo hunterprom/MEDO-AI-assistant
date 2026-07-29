@@ -28,6 +28,7 @@ from typing import Any
 
 from security.capabilities import (
     ACTUATION_CAPS,
+    HIGH_IMPACT_CAPS,
     SIDE_EFFECT_CAPS,
     Capability,
     effective_capabilities,
@@ -151,6 +152,14 @@ class PolicyEngine:
             return Decision(Effect.DENY, cap,
                             f"{who} did not declare {cap.value}", code="undeclared")
 
+        # 1b. Owner-voice gate (S2): with owner_voice on, a HIGH-IMPACT capability
+        #     needs the VERIFIED owner — not just any voice in the room. Off by
+        #     default, so everyday use isn't gated on enrolment.
+        if (self._owner_voice_required() and cap in HIGH_IMPACT_CAPS
+                and req.actor is not Actor.OWNER):
+            return Decision(Effect.DENY, cap,
+                            "that needs the owner's voice", code="owner_required")
+
         # 2. Target check: files must be inside the whitelist; URLs must be
         #    http(s). (Folds the existing PathWhitelist policy into the engine.)
         target_deny = self._target_denied(req)
@@ -204,6 +213,9 @@ class PolicyEngine:
 
     def _enabled(self) -> bool:
         return bool(getattr(self._security, "enabled", True))
+
+    def _owner_voice_required(self) -> bool:
+        return bool(getattr(self._security, "owner_voice", False))
 
     def _pc_control_enabled(self) -> bool:
         # Default True mirrors SafetyConfig's default; a missing safety config
