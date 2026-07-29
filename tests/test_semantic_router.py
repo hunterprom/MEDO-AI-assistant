@@ -499,5 +499,29 @@ async def test_semantic_clarify_filters_unsafe_candidates(tmp_path):
     assert await router._semantic_clarify("borderline") is None
 
 
+@pytest.mark.asyncio
+async def test_undecidable_choice_reply_reroutes_not_guesses(tmp_path):
+    # A reply that names neither offered skill and isn't a command must NOT be
+    # forced into weather/news — it re-routes (here: falls to the LLM).
+    router = _clarify_router(tmp_path)
+    await router.route("give me the borderline thing")
+    r = await router.route("hmm I really am not certain")
+    assert r.skill_name not in ("weather", "news")
+    assert r.path is RoutePath.LLM
+    assert router.awaiting_choice is False
+
+
+@pytest.mark.asyncio
+async def test_resolved_choice_is_recorded_under_the_original_question(tmp_path):
+    router = _clarify_router(tmp_path)
+    await router.route("give me the borderline thing")
+    await router.route("the news")
+    # The clarify QUESTION turn is suppressed; the RESOLUTION is recorded under
+    # the original phrasing, so a follow-up sees the real exchange (not the bare
+    # one-word answer).
+    assert router.conversation.last_question() == "give me the borderline thing"
+    assert router.conversation.last_reply().startswith("news:")
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

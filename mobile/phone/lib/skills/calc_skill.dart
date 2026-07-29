@@ -39,26 +39,36 @@ class CalcSkill extends Skill {
 
   /// A tiny left-to-right evaluator with */ precedence. Handles + - x * / ÷.
   double? _eval(String expr) {
-    var s = expr.replaceAll('x', '*').replaceAll('X', '*').replaceAll('÷', '/').trim();
-    // Peel a genuine leading unary sign first; otherwise the number token below
-    // would greedily absorb a binary + / - ("2+2" -> ["2","+2"] -> crash).
-    var lead = 1.0;
-    if (s.startsWith('-')) {
-      lead = -1.0;
-      s = s.substring(1);
-    } else if (s.startsWith('+')) {
-      s = s.substring(1);
-    }
-    final tokens = RegExp(r'\d*\.?\d+|[-+*/]').allMatches(s).map((m) => m.group(0)!).toList();
+    final s = expr.replaceAll('x', '*').replaceAll('X', '*').replaceAll('÷', '/').trim();
+    // Numbers and operators are tokenised SEPARATELY (an unsigned number token),
+    // so a binary +/- is never swallowed into a number ("2+2" -> [2, +, 2]).
+    final tokens =
+        RegExp(r'\d*\.?\d+|[-+*/]').allMatches(s).map((m) => m.group(0)!).toList();
     if (tokens.isEmpty) return null;
-    // pass 1: * and /
     final nums = <double>[];
     final ops = <String>[];
     try {
-      nums.add(lead * double.parse(tokens.first));
-      for (var i = 1; i < tokens.length; i += 2) {
+      var i = 0;
+      // Read one operand, absorbing any run of leading sign operators — so a
+      // unary sign or a signed operand after a binary op works ("-5", "5 - -3",
+      // "3*-2"). A dangling operator throws (RangeError) and is caught below.
+      double readOperand() {
+        var sign = 1.0;
+        while (i < tokens.length && (tokens[i] == '+' || tokens[i] == '-')) {
+          if (tokens[i] == '-') sign = -sign;
+          i++;
+        }
+        final n = sign * double.parse(tokens[i]);
+        i++;
+        return n;
+      }
+
+      nums.add(readOperand());
+      while (i < tokens.length) {
         final op = tokens[i];
-        final n = double.parse(tokens[i + 1]);
+        if (op != '+' && op != '-' && op != '*' && op != '/') return null;
+        i++;
+        final n = readOperand();
         if (op == '*' || op == '/') {
           nums[nums.length - 1] =
               op == '*' ? nums.last * n : (n == 0 ? double.nan : nums.last / n);
@@ -68,8 +78,8 @@ class CalcSkill extends Skill {
         }
       }
       var acc = nums.first;
-      for (var i = 0; i < ops.length; i++) {
-        acc = ops[i] == '+' ? acc + nums[i + 1] : acc - nums[i + 1];
+      for (var j = 0; j < ops.length; j++) {
+        acc = ops[j] == '+' ? acc + nums[j + 1] : acc - nums[j + 1];
       }
       return acc.isNaN ? null : acc;
     } catch (_) {

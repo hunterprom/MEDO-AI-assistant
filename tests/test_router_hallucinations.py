@@ -106,6 +106,18 @@ def test_weather_nonplace_capture_falls_back(candidate, ok):
     assert _looks_like_city(candidate) is ok
 
 
+@pytest.mark.parametrize("candidate", ["The Hague", "the Netherlands", "London"])
+def test_weather_group_path_keeps_determiner_led_real_cities(candidate):
+    # The captured "in/for/at <city>" group frames a proper name, so a leading
+    # article must NOT drop a real city (regression guard for the group path).
+    assert _looks_like_city(candidate, allow_article=True) is True
+
+
+@pytest.mark.parametrize("candidate", ["work", "my house", "next quarter"])
+def test_weather_group_path_still_drops_nonplaces(candidate):
+    assert _looks_like_city(candidate, allow_article=True) is False
+
+
 def _lion_dir(text):
     m = next((p.search(text) for p in LionModeSkill.patterns if p.search(text)), None)
     assert m is not None, text

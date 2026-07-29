@@ -63,16 +63,27 @@ _NOT_A_CITY = {"the moment", "the minute", "now", "home", "work",
                "the weekend", "the week", "the day", "school"}
 
 
-def _looks_like_city(candidate: str) -> bool:
+#: Determiners that mean "the default location", never a real place to geocode
+#: ("my house", "this area", "next quarter"). Articles (the/a/an) are NOT here:
+#: real cities lead with them ("The Hague", "the Netherlands").
+_NON_CITY_LEAD = re.compile(
+    r"(?:my|your|our|his|her|their|this|that|next|last)\b", re.IGNORECASE)
+
+
+def _looks_like_city(candidate: str, *, allow_article: bool = False) -> bool:
     """A captured place is a real city only when it isn't a common non-place
-    ('work', 'home', 'next quarter') and carries no leading determiner — those
-    phrasings mean the default location, not a foreign place to geocode."""
+    ('work', 'home', 'next quarter') and carries no possessive/deictic
+    determiner. ``allow_article`` keeps a leading the/a/an — the pattern's own
+    'in/for/at <city>' group frames a proper name like 'The Hague', whereas a
+    bare trailing tail ('in the office') should still reject the article."""
     candidate = candidate.strip(" ?.!")
     if not candidate or candidate.lower() in _NOT_A_CITY:
         return False
-    return not re.match(
-        r"(?:the|this|that|a|an|my|your|our|his|her|their|next|last)\b",
-        candidate, re.IGNORECASE)
+    if _NON_CITY_LEAD.match(candidate):
+        return False
+    if not allow_article and re.match(r"(?:the|a|an)\b", candidate, re.IGNORECASE):
+        return False
+    return True
 
 
 def _city_from_tail(text: str) -> str | None:
@@ -177,10 +188,11 @@ class WeatherSkill(Skill):
             (request.args.get("city") or gd.get("city") or gd.get("cityb")
              or gd.get("city2") or gd.get("city3") or gd.get("city4")
              or gd.get("city5") or "").strip(" ?.!"))
-        if city and not _looks_like_city(city):
+        if city and not _looks_like_city(city, allow_article=True):
             # A pattern's greedy city group can capture a non-place ("weather at
             # work", "forecast for next quarter"); treat it as the default
-            # location instead of geocoding it as a foreign city.
+            # location instead of geocoding it as a foreign city. Articles are
+            # kept so a real "The Hague" / "the Netherlands" still geocodes.
             city = ""
         if not city:
             # Several patterns ("how hot is it in Dubai", "is it raining in

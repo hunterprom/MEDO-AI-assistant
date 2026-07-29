@@ -544,6 +544,10 @@ class Router:
             answering_confirmation = False
         if self._rerouted_from_choice:
             answering_choice = False
+        # A turn that just ASKED a tie-break question is an incomplete exchange:
+        # the resolution turn records the real Q&A (under the original question),
+        # so don't also record the bare question turn here.
+        asked_choice = self._pending_choice is not None and not answering_choice
 
         self.stats[result.path] += 1
         if self.metrics is not None:
@@ -555,7 +559,7 @@ class Router:
         # Remember the turn, UNLESS this utterance was the yes/no that answered a
         # pending confirmation — that's what shouldn't pollute the context. (The
         # command that TRIGGERED a confirmation is recorded; the "yes" is not.)
-        if not answering_confirmation and not answering_choice:
+        if not answering_confirmation and not answering_choice and not asked_choice:
             self.conversation.add_turn(text, result.speech)
             # Track whether this turn produced live/online info, so the NEXT
             # question can be recognised as a follow-up that also needs it. Set
@@ -774,21 +778,29 @@ class Router:
         # route_memory_enabled; _learn_route re-embeds since route() cleared the
         # per-turn vector at the top of this answering turn).
         await self._learn_route(original_text, chosen)
+        # Record the resolved exchange under the ORIGINAL question (route()
+        # suppresses the bare one-word answer) and arm the live-info follow-up
+        # chain, so a tie-break behaves like a normal semantic route.
+        self.conversation.add_turn(original_text, res.speech)
+        self._last_live_info = (res.skill_name in LIVE_INFO_SKILLS
+                                or self._turn_used_live_info)
         return res
 
     async def _pick_choice(self, cands: "list[Skill]", text: str, norm: str
                            ) -> "Skill | None":
-        """Which offered skill the reply names: by word match first, else by
-        embedding the reply and taking the nearer index vector. None when it is
-        genuinely undecidable (so the caller re-routes rather than guesses)."""
+        """Which offered skill the reply names: by whole-word match first, else
+        a CONFIDENT embedding pick (floor + margin). None when it is genuinely
+        undecidable, so the caller re-routes rather than guesses."""
         from core.agents import _STAR_LABELS, prettify
 
+        words = set(norm.split())
         hits = []
         for s in cands:
             label = (_STAR_LABELS.get(s.name) or prettify(s.name)
                      or s.name.replace("_", " ")).lower()
             tokens = {s.name.lower(), *label.split()}
-            if any(len(t) >= 3 and t in norm for t in tokens):
+            # Whole-token match (not substring) so "app" doesn't hit "happy".
+            if any(len(t) >= 3 and t in words for t in tokens):
                 hits.append(s)
         if len(hits) == 1:
             return hits[0]
@@ -813,7 +825,7 @@ class Router:
             return None
         q = q / qn
         vecs = {e.skill: e.vector for e in idx.entries()}
-        best_skill, best_score = None, -2.0
+        scored: list[tuple[Skill, float]] = []
         for s in cands:
             v = vecs.get(s.name)
             if v is None:
@@ -823,9 +835,21 @@ class Router:
             if not np.isfinite(vn) or vn == 0.0 or v.shape != q.shape:
                 continue
             score = float(q @ (v / vn))
-            if np.isfinite(score) and score > best_score:
-                best_skill, best_score = s, score
-        return best_skill
+            if np.isfinite(score):
+                scored.append((s, score))
+        if not scored:
+            return None
+        scored.sort(key=lambda x: x[1], reverse=True)
+        best_skill, best = scored[0]
+        runner = scored[1][1] if len(scored) > 1 else -1.0
+        # A confident, DISTINGUISHING pick only: an absolute floor plus a margin
+        # over the other candidate (mirrors match()/top_pair). Otherwise None, so
+        # an "I don't know" / unrelated reply re-routes instead of being forced
+        # into one of the two skills.
+        if (best >= self._settings.router.semantic_threshold
+                and (best - runner) >= self._settings.router.semantic_margin):
+            return best_skill
+        return None
 
     async def _safe_execute(self, skill: Skill, request: SkillRequest) -> SkillResult:
         """Run a skill's ``execute`` with a backstop for unexpected exceptions.

@@ -35,10 +35,12 @@ class PhoneSkill extends Skill {
     }
 
     // volume  (bare "turn up"/"turn down"/"turn it up" carry no 'volume' word
-    // but pattern 3 matched them via the 'updown' group — enter here too)
+    // but pattern 3 matched them via the 'updown' group — enter here too). The
+    // turn-clause is anchored to the utterance end so "turn up the heat" / "turn
+    // down the thermostat" do NOT get hijacked into a volume change.
     if (t.contains('volume') ||
         RegExp(r'\b(?:louder|quieter|mute|too\s+loud|too\s+quiet)\b').hasMatch(t) ||
-        RegExp(r'\bturn\s+(?:it\s+)?(?:up|down)\b').hasMatch(t)) {
+        RegExp(r'\bturn\s+(?:it\s+)?(?:up|down)\b\s*[.!?]*$').hasMatch(t)) {
       final level = m.groupNames.contains('level') ? int.tryParse(m.namedGroup('level') ?? '') : null;
       if (t.contains('max')) {
         return _vol(await Native.volume(setPercent: 100), 'at max');
