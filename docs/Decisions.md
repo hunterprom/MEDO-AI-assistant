@@ -495,3 +495,35 @@ context (owner_verified->OWNER, remote/watch->LAN_CLIENT, else LOCAL_USER); with
 owner_voice OFF the actor never changes a decision. Live voice-loop verification
 (needs the optional embedder + audio) is a documented integration hook; the gate,
 identity module, and actor resolution are unit-tested with a fake embedder.
+
+## App packaging S1: one launcher/supervisor over three processes (2026-07-30)
+
+Turning MEDO into a one-click app for non-technical users. First finding: the
+HUD + companion API are asyncio servers INSIDE the engine process, and the engine
+already spawns/reaps the overlay. So the launcher supervises exactly THREE OS
+processes — Ollama, the engine, and the vision sidecar.
+
+**Decision: web HUD is the whole UI; default browser; pystray tray (approved).**
+The wizard (S3) and Settings (S4) are just more pages served by the existing
+aiohttp HUD — no new GUI framework. The app is "a tray icon + a local web UI",
+opened in the default browser (zero extra runtime). Chosen over Tk/Qt (a second
+UI paradigm / heavy dep) and over an embedded webview (adds WebView2).
+
+**Decision: the supervisor is pure + injectable; the launcher is thin glue.**
+`app/supervisor.py` takes an injected `spawn` + `now`, so start / dead-child
+restart-with-exponential-backoff / give-up-and-warn / clean teardown are all
+unit-tested with fakes (`tests/test_app_launcher.py`) — no OS processes.
+`app/launcher.py` supplies the real `subprocess.Popen` (Windows
+`CREATE_NEW_PROCESS_GROUP` so a wedged child TREE dies as a unit), the pystray
+tray, and browser-open-when-ready.
+
+**Decision: only stop what we started; a shared Ollama is never killed.** The
+supervisor spawns Ollama only when `:11434` isn't already answering, and on quit
+terminates just the children it launched — so a user's pre-existing Ollama (or
+another app's) is left running. No orphans, no yanked shared services.
+
+**Packaging flag (raised early, per instruction):** `mediapipe` pins `numpy<2`
+while the engine uses newer numpy — they cannot share one environment (that's why
+two venvs exist today). The vision sidecar must be frozen as its OWN bundle in
+S5, never merged into the engine. This S1 design already treats vision as a
+separate child, so it's packaging-aligned. run.bat + config.yaml stay for dev.
