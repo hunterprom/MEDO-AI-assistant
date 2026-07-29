@@ -535,3 +535,36 @@ async def test_lion_mode_toggles_and_is_reported_in_status(server_client):
 async def test_lion_mode_rejects_a_malformed_body(server_client):
     client, _ = server_client
     assert (await client.post("/control/lion", data="not json")).status == 400
+
+
+def test_discovery_port_is_fixed_and_matches_the_client_probe():
+    # The watch/phone hardcode udp/8710 (medo_link discovery.dart _port); the
+    # server must answer there regardless of the configurable API port, or LAN
+    # discovery silently fails on any non-default remote.port.
+    from remote.server import DISCOVERY_PORT
+    assert DISCOVERY_PORT == 8710
+
+
+def test_discovery_reply_advertises_the_api_port_not_the_discovery_port():
+    import json as _json
+    from remote.server import DISCOVERY_PROBE, DISCOVERY_PORT, _DiscoveryProtocol
+
+    sent: list[tuple[bytes, object]] = []
+
+    class _FakeTransport:
+        def sendto(self, data, addr):
+            sent.append((data, addr))
+
+    proto = _DiscoveryProtocol("MEDO", 8711)  # API bound to a custom port
+    proto.connection_made(_FakeTransport())
+    proto.datagram_received(DISCOVERY_PROBE, ("192.168.1.5", 5000))
+
+    assert sent, "a valid probe must be answered"
+    body = _json.loads(sent[0][0].decode())
+    assert body["service"] == "medo"
+    assert body["port"] == 8711            # advertises the REAL api port
+    assert body["port"] != DISCOVERY_PORT  # which differs from the fixed probe port
+    # A non-probe datagram is ignored.
+    sent.clear()
+    proto.datagram_received(b"nope", ("192.168.1.5", 5000))
+    assert not sent

@@ -86,10 +86,18 @@ class MedoRouter {
     for (final skill in _skills) {
       final m = skill.matchOf(lower);
       if (m == null) continue;
-      final result = await skill.run(SkillRequest(lower, m));
-      _remember(text, result.speech);
-      return RouteResult(result.speech, 'FAST',
-          skill: skill.name, data: result.data);
+      try {
+        final result = await skill.run(SkillRequest(lower, m));
+        _remember(text, result.speech);
+        return RouteResult(result.speech, 'FAST',
+            skill: skill.name, data: result.data);
+      } catch (_) {
+        // A skill that throws must never propagate: the caller only clears its
+        // "busy" flag on a normal return, so an uncaught error would freeze the
+        // UI on THINKING. Degrade to a spoken apology instead.
+        return RouteResult("Sorry, I hit a snag doing that.", 'FAST',
+            skill: skill.name);
+      }
     }
 
     // No local skill matched — use the configured fallback backend.

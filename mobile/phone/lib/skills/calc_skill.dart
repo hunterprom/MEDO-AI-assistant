@@ -39,14 +39,23 @@ class CalcSkill extends Skill {
 
   /// A tiny left-to-right evaluator with */ precedence. Handles + - x * / ÷.
   double? _eval(String expr) {
-    final s = expr.replaceAll('x', '*').replaceAll('X', '*').replaceAll('÷', '/');
-    final tokens = RegExp(r'[-+]?\d*\.?\d+|[-+*/]').allMatches(s).map((m) => m.group(0)!).toList();
+    var s = expr.replaceAll('x', '*').replaceAll('X', '*').replaceAll('÷', '/').trim();
+    // Peel a genuine leading unary sign first; otherwise the number token below
+    // would greedily absorb a binary + / - ("2+2" -> ["2","+2"] -> crash).
+    var lead = 1.0;
+    if (s.startsWith('-')) {
+      lead = -1.0;
+      s = s.substring(1);
+    } else if (s.startsWith('+')) {
+      s = s.substring(1);
+    }
+    final tokens = RegExp(r'\d*\.?\d+|[-+*/]').allMatches(s).map((m) => m.group(0)!).toList();
     if (tokens.isEmpty) return null;
     // pass 1: * and /
     final nums = <double>[];
     final ops = <String>[];
     try {
-      nums.add(double.parse(tokens.first));
+      nums.add(lead * double.parse(tokens.first));
       for (var i = 1; i < tokens.length; i += 2) {
         final op = tokens[i];
         final n = double.parse(tokens[i + 1]);

@@ -13,7 +13,7 @@ class WeatherSkill extends Skill {
 
   @override
   List<RegExp> get patterns => [
-        RegExp(r'\bweather\b(?:\s+(?:in|for|at)\s+(?<city>[a-z .-]+))?'),
+        RegExp(r'\bweather\b(?:\s+like)?(?:\s+(?:in|for|at)\s+(?<city>[a-z .-]+))?'),
         RegExp(r'\bforecast\b(?:\s+(?:in|for)\s+(?<city2>[a-z .-]+))?'),
         RegExp(r'\b(?:how\s+(?:hot|cold)|temperature)\b'),
         RegExp(r'\b(?:will\s+it|is\s+it\s+going\s+to)\s+rain\b'),
@@ -32,9 +32,18 @@ class WeatherSkill extends Skill {
   @override
   Future<SkillResult> run(SkillRequest request) async {
     final m = request.match;
-    final named = (m.groupNames.contains('city') ? m.namedGroup('city') : null) ??
+    var named = (m.groupNames.contains('city') ? m.namedGroup('city') : null) ??
         (m.groupNames.contains('city2') ? m.namedGroup('city2') : null);
-    final city = (named ?? AppSettings.I.city).trim();
+    // The greedy city group runs to end-of-string, so it swallows trailing time
+    // words ("weather in london tomorrow" -> "london tomorrow"). Strip them, or
+    // geocoding the whole phrase finds nothing.
+    named = named
+        ?.replaceFirst(
+            RegExp(r'\s+(?:today|tomorrow|tonight|now|right\s+now|this\s+\w+'
+                r'|next\s+\w+|please)\s*$'),
+            '')
+        .trim();
+    final city = ((named != null && named.isNotEmpty) ? named : AppSettings.I.city).trim();
     try {
       final geo = await _get(
           'https://geocoding-api.open-meteo.com/v1/search?count=1&name=${Uri.encodeQueryComponent(city)}');

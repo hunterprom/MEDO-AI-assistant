@@ -34,8 +34,11 @@ class PhoneSkill extends Skill {
           : const SkillResult("I couldn't control the flashlight.", success: false);
     }
 
-    // volume
-    if (t.contains('volume') || RegExp(r'\b(?:louder|quieter|mute|too\s+loud|too\s+quiet)\b').hasMatch(t)) {
+    // volume  (bare "turn up"/"turn down"/"turn it up" carry no 'volume' word
+    // but pattern 3 matched them via the 'updown' group — enter here too)
+    if (t.contains('volume') ||
+        RegExp(r'\b(?:louder|quieter|mute|too\s+loud|too\s+quiet)\b').hasMatch(t) ||
+        RegExp(r'\bturn\s+(?:it\s+)?(?:up|down)\b').hasMatch(t)) {
       final level = m.groupNames.contains('level') ? int.tryParse(m.namedGroup('level') ?? '') : null;
       if (t.contains('max')) {
         return _vol(await Native.volume(setPercent: 100), 'at max');

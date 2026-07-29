@@ -29,9 +29,10 @@ Model/provider endpoints let clients switch the LLM at runtime.
     POST /pair/approve {"request_id": …} -> {"ok", "name"}   (approve at the PC)
     POST /pair/deny {"request_id": …}    -> {"ok"}          (dismiss at the PC)
 
-A UDP responder on the same port answers ``MEDO_DISCOVER_V1`` broadcasts with
-``{"service": "medo", "name", "port"}`` so the watch finds this machine
-without anyone typing an IP (``remote.discovery_enabled``).
+A UDP responder on a fixed discovery port (``DISCOVERY_PORT``, independent of the
+API port) answers ``MEDO_DISCOVER_V1`` broadcasts with ``{"service": "medo",
+"name", "port"}`` — the reply advertises the real API port — so the watch finds
+this machine without anyone typing an IP (``remote.discovery_enabled``).
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -136,6 +137,12 @@ PAIR_MAX_PENDING_PER_PEER = 3
 
 #: UDP discovery probe the watch broadcasts; anything else is ignored.
 DISCOVERY_PROBE = b"MEDO_DISCOVER_V1"
+
+#: Fixed, well-known UDP port the discovery responder listens on. It must NOT
+#: track the configurable ``remote.port`` — a client can't know a custom API
+#: port before discovery, so the probe port has to be constant. The reply still
+#: advertises the real API port, which is how the client learns where to talk.
+DISCOVERY_PORT = 8710
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
@@ -390,15 +397,18 @@ class RemoteServer:
         self._sys_task = asyncio.create_task(self._collect_sys_forever())
         logger.info("remote API listening on http://%s:%d", host, port)
         if self._settings.remote.discovery_enabled:
-            # Same port number over UDP; bind 0.0.0.0 so broadcasts arrive.
+            # Fixed discovery port (NOT the API port) so a client probe is always
+            # correct even when remote.port is customised; the reply advertises
+            # the real API `port`. Bind 0.0.0.0 so broadcasts arrive.
             # Best-effort: discovery failing must never take the API down.
             try:
                 loop = asyncio.get_running_loop()
                 self._udp_transport, _ = await loop.create_datagram_endpoint(
                     lambda: _DiscoveryProtocol(self._settings.personality.name, port),
-                    local_addr=("0.0.0.0", port),
+                    local_addr=("0.0.0.0", DISCOVERY_PORT),
                 )
-                logger.info("watch discovery answering on udp/%d", port)
+                logger.info("watch discovery answering on udp/%d (advertising api port %d)",
+                            DISCOVERY_PORT, port)
             except Exception:
                 logger.warning("discovery responder unavailable", exc_info=True)
 
