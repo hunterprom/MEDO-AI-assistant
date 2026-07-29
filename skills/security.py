@@ -125,12 +125,17 @@ _OFFENSIVE_ACTION = re.compile(
     r"\b(?:write|create|build|make|generate|develop|code|install|deploy|plant|"
     r"run|use|launch|execute|craft|напиши|создад\w*|направи|инсталира\w*)\b",
     re.IGNORECASE)
-#: A clause boundary between the action verb and the keyword means the verb
-#: governs something ELSE, not the keyword ("scan for malware, then write a
-#: report"). Articles, pronouns, AND adjectives/quantifiers ("a simple", "two",
-#: "a new") may sit in between — those still read as "write <a X> keylogger".
-_CLAUSE_BREAK = re.compile(
-    r"[,;.]|\b(?:and|then|or|but|so|after|before|while|because)\b", re.IGNORECASE)
+#: A break between the producing verb and the offensive keyword means the verb
+#: governs something ELSE, not the keyword: a clause boundary ("scan for malware,
+#: then write a report"), or an object/oblique marker showing the keyword is not
+#: the verb's DIRECT object ("generate a report ON a keylogger", "a summary OF
+#: malware", "make SURE no rootkit"). Plain modifiers (a/simple/two/new) are NOT
+#: breaks — "write a simple keylogger" still reads as producing it. Datives like
+#: "for me" are deliberately NOT breaks, so "install for me a keylogger" stays
+#: refused.
+_SPAN_BREAK = re.compile(
+    r"[,;.]|\b(?:and|then|or|but|so|after|before|while|because|"
+    r"on|of|about|against|behind|sure|that|which)\b", re.IGNORECASE)
 #: A defensive noun the offensive word can MODIFY ("malware scan", "keylogger
 #: detector", "rootkit removal") — then it's the audit's subject, not the object
 #: being made.
@@ -149,10 +154,11 @@ def _offensive_action_produces(text: str) -> bool:
             continue                       # "malware scan" — the audit's subject
         for a in _OFFENSIVE_ACTION.finditer(text[:m.start()]):
             span = text[a.end():m.start()]
-            # The verb governs the keyword when nothing breaks the clause between
-            # them and they're reasonably close — "write a simple keylogger" is
-            # producing it; "write a report, then scan for a keylogger" is not.
-            if not _CLAUSE_BREAK.search(span) and len(span) <= 40:
+            # The verb governs the keyword as its DIRECT object when nothing
+            # breaks the span and they're close — "write a simple keylogger" is
+            # producing it; "generate a report on a keylogger" / "make sure no
+            # rootkit" are not.
+            if not _SPAN_BREAK.search(span) and len(span) <= 40:
                 return True                # verb produces the keyword
     return False
 

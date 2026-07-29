@@ -512,6 +512,20 @@ async def test_undecidable_choice_reply_reroutes_not_guesses(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_pending_choice_does_not_suppress_another_channels_turn(tmp_path):
+    router = _clarify_router(tmp_path)
+    # Arm a tie-break on the voice channel.
+    await router.route("give me the borderline thing", {"source": "voice"})
+    assert router.awaiting_choice is True
+    # A normal command on a DIFFERENT channel must route AND be recorded — not be
+    # swallowed by the pending choice (which is still the voice user's).
+    r = await router.route("is it warm outside", {"source": "remote"})
+    assert r.skill_name == "weather"
+    assert router.conversation.last_reply().startswith("weather:")
+    assert router.awaiting_choice is True          # voice tie-break untouched
+
+
+@pytest.mark.asyncio
 async def test_resolved_choice_is_recorded_under_the_original_question(tmp_path):
     router = _clarify_router(tmp_path)
     await router.route("give me the borderline thing")

@@ -60,7 +60,12 @@ def _strip_time_words(city: str) -> str:
 #: A trailing "in/for/at <X>" that is plainly not a place, so the city fallback
 #: doesn't geocode "the moment" and report it can't find it.
 _NOT_A_CITY = {"the moment", "the minute", "now", "home", "work",
-               "the weekend", "the week", "the day", "school"}
+               "the weekend", "the week", "the day", "school",
+               # common "my current location" nouns — a leading article is
+               # stripped before this check, so "the office" is caught too.
+               "office", "house", "gym", "room", "building", "apartment",
+               "flat", "garden", "backyard", "kitchen", "bedroom", "bathroom",
+               "hotel", "hospital"}
 
 
 #: Determiners that mean "the default location", never a real place to geocode
@@ -77,7 +82,13 @@ def _looks_like_city(candidate: str, *, allow_article: bool = False) -> bool:
     'in/for/at <city>' group frames a proper name like 'The Hague', whereas a
     bare trailing tail ('in the office') should still reject the article."""
     candidate = candidate.strip(" ?.!")
-    if not candidate or candidate.lower() in _NOT_A_CITY:
+    if not candidate:
+        return False
+    # Ignore a leading article for the non-place check, so "the office" is
+    # rejected the same as "office" — while a real "The Hague" survives, its
+    # core word not being a non-place.
+    core = re.sub(r"^(?:the|a|an)\s+", "", candidate, flags=re.IGNORECASE)
+    if candidate.lower() in _NOT_A_CITY or core.lower() in _NOT_A_CITY:
         return False
     if _NON_CITY_LEAD.match(candidate):
         return False

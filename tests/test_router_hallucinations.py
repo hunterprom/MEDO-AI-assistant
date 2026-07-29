@@ -113,8 +113,11 @@ def test_weather_group_path_keeps_determiner_led_real_cities(candidate):
     assert _looks_like_city(candidate, allow_article=True) is True
 
 
-@pytest.mark.parametrize("candidate", ["work", "my house", "next quarter"])
+@pytest.mark.parametrize("candidate", ["work", "my house", "next quarter",
+                                       "the office", "the gym"])
 def test_weather_group_path_still_drops_nonplaces(candidate):
+    # "the office"/"the gym" mean the current location, not a city to geocode:
+    # a leading article is stripped before the non-place check.
     assert _looks_like_city(candidate, allow_article=True) is False
 
 

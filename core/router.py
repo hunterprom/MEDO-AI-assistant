@@ -546,8 +546,12 @@ class Router:
             answering_choice = False
         # A turn that just ASKED a tie-break question is an incomplete exchange:
         # the resolution turn records the real Q&A (under the original question),
-        # so don't also record the bare question turn here.
-        asked_choice = self._pending_choice is not None and not answering_choice
+        # so don't also record the bare question turn here. Source-scoped, or a
+        # normal turn on ANOTHER channel would be wrongly dropped while a choice
+        # is pending on the first (the question turn always armed it same-source).
+        asked_choice = (self._pending_choice is not None and not answering_choice
+                        and self._pending_choice[2].get("source")
+                        == (context or {}).get("source"))
 
         self.stats[result.path] += 1
         if self.metrics is not None:
