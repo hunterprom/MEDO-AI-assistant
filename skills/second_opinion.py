@@ -267,7 +267,7 @@ class SecondOpinionSkill(_CouncilBase):
         # silently swallowed into the (empty) breakdown branch.
         offer = bool(claims) and status != "unverified"
         return SkillResult(
-            headline, success=True, await_reply=offer,
+            headline, success=True, await_reply=offer, reply_is_offer=offer,
             data={"second_opinion": status, "members": [m.key for m in answered],
                   "audit": claims})
 

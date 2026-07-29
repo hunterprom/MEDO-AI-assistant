@@ -522,6 +522,68 @@ class PowerSkill(Skill):
 
 
 # --------------------------------------------------------------------------- #
+# Quit — close MEDO itself (the assistant session), never the machine.
+# --------------------------------------------------------------------------- #
+class QuitSkill(Skill):
+    """Close MEDO itself on command — and actually do it.
+
+    "Close yourself", "shut yourself down", "quit MEDO" used to miss every fast
+    pattern and land on the LLM, which NARRATED a shutdown ("Shutting down —
+    good day, sir.") while nothing closed: MEDO claimed an action it never took.
+    This makes the words true. It fast-matches only SELF-directed close phrases
+    (yourself / MEDO / the assistant), so "close notepad" (a window) and a bare
+    "shut down" (PowerSkill -> the computer) are left alone.
+
+    It is NOT a PC-control action — it ends the assistant, not the machine — so
+    the PC-control switch never hides the one command that turns MEDO off. But
+    ending the session on a single, possibly-misheard phrase is disruptive, so —
+    like every non-lock power action — it asks for a spoken "yes" first.
+    ``requires_confirmation`` doubles as the guard that keeps this session-ender
+    off the semantic/learn tiers: only an explicit phrase, never a fuzzy meaning
+    match, can reach it.
+
+    On the confirmed run it hands the voice loop ``data['exit']``; the loop
+    speaks the farewell, THEN tears down exactly as Ctrl-C would.
+    """
+
+    name = "quit"
+    controls_pc = False
+    requires_confirmation = True
+    description = "Close MEDO itself — end the assistant session (not the computer)."
+
+    _SELF = r"(?:your\s*self|medo|the\s+assistant)"
+    patterns = [
+        re.compile(rf"\b(?:close|quit|exit)\s+{_SELF}\b", re.IGNORECASE),
+        re.compile(r"\b(?:shut|turn|power)\s+your\s*self\s+(?:down|off)\b",
+                   re.IGNORECASE),
+        re.compile(rf"\b(?:shut\s*down|shut\s+off|turn\s+off|power\s+off)\s+{_SELF}\b",
+                   re.IGNORECASE),
+        re.compile(r"\bgoodbye,?\s+medo\b", re.IGNORECASE),
+    ]
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        if not request.context.get("confirmed"):
+            return SkillResult(
+                "Do you want me to close down? Say yes to confirm.",
+                needs_confirmation=True)
+        # The voice loop reads data['exit'] and ends the session AFTER speaking.
+        return SkillResult("Shutting down — goodbye.", data={"exit": True})
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": (
+                    "Close MEDO itself and end the assistant session. Use ONLY "
+                    "when the user explicitly asks to close/quit/shut down MEDO "
+                    "(the assistant) — never the computer."),
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        }
+
+
+# --------------------------------------------------------------------------- #
 # Pointer mode (gesture mouse control) — toggles the vision sidecar
 # --------------------------------------------------------------------------- #
 class PointerControlSkill(Skill):

@@ -43,6 +43,11 @@ class SkillResult:
     # router routes that reply back to this skill with context['captured_reply'],
     # unless it matches another command — see Router._route_inner.
     await_reply: bool = False
+    # Set ALONGSIDE await_reply when the captured reply is a yes/no OFFER (e.g.
+    # "want the full breakdown?"). The router then only feeds an affirmative or a
+    # negative back to this skill; any OTHER utterance is treated as a fresh
+    # command and re-routed, never swallowed into the offer as a bland "okay".
+    reply_is_offer: bool = False
 
 
 class Skill(ABC):

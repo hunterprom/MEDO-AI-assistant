@@ -178,6 +178,10 @@ class Router:
         #: A skill awaiting a free-text follow-up (e.g. self-dev's "what should I
         #: fix?"), so the NEXT utterance is captured as its answer.
         self._pending_reply: tuple[Skill, SkillRequest] | None = None
+        #: True when that pending reply is a yes/no OFFER ("want the breakdown?"),
+        #: so a reply that is neither yes nor no is a fresh command and re-routes
+        #: instead of being swallowed into the offer. Set with `_pending_reply`.
+        self._reply_is_offer = False
         #: Rolling context so follow-ups ("and tomorrow?") resolve.
         self.conversation = ConversationMemory(settings.memory.max_turns)
         #: Long-term user facts, injected into the system prompt each LLM turn.
@@ -617,9 +621,19 @@ class Router:
                 and self._pending_reply[1].context.get("source")
                 == context.get("source")):
             reply_skill = self._pending_reply[0]
+            is_offer = self._reply_is_offer
             self._pending_reply = None
+            self._reply_is_offer = False
             other = self._registry.find_match(text)
-            if other is None or other[0] is reply_skill:
+            # A yes/no OFFER ("want the breakdown?") only wants a yes or a no. A
+            # reply that is neither is a fresh command ("actually, use the
+            # electrical engineer to check that") — fall through and re-route it
+            # rather than feed it back as a bland "okay" that silently drops the
+            # request. Free-text captures (self-dev's "what should I fix?") set no
+            # offer flag and still take ANY utterance as the answer, as before.
+            offer_answered = (not is_offer
+                              or is_affirmative(text) or is_negative(text))
+            if offer_answered and (other is None or other[0] is reply_skill):
                 captured = SkillRequest(
                     text=text, context={**context, "captured_reply": True})
                 return await self._run_skill(reply_skill, captured)
@@ -703,6 +717,7 @@ class Router:
         if outcome.await_reply:
             # The skill asked a question; capture the NEXT utterance as its answer.
             self._pending_reply = (skill, request)
+            self._reply_is_offer = outcome.reply_is_offer
         if (outcome.needs_confirmation and self._settings.safety.confirm_destructive):
             # Stash the request; the next utterance is treated as the yes/no.
             self._pending = (skill, request)

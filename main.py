@@ -57,6 +57,7 @@ from skills.notes import NotesSkill
 from skills.system import (
     PointerControlSkill,
     PowerSkill,
+    QuitSkill,
     ScreenshotSkill,
     SystemInfoSkill,
     VolumeSkill,
@@ -232,6 +233,12 @@ def build_registry(
     from skills.repeat_skill import RepeatSkill
 
     registry.register(RepeatSkill())
+
+    # "Close yourself" / "quit MEDO": actually end the assistant session (the LLM
+    # used to just narrate a shutdown that never happened). Registered early so
+    # its self-directed phrases beat PowerSkill's bare "shut down" (the machine)
+    # and the window/app-close skills.
+    registry.register(QuitSkill())
 
     # Self-programming: MEDO proposes changes to its OWN code (core/self_dev.py),
     # built in an isolated worktree and gated by the tests. Registered ONLY when

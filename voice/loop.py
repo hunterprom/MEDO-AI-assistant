@@ -796,6 +796,13 @@ class VoiceLoop:
             stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
         ))
         self._ui.turn(result, self._log.turns[-1])
+        # A self-close skill (QuitSkill) asked MEDO to end the session. The
+        # farewell has now been spoken, so exit cleanly — reusing the Ctrl-C path
+        # so main() unwinds the remote API, HUD and MCP children in its finally.
+        # Raise (rather than return) to leave the forever-loop regardless of what
+        # require_wake would have been.
+        if result.data.get("exit"):
+            raise KeyboardInterrupt
         next_require_wake = not self._should_relisten(self._barged_in)
         self._barged_in = False
         # The turn's language voiced its reply above; clear it so a later

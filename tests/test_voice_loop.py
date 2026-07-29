@@ -329,6 +329,44 @@ async def test_turn_language_cleared_after_turn():
     assert loop._turn_language is None
 
 
+@pytest.mark.asyncio
+async def test_quit_exits_the_loop_after_speaking_the_farewell():
+    """QuitSkill's data['exit'] ends the voice session — but only AFTER the
+    farewell is spoken, so the goodbye is actually heard. It reuses the Ctrl-C
+    path (KeyboardInterrupt) so main() runs its shutdown finally."""
+    from core.events import RoutePath
+    from core.router import RouteResult
+
+    loop = _make_loop()
+
+    class _Stt:
+        def transcribe_with_language(self, audio):
+            return ("close yourself", "en")
+    loop._stt = _Stt()
+
+    async def _route(text, context=None, on_delta=None, on_llm_start=None):
+        return RouteResult(path=RoutePath.FAST, speech="Shutting down — goodbye.",
+                           skill_name="quit", streamed_reply=False,
+                           data={"exit": True})
+    loop._router.route = _route
+    loop._router.awaiting_confirmation = False
+    loop._modes.continuous = False
+    loop._sm.transition = AsyncMock()
+
+    spoken: list[str] = []
+
+    async def _speak(text, language=None):
+        spoken.append(text)
+        return 10.0
+    loop._speak = _speak
+
+    audio = np.full(1600, 50, dtype=np.int16)
+    with pytest.raises(KeyboardInterrupt):
+        await asyncio.wait_for(loop._run_turn(audio, 0.0, True), timeout=5)
+    # The farewell was voiced BEFORE the session ended.
+    assert spoken == ["Shutting down — goodbye."]
+
+
 def test_wake_has_an_anti_false_wake_guard_by_default():
     # A single-frame idle trigger is only safe with stt_confirm to reject a
     # non-"medo" spike; the shipped config must keep at least one of the two

@@ -69,6 +69,9 @@ async def test_unsupported_claim_is_flagged_and_offers_breakdown():
     r = await _run(skill, ctx=_ctx("Around 2.5 newton-metres per hip at a 2 hertz gait."))
     assert r.success and r.data["second_opinion"] == "shaky"
     assert r.await_reply is True
+    # The "want the breakdown?" tail is a yes/no OFFER: a reply that is neither is
+    # a fresh command the router re-routes, not a bland "okay" that drops it.
+    assert r.reply_is_offer is True
     assert "unsupported" in r.speech.lower()
     assert "2.5 newton-metre" in r.speech
 
@@ -102,6 +105,7 @@ async def test_all_cannot_verify_does_not_arm_reply_capture():
     r = await _run(skill, ctx=_ctx("The alloy melts at 1400 C."))
     assert r.data["second_opinion"] == "unverified"
     assert r.await_reply is False
+    assert r.reply_is_offer is False           # no offer armed -> nothing to swallow
     assert "breakdown" not in r.speech.lower()
 
 
