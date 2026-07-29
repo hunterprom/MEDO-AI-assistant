@@ -527,3 +527,24 @@ while the engine uses newer numpy — they cannot share one environment (that's 
 two venvs exist today). The vision sidecar must be frozen as its OWN bundle in
 S5, never merged into the engine. This S1 design already treats vision as a
 separate child, so it's packaging-aligned. run.bat + config.yaml stay for dev.
+
+## App packaging S2: hardware detection + honest auto-profile (2026-07-30)
+
+**Decision: fit the brain to the GPU — 30B only at 24 GB+.** Auto tiers (verified
+against ollama.com/library 2026-07-30): lite (<6 GB / no NVIDIA) = llama3.2:3b
+(or :1b on a CPU-only low-RAM box) + whisper base, vision off; balanced (6-11 GB)
+= qwen2.5:7b + whisper small + qwen2.5vl:3b; full (12-23 GB) = qwen2.5:14b (9 GB,
+FITS) + large-v3-turbo; max (24 GB+) = qwen3:30b. qwen3:30b (~18 GB) is NOT
+auto-picked for 12-16 GB cards (it would offload to RAM and crawl) — it's reached
+via 'max' or a manual override. Keeps the "never promise full power on a weak
+machine" rule literally true.
+
+**Decision: detection is injectable + fails to a safe lite default.** GPU via
+nvidia-smi (pure parser, unit-tested), RAM via psutil, all probes guarded — a
+missing tool / AMD GPU / crashing probe → "no CUDA GPU" → lite, never an
+exception. `app/profiles.py` selection is pure and exhaustively tested.
+
+**Decision: user choices live in %APPDATA%\MEDO\settings.json, not config.yaml.**
+Per-user, atomic writes, corrupt-file tolerant; records the profile + whether it
+was a manual override (so a re-detect won't overwrite a deliberate choice). The
+dev config.yaml keeps working for the CLI.
