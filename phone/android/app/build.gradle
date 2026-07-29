@@ -55,13 +55,12 @@ android {
         release {
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig signingConfigs.debug
-            // Shrink the Kotlin/Java side + drop unused resources. proguard-rules
-            // keeps Flutter/plugin entry points and silences the (unused) Play
-            // Core split shim. The big size win is still `--split-per-abi`.
-            minifyEnabled true
-            shrinkResources true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
-                          'proguard-rules.pro'
+            // R8/minify is OFF on purpose: it strips MainActivity (breaking launch)
+            // and yields ~no size win for a Flutter app (the APK is engine +
+            // Dart-AOT + ICU, which R8 can't touch). The real levers — AOT,
+            // icon tree-shaking, and arm64-only (--target-platform) — need no R8.
+            minifyEnabled false
+            shrinkResources false
         }
     }
 }
