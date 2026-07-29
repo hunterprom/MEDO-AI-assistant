@@ -34,6 +34,18 @@ def test_quit_matches_self_directed_close(text):
 
 
 @pytest.mark.parametrize("text", [
+    # "MEDO" is short and quiet — Whisper spells it many ways. A self-close must
+    # survive the mishearing on the FAST path so it never reaches the LLM (which
+    # then NARRATES a shutdown: the "Close medal -> Already shutting down, sir"
+    # transcript). The confirmation gate covers a rare false hit.
+    "close medal", "quit medal", "shut down medal", "goodbye medal",
+    "close meadow", "shut down meadow", "close meddo", "quit medoh",
+])
+def test_quit_survives_medo_name_mishearings(text):
+    assert _matches(QuitSkill(), text)
+
+
+@pytest.mark.parametrize("text", [
     "close notepad", "close the window", "close the tab", "close chrome",
     "shut down", "shut down the computer", "shut down the pc",
     "restart", "put the computer to sleep", "lock the screen",

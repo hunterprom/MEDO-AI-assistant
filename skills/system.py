@@ -551,14 +551,20 @@ class QuitSkill(Skill):
     requires_confirmation = True
     description = "Close MEDO itself — end the assistant session (not the computer)."
 
-    _SELF = r"(?:your\s*self|medo|the\s+assistant)"
+    # "medo" and its frequent STT mishearings: the name is short and often quiet,
+    # so Whisper spells it "medal", "meadow", "meddo", "medoh"... "Close medal"
+    # (a misheard "close MEDO") used to miss the fast path and reach the LLM,
+    # which then NARRATED a shutdown. The tight `verb + name` shape plus the
+    # confirmation gate make a rare false hit ("close meadow") cost one "no".
+    _MEDO = r"(?:medo|medoh|meddo|medal|meadow)"
+    _SELF = rf"(?:your\s*self|{_MEDO}|the\s+assistant)"
     patterns = [
         re.compile(rf"\b(?:close|quit|exit)\s+{_SELF}\b", re.IGNORECASE),
         re.compile(r"\b(?:shut|turn|power)\s+your\s*self\s+(?:down|off)\b",
                    re.IGNORECASE),
         re.compile(rf"\b(?:shut\s*down|shut\s+off|turn\s+off|power\s+off)\s+{_SELF}\b",
                    re.IGNORECASE),
-        re.compile(r"\bgoodbye,?\s+medo\b", re.IGNORECASE),
+        re.compile(rf"\bgoodbye,?\s+{_MEDO}\b", re.IGNORECASE),
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
