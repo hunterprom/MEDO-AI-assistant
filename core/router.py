@@ -220,6 +220,14 @@ class Router:
         #: same turn costs zero extra embeds.
         self._route_memory: Any = None
         self._last_query_vec: Any = None
+        #: Spoken tie-break (M2.5f): the two candidate skills MEDO offered on a
+        #: near-tie, the ORIGINAL utterance, and its context — awaiting a one-word
+        #: choice. Kept entirely SEPARATE from `_pending` (the destructive-action
+        #: confirmation gate) so neither state can weaken the other.
+        self._pending_choice: "tuple[list[Skill], str, dict] | None" = None
+        #: Set when a choice reply was neither offered skill (a no / a different
+        #: command) and got re-routed, so route() records it as a normal turn.
+        self._rerouted_from_choice = False
 
     async def _ensure_route_index(self):
         """Build the semantic route index once; None when it can't be built.
@@ -388,6 +396,43 @@ class Router:
             return None
         return best
 
+    async def _semantic_clarify(self, text: str) -> "list[Skill] | None":
+        """The two safe skills to offer on a near-tie, or None.
+
+        Reuses the query vector :meth:`_semantic_route` just cached (a near-tie
+        decline still leaves it set), so there is NO second embed. Returns
+        exactly two distinct ``_semantic_safe`` skills in score order, or None
+        when there is no clarifiable tie or the index isn't ready.
+        """
+        vec = self._last_query_vec
+        if vec is None:                       # tier was off / didn't embed
+            return None
+        idx = await self._ensure_route_index()
+        if idx is None:
+            return None
+        pair = idx.top_pair(vec, self._settings.router.semantic_threshold,
+                            self._settings.router.semantic_margin)
+        skills: list[Skill] = []
+        seen: set[str] = set()
+        for name, _score in pair:
+            if name in seen:
+                continue
+            skill = self._registry.get(name)
+            if skill is not None and self._semantic_safe(skill):
+                seen.add(name)
+                skills.append(skill)
+        return skills if len(skills) == 2 else None
+
+    def _clarify_question(self, skills: "list[Skill]") -> str:
+        """A one-word either/or prompt naming the two candidate skills."""
+        from core.agents import _STAR_LABELS, prettify
+
+        def label(s: "Skill") -> str:
+            return (_STAR_LABELS.get(s.name) or prettify(s.name)
+                    or s.name.replace("_", " ")).lower()
+
+        return f"Did you mean the {label(skills[0])}, or the {label(skills[1])}?"
+
     async def _maybe_learn_route(self, text: str, result: RouteResult,
                                  answering_confirmation: bool) -> None:
         """Learn (utterance -> skill) from a CLEAN single-skill LLM resolution.
@@ -447,6 +492,11 @@ class Router:
         """True when the last reply asked for confirmation (UI should re-listen)."""
         return self._pending is not None
 
+    @property
+    def awaiting_choice(self) -> bool:
+        """True when the last reply asked a one-word tie-break (UI re-listens)."""
+        return self._pending_choice is not None
+
     async def route(
         self,
         text: str,
@@ -469,8 +519,15 @@ class Router:
             self._pending is not None
             and self._pending[1].context.get("source")
             == (context or {}).get("source"))
+        # Same capture for a pending one-word tie-break: the bare answer must not
+        # pollute the follow-up chain, but a re-routed non-answer must.
+        answering_choice = (
+            self._pending_choice is not None
+            and self._pending_choice[2].get("source")
+            == (context or {}).get("source"))
         self._turn_used_live_info = False
         self._rerouted_from_confirmation = False
+        self._rerouted_from_choice = False
         # Cleared each turn so a stale embedding can never attach to a later
         # learned route; set by _semantic_route when it embeds this utterance.
         self._last_query_vec = None
@@ -485,6 +542,8 @@ class Router:
         # turn, so record it and arm the follow-up chain rather than suppress it.
         if self._rerouted_from_confirmation:
             answering_confirmation = False
+        if self._rerouted_from_choice:
+            answering_choice = False
 
         self.stats[result.path] += 1
         if self.metrics is not None:
@@ -496,7 +555,7 @@ class Router:
         # Remember the turn, UNLESS this utterance was the yes/no that answered a
         # pending confirmation — that's what shouldn't pollute the context. (The
         # command that TRIGGERED a confirmation is recorded; the "yes" is not.)
-        if not answering_confirmation:
+        if not answering_confirmation and not answering_choice:
             self.conversation.add_turn(text, result.speech)
             # Track whether this turn produced live/online info, so the NEXT
             # question can be recognised as a follow-up that also needs it. Set
@@ -521,6 +580,14 @@ class Router:
         self, text: str, context: dict[str, Any], on_delta: Any = None,
         on_llm_start: Any = None,
     ) -> RouteResult:
+        # --- CHOICE GATE ---
+        # A near-tie asked a one-word either/or; this reply answers it. Same-
+        # source scoped like the confirmation gate below and kept independent of
+        # it (the two pending states never overlap within a turn).
+        if (self._pending_choice is not None
+                and self._pending_choice[2].get("source") == context.get("source")):
+            return await self._resolve_choice(text, context)
+
         # --- CONFIRMATION GATE ---
         # A destructive action is waiting on a yes/no; this reply answers it —
         # but only when it comes from the channel that armed it. A turn from a
@@ -581,6 +648,23 @@ class Router:
                     return await self._run_skill(
                         skill, SkillRequest(text=text, context=context),
                         path=RoutePath.SEMANTIC)
+
+            # Near-tie tie-break (M2.5f): the tier DECLINED (two safe skills too
+            # close to call). Rather than pay for the LLM and maybe guess wrong,
+            # offer a one-word either/or and route the spoken choice on the
+            # semantic path. Honors semantic_shadow (log the would-be ask only).
+            if self._settings.router.semantic_clarify_enabled:
+                cands = await self._semantic_clarify(text)
+                if cands:
+                    if self._settings.router.semantic_shadow:
+                        logger.info("[semantic-clarify-shadow] %r -> %s",
+                                    text, [s.name for s in cands])
+                    else:
+                        self._pending_choice = (cands, text, context)
+                        return RouteResult(
+                            path=RoutePath.SEMANTIC,
+                            speech=self._clarify_question(cands),
+                            skill_name=None)
 
         # --- LLM PATH ---
         # Signal the caller (the voice loop) that we've committed to the LLM,
@@ -656,6 +740,92 @@ class Router:
         self._rerouted_from_confirmation = True
         logger.info("ambiguous confirmation %r; cancelling pending action", text)
         return await self._route_inner(text, context)
+
+    async def _resolve_choice(
+        self, text: str, context: dict[str, Any]
+    ) -> RouteResult:
+        """Resolve a spoken answer to a near-tie clarify question.
+
+        Dispatches one of the two offered skills on the SEMANTIC path with the
+        ORIGINAL utterance (so a query skill parses the real question), then
+        learns that phrasing. Never guesses: a no / "neither", a different
+        fast-path command, or an undecidable reply cancels the choice and
+        re-routes the utterance fresh — mirroring the confirmation gate.
+        """
+        cands, original_text, _orig_ctx = self._pending_choice  # type: ignore[misc]
+        self._pending_choice = None
+        from core.safety import _normalize
+
+        norm = _normalize(text)
+        if (is_negative(text) or norm in {"neither", "none", "nothing"}
+                or self._registry.find_match(text) is not None):
+            self._rerouted_from_choice = True
+            logger.info("tie-break declined %r; re-routing", text)
+            return await self._route_inner(text, context)
+        chosen = await self._pick_choice(cands, text, norm)
+        if chosen is None:                    # couldn't tell — don't guess
+            self._rerouted_from_choice = True
+            logger.info("tie-break ambiguous %r; re-routing", text)
+            return await self._route_inner(text, context)
+        res = await self._run_skill(
+            chosen, SkillRequest(text=original_text, context=context),
+            path=RoutePath.SEMANTIC)
+        # Learn the ORIGINAL phrasing so this tie never recurs (a no-op unless
+        # route_memory_enabled; _learn_route re-embeds since route() cleared the
+        # per-turn vector at the top of this answering turn).
+        await self._learn_route(original_text, chosen)
+        return res
+
+    async def _pick_choice(self, cands: "list[Skill]", text: str, norm: str
+                           ) -> "Skill | None":
+        """Which offered skill the reply names: by word match first, else by
+        embedding the reply and taking the nearer index vector. None when it is
+        genuinely undecidable (so the caller re-routes rather than guesses)."""
+        from core.agents import _STAR_LABELS, prettify
+
+        hits = []
+        for s in cands:
+            label = (_STAR_LABELS.get(s.name) or prettify(s.name)
+                     or s.name.replace("_", " ")).lower()
+            tokens = {s.name.lower(), *label.split()}
+            if any(len(t) >= 3 and t in norm for t in tokens):
+                hits.append(s)
+        if len(hits) == 1:
+            return hits[0]
+        # Fall back to meaning: embed the (short) reply once and pick the nearer
+        # candidate index vector. Any failure -> None (caller re-routes).
+        if self._embedder is None:
+            return None
+        idx = await self._ensure_route_index()
+        if idx is None:
+            return None
+        try:
+            rv = await asyncio.to_thread(self._embedder, [text])
+        except Exception:
+            return None
+        if not rv:
+            return None
+        import numpy as np
+
+        q = np.asarray(rv[0], dtype=np.float32).ravel()
+        qn = float(np.linalg.norm(q))
+        if not np.isfinite(qn) or qn == 0.0:
+            return None
+        q = q / qn
+        vecs = {e.skill: e.vector for e in idx.entries()}
+        best_skill, best_score = None, -2.0
+        for s in cands:
+            v = vecs.get(s.name)
+            if v is None:
+                continue
+            v = np.asarray(v, dtype=np.float32).ravel()
+            vn = float(np.linalg.norm(v))
+            if not np.isfinite(vn) or vn == 0.0 or v.shape != q.shape:
+                continue
+            score = float(q @ (v / vn))
+            if np.isfinite(score) and score > best_score:
+                best_skill, best_score = s, score
+        return best_skill
 
     async def _safe_execute(self, skill: Skill, request: SkillRequest) -> SkillResult:
         """Run a skill's ``execute`` with a backstop for unexpected exceptions.

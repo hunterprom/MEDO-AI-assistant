@@ -808,14 +808,16 @@ class VoiceLoop:
     def _should_relisten(self, barged_in: bool) -> bool:
         """Whether to open the mic again WITHOUT the wake word after this turn.
 
-        Yes when MEDO just asked "are you sure?" or continuous mode is on — the
-        user is clearly mid-conversation. A barge-in is different: with
+        Yes when MEDO just asked "are you sure?", asked a one-word tie-break
+        ("did you mean the weather, or the news?"), or continuous mode is on —
+        the user is clearly mid-conversation. A barge-in is different: with
         wake-word interruption, saying "medo" to cut MEDO off does NOT mean a
         command is coming, so by default we return to standby instead of
         sitting in LISTENING recording the silence (or noise) that follows.
         Set conversation.listen_after_barge to keep the old follow-up window.
         """
-        if self._router.awaiting_confirmation or self._modes.continuous:
+        if (self._router.awaiting_confirmation or self._router.awaiting_choice
+                or self._modes.continuous):
             return True
         return barged_in and self._settings.conversation.listen_after_barge
 

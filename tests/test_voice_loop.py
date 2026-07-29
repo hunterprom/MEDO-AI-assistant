@@ -15,7 +15,7 @@ from voice.loop import VoiceLoop
 
 
 def _make_loop(**kwargs) -> VoiceLoop:
-    return VoiceLoop(
+    loop = VoiceLoop(
         load_settings(),
         router=MagicMock(),          # never called at construction time
         sm=MagicMock(),
@@ -24,6 +24,11 @@ def _make_loop(**kwargs) -> VoiceLoop:
         log=LatencyLog(),
         **kwargs,
     )
+    # The router is a MagicMock, so an UNSET awaiting_choice would be a truthy
+    # child mock that flips _should_relisten to True everywhere. Pin the new
+    # gate to a real bool (mirrors awaiting_confirmation, set per-test below).
+    loop._router.awaiting_choice = False
+    return loop
 
 
 def test_constructs_with_mocks_and_loads_nothing():
@@ -163,9 +168,11 @@ def test_default_barge_mode_is_wake():
 
 # --- after an interrupt: go to standby, don't sit listening -------------------
 
-def _relisten_loop(*, awaiting=False, continuous=False, listen_after_barge=False):
+def _relisten_loop(*, awaiting=False, choice=False, continuous=False,
+                   listen_after_barge=False):
     loop = _make_loop()
     loop._router.awaiting_confirmation = awaiting     # MagicMock attr -> real bool
+    loop._router.awaiting_choice = choice
     loop._modes.continuous = continuous
     loop._settings.conversation.listen_after_barge = listen_after_barge
     return loop
@@ -196,6 +203,13 @@ def test_confirmation_still_relistens_even_after_a_barge():
 
 def test_continuous_mode_always_relistens():
     loop = _relisten_loop(continuous=True)
+    assert loop._should_relisten(barged_in=False) is True
+
+
+def test_tie_break_question_relistens_wakelessly():
+    # A one-word semantic tie-break ("did you mean the weather, or the news?")
+    # must reopen the mic without the wake word, like a confirmation prompt.
+    loop = _relisten_loop(choice=True)
     assert loop._should_relisten(barged_in=False) is True
 
 

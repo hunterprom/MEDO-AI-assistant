@@ -345,5 +345,159 @@ async def test_route_memory_inert_when_disabled(tmp_path):
     assert result.speech == OFFLINE_LLM_REPLY
 
 
+# --- top_pair: the near-tie detector behind the spoken tie-break -------------
+
+def test_top_pair_returns_the_two_tied_skills():
+    idx = _index({"weather": [1, 0, 0], "news": [0, 1, 0]})
+    pair = idx.top_pair(np.array([0.7, 0.7, 0.0], dtype=np.float32))
+    assert len(pair) == 2
+    assert {n for n, _ in pair} == {"weather", "news"}
+
+
+def test_top_pair_empty_on_a_confident_winner():
+    idx = _index({"weather": [1, 0, 0], "news": [0, 1, 0], "datetime": [0, 0, 1]})
+    # The confident query match() accepts is NOT a clarifiable tie.
+    assert idx.top_pair(np.array([0.9, 0.1, 0.0], dtype=np.float32)) == []
+
+
+def test_top_pair_empty_when_both_below_threshold():
+    idx = _index({"weather": [1, 0, 0], "news": [0, 1, 0]})
+    # Diagonal [1,1,1]: each ~0.577 < 0.6, so not a clarifiable tie.
+    assert idx.top_pair(np.array([1, 1, 1], dtype=np.float32)) == []
+
+
+def test_top_pair_empty_on_degenerate_or_singleton():
+    assert _index({"weather": [1, 0, 0]}).top_pair(
+        np.array([1, 0, 0], dtype=np.float32)) == []              # < 2 entries
+    idx = _index({"weather": [1, 0, 0], "news": [0, 1, 0]})
+    assert idx.top_pair(None) == []
+    assert idx.top_pair(np.array([0, 0, 0], dtype=np.float32)) == []      # zero norm
+    assert idx.top_pair(np.array([np.nan, 0, 0], dtype=np.float32)) == []
+
+
+# --- spoken tie-break wiring (M2.5f) -----------------------------------------
+
+def _tie_embedder(texts):
+    """Like _fake_embedder but adds a 'borderline' marker equidistant between
+    weather [1,0,0] and news [0,1,0] and within margin -> a clarifiable tie."""
+    out = []
+    for t in texts:
+        tl = t.lower()
+        if "warm" in tl:
+            out.append(np.array([1.0, 0.0, 0.0], dtype=np.float32))
+        elif "headline" in tl:
+            out.append(np.array([0.0, 1.0, 0.0], dtype=np.float32))
+        elif "borderline" in tl:
+            out.append(np.array([1.0, 1.0, 0.0], dtype=np.float32))
+        else:
+            out.append(np.array([1.0, 1.0, 1.0], dtype=np.float32))
+    return out
+
+
+def _clarify_router(tmp_path, *, shadow=False, memory=False):
+    router = _mem_router(tmp_path, shadow=shadow) if memory \
+        else _router(tmp_path, shadow=shadow)
+    router._settings.router.semantic_clarify_enabled = True
+    router._embedder = _tie_embedder
+    router._route_index = None                 # rebuild with the tie embedder
+    if memory:
+        router._route_memory = None
+    return router
+
+
+@pytest.mark.asyncio
+async def test_near_tie_asks_a_one_word_choice(tmp_path):
+    router = _clarify_router(tmp_path)
+    r = await router.route("give me the borderline thing")     # [1,1,0] tie
+    assert r.path is RoutePath.SEMANTIC
+    assert r.skill_name is None                # a question, not a dispatch
+    assert router.awaiting_choice is True
+    low = r.speech.lower()
+    assert "weather" in low and "news" in low
+
+
+@pytest.mark.asyncio
+async def test_choice_reply_routes_on_the_semantic_path(tmp_path):
+    router = _clarify_router(tmp_path)
+    await router.route("give me the borderline thing")
+    r = await router.route("the weather")
+    assert r.path is RoutePath.SEMANTIC
+    assert r.skill_name == "weather"
+    # dispatched with the ORIGINAL utterance so the skill parses the real ask
+    assert r.speech.startswith("weather:") and "borderline" in r.speech
+    assert router.awaiting_choice is False
+
+
+@pytest.mark.asyncio
+async def test_choice_off_by_default_is_byte_identical(tmp_path):
+    router = _router(tmp_path, shadow=False)   # clarify flag stays default False
+    router._embedder = _tie_embedder
+    router._route_index = None
+    r = await router.route("give me the borderline thing")
+    assert r.path is RoutePath.LLM and r.speech == OFFLINE_LLM_REPLY
+    assert router.awaiting_choice is False
+
+
+@pytest.mark.asyncio
+async def test_choice_shadow_logs_but_does_not_ask(tmp_path):
+    router = _clarify_router(tmp_path, shadow=True)
+    r = await router.route("give me the borderline thing")
+    assert r.path is RoutePath.LLM and r.speech == OFFLINE_LLM_REPLY
+    assert router.awaiting_choice is False
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_command_answer_cancels_the_choice(tmp_path):
+    from skills.datetime_skill import DateTimeSkill
+
+    router = _clarify_router(tmp_path)
+    router._registry.register(DateTimeSkill())
+    await router.route("give me the borderline thing")
+    r = await router.route("what time is it")      # a different command, not a pick
+    assert r.path is RoutePath.FAST and r.skill_name == "datetime"
+    assert router.awaiting_choice is False
+
+
+@pytest.mark.asyncio
+async def test_neither_answer_cancels_and_falls_through(tmp_path):
+    router = _clarify_router(tmp_path)
+    await router.route("give me the borderline thing")
+    r = await router.route("neither")
+    assert r.path is RoutePath.LLM and r.speech == OFFLINE_LLM_REPLY
+    assert router.awaiting_choice is False
+
+
+@pytest.mark.asyncio
+async def test_tie_break_learns_so_it_never_recurs(tmp_path):
+    router = _clarify_router(tmp_path, memory=True)
+    await router.route("give me the borderline thing")
+    r2 = await router.route("the weather")
+    assert r2.skill_name == "weather"
+    assert len(router._route_memory) == 1          # original phrasing was learned
+    # Third time: the learned exemplar routes it straight through, no question.
+    r3 = await router.route("give me the borderline thing")
+    assert r3.path is RoutePath.SEMANTIC and r3.skill_name == "weather"
+    assert router.awaiting_choice is False
+
+
+@pytest.mark.asyncio
+async def test_semantic_clarify_filters_unsafe_candidates(tmp_path):
+    # Even if a destructive skill's vector tied on the axis, it must never be
+    # OFFERED — top_pair's pair is filtered through _semantic_safe, and with the
+    # unsafe one dropped there are < 2 safe candidates, so no question is asked.
+    from core.route_index import RouteEntry
+
+    router = _clarify_router(tmp_path)
+    router._registry.register(
+        _FakeSkill("wipe_disk", ["erase"], controls_pc=True))
+    idx = await router._ensure_route_index()
+    idx._entries = [
+        RouteEntry("weather", "w", np.array([1, 0, 0], np.float32), 1),
+        RouteEntry("wipe_disk", "e", np.array([0, 1, 0], np.float32), 1),
+    ]
+    router._last_query_vec = np.array([1, 1, 0], dtype=np.float32)
+    assert await router._semantic_clarify("borderline") is None
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

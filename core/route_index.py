@@ -196,18 +196,16 @@ class SkillRouteIndex:
         """In-memory routing vectors (empty until :meth:`build`)."""
         return list(self._entries)
 
-    def match(self, query_vector: "np.ndarray | None",
-              threshold: float = 0.6, margin: float = 0.04
-              ) -> "tuple[str, float] | None":
-        """Best-matching skill for a query embedding, or None.
+    def _scored(self, query_vector: "np.ndarray | None"
+                ) -> "list[tuple[str, float]]":
+        """Cosine score of every indexed skill vs the query, sorted desc.
 
-        Cosine similarity against every indexed skill; the winner must clear
-        ``threshold`` AND beat the runner-up by ``margin`` — an ambiguous match
-        (two skills nearly tied) is deliberately declined so it falls through to
-        the LLM rather than guess. Pure + unit-testable (no embedder call here).
+        The pure, embedder-free core shared by :meth:`match` and
+        :meth:`top_pair`. Empty list for an empty index, a None/degenerate
+        query, or when nothing scored finitely.
         """
         if not self._entries or query_vector is None:
-            return None
+            return []
         q = np.asarray(query_vector, dtype=np.float32).ravel()
         qn = float(np.linalg.norm(q))
         # A non-finite norm (NaN/inf from a degenerate embedding) would slip past
@@ -215,7 +213,7 @@ class SkillRouteIndex:
         # NaN comparison is False, so a NaN could sort ahead of a real match and
         # be handed back. Reject it outright instead.
         if not np.isfinite(qn) or qn == 0.0:
-            return None
+            return []
         q = q / qn
         scored: list[tuple[str, float]] = []
         for e in self._entries:
@@ -226,14 +224,48 @@ class SkillRouteIndex:
             score = float(q @ (v / vn))
             if np.isfinite(score):
                 scored.append((e.skill, score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored
+
+    def match(self, query_vector: "np.ndarray | None",
+              threshold: float = 0.6, margin: float = 0.04
+              ) -> "tuple[str, float] | None":
+        """Best-matching skill for a query embedding, or None.
+
+        Cosine similarity against every indexed skill; the winner must clear
+        ``threshold`` AND beat the runner-up by ``margin`` — an ambiguous match
+        (two skills nearly tied) is deliberately declined so it falls through to
+        the LLM rather than guess. Pure + unit-testable (no embedder call here).
+        """
+        scored = self._scored(query_vector)
         if not scored:
             return None
-        scored.sort(key=lambda x: x[1], reverse=True)
         best_skill, best = scored[0]
         runner_up = scored[1][1] if len(scored) > 1 else -1.0
         if best >= threshold and (best - runner_up) >= margin:
             return best_skill, best
         return None
+
+    def top_pair(self, query_vector: "np.ndarray | None",
+                 threshold: float = 0.6, margin: float = 0.04
+                 ) -> "list[tuple[str, float]]":
+        """The top TWO skills, ONLY when they are a genuine, clarifiable tie.
+
+        Returns the first two ``(skill, score)`` pairs when BOTH clear
+        ``threshold`` and their gap is below ``margin`` — exactly the ambiguous
+        case :meth:`match` declines to the LLM. Otherwise ``[]`` (a clear
+        winner, a weak best, or fewer than two entries). Requiring both
+        candidates over ``threshold`` guarantees we only ever offer two
+        genuinely-plausible skills. Pure + unit-testable, no embedder call.
+        """
+        scored = self._scored(query_vector)
+        if len(scored) < 2:
+            return []
+        best = scored[0][1]
+        runner_up = scored[1][1]
+        if best >= threshold and runner_up >= threshold and (best - runner_up) < margin:
+            return scored[:2]
+        return []
 
     def __len__(self) -> int:
         return len(self._entries)

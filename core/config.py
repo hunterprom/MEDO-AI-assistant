@@ -100,6 +100,14 @@ class RouterConfig(BaseModel):
     semantic_shadow: bool = True          # log-only until proven on real usage
     semantic_threshold: float = 0.6       # min cosine similarity to route
     semantic_margin: float = 0.04         # best must beat the runner-up by this
+    # Spoken tie-break (M2.5f): when TWO semantic-safe skills both clear
+    # `semantic_threshold` but fall within `semantic_margin` of each other — the
+    # ambiguous case the tier declines to the LLM today — ask a one-word
+    # either/or ("Did you mean the weather, or the news?") and route the spoken
+    # choice on the SEMANTIC path, learning the original phrasing (when
+    # `route_memory_enabled`) so the tie never recurs. Honors `semantic_shadow`
+    # (shadow => log the would-be question, don't ask). Default OFF: inert.
+    semantic_clarify_enabled: bool = False
     # Adaptive route memory (M2.5e): LEARN from confirmed LLM resolutions. When
     # a query misses the fast path and the curated semantic tier, and the LLM
     # resolves it to exactly one non-destructive query skill, that (utterance ->
