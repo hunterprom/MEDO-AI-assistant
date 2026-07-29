@@ -170,6 +170,28 @@ def test_relative_clauses_and_bare_obliques_cannot_launder_production(text):
     assert is_offensive(text) is True
 
 
+@pytest.mark.parametrize("text", [
+    "scan my pc and download a keylogger",
+    "scan my computer and compile a keylogger",
+    "check my machine and set up a keylogger",
+])
+def test_download_compile_setup_are_producing_verbs(text):
+    # Obtaining/installing malware ("download", "set up", "compile") is producing
+    # it, so a local defensive frame must not launder these either.
+    assert is_offensive(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "scan my drive for malware", "scan my hard drive for malware",
+    "scan my phone for malware", "scan my device for malware",
+    "scan my files for malware", "scan my usb drive for ransomware",
+])
+def test_local_scope_covers_everyday_personal_devices(text):
+    # "my drive"/"my phone"/"my files" are as local as "my computer" — a plain
+    # read-only malware scan of them must not be refused as offensive.
+    assert is_offensive(text) is False
+
+
 # -- port audit ----------------------------------------------------------------
 
 def test_summarize_ports_flags_unexpected_public_ports():

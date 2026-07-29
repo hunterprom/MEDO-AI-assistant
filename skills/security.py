@@ -85,7 +85,8 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "this", "my", "local
 # computer for connections to facebook.com") is a subject, not a target — that
 # is a legitimate local audit, not an out-of-bounds remote scan.
 _LOCAL_SCOPE = re.compile(
-    r"\b(?:my|this)\s+(?:pc|computer|machine|laptop|system|ports?|network|box)\b"
+    r"\b(?:my|this)\s+(?:pc|computer|machine|laptop|system|ports?|network|box|"
+    r"hard\s+drive|drive|disk|phone|device|files?|folder|usb)\b"
     r"|\blocalhost\b|\bthis\s+device\b|\bmy\s+own\b", re.IGNORECASE)
 # Suffixes _HOSTISH mistakes for a TLD ("report.pdf" -> host "report.pdf").
 _FILE_SUFFIX = re.compile(
@@ -123,7 +124,8 @@ _DEFENSIVE_VERB = re.compile(
 #: "write a keylogger" into an allowed request).
 _OFFENSIVE_ACTION = re.compile(
     r"\b(?:write|create|build|make|generate|develop|code|install|deploy|plant|"
-    r"run|use|launch|execute|craft|напиши|создад\w*|направи|инсталира\w*)\b",
+    r"run|use|launch|execute|craft|download|compile|set\s*up|"
+    r"напиши|создад\w*|направи|инсталира\w*)\b",
     re.IGNORECASE)
 #: A real clause boundary between the producing verb and the keyword means the
 #: verb governs a DIFFERENT clause ("scan for malware, then write a report").
