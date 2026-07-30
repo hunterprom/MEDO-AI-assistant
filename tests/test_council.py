@@ -93,6 +93,15 @@ def test_rank_specialists_picks_the_relevant_fields():
         "what torque does the servo need")]
 
 
+def test_electrical_covers_house_wiring_words():
+    # "wiring"/"wire"/"electrician"/"mains" now route to the electrical engineer,
+    # so a smart-home wiring answer no longer falls through to a default.
+    for q in ("run new wiring for the outlets",
+              "call an electrician about the mains panel",
+              "wire the sensor to the low-voltage bus"):
+        assert "electrical" in [s.key for s in rank_specialists(q)], q
+
+
 def test_rank_specialists_is_empty_off_topic():
     assert rank_specialists("what is the weather in Skopje") == []
 

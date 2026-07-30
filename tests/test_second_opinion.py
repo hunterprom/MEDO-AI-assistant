@@ -124,6 +124,29 @@ async def test_all_supported_reads_as_solid():
 
 
 @pytest.mark.asyncio
+async def test_specialist_is_chosen_by_the_answers_field_not_the_question():
+    # The complaint this fixes: "are you sure?" audited an electrical wiring answer
+    # with the SOFTWARE engineer because the generic question named no field. Now
+    # the ANSWER drives the choice — an electrical answer gets the electrical
+    # engineer.
+    skill = _skill("CLAIM: the low-voltage run | SUPPORTED | fine", max_members=1)
+    r = await _run(skill, ctx=_ctx(
+        "Run low-voltage wiring on a separate path from the mains, and keep a "
+        "solid ground at every box.",
+        question="is this a good idea"))
+    assert r.data["members"] == ["electrical"]
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_the_question_field_when_the_answer_is_generic():
+    # If the answer names no field but the question does, use the question's.
+    skill = _skill("CLAIM: it | SUPPORTED | fine", max_members=1)
+    r = await _run(skill, ctx=_ctx("Yes, that should be fine.",
+                                   question="what resistor do I need for the led"))
+    assert r.data["members"] == ["electrical"]
+
+
+@pytest.mark.asyncio
 async def test_garbled_audit_degrades_to_unverified_not_confident():
     # No parseable tags -> fail-safe: unverified, never 'solid', and nothing to
     # break down.
