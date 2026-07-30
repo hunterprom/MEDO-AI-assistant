@@ -710,3 +710,21 @@ defenceless. A loud red banner shows the whole time it's on, and a confirm dialo
 guards turning it on. Contrast with PC-control, which persists. Still contradicts
 the "no profile relaxes the gate" invariant — acceptable ONLY because it's an
 explicit, loud, session-only, user-requested dev switch; never ship it on.
+
+## Latency: stop thinking on the chat path + fast-path small talk (2026-07-30)
+
+"How are you" took **15 s** on the LLM path. Two causes, two fixes.
+
+**Decision: thinking OFF by default (`llm.think: false`).** qwen3:30b emits a
+`<think>` reasoning block that MEDO STRIPS from the spoken reply (`strip_think`) —
+so on a partially-offloaded 30B it was burning seconds generating reasoning it
+then threw away. The Ollama `/api/chat` `think` field is now wired to config and
+defaults off: the model answers directly. Flip it on for deeper answers at a
+latency cost. Ignored by non-thinking models.
+
+**Decision: a `smalltalk` fast skill.** Greetings/pleasantries (hello, how are
+you, thanks, good night — EN + MK) answer in <1 ms with a varied in-character
+line instead of the LLM. Registered LATE so a real skill (a morning briefing on
+"good morning") still wins first. Patterns are tight + mostly END-ANCHORED so
+"how are you going to fix this?" is NOT small talk — the adversarial non-matches
+are the load-bearing tests.

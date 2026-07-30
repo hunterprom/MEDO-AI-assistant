@@ -501,6 +501,13 @@ def build_registry(
         registry.register(WebFetchSkill(settings.web_fetch, summarize))
     registry.register(WebSearchSkill(summarize))
 
+    # Greetings + pleasantries answer instantly here instead of on the 15s LLM
+    # path. Registered LATE so a real skill (a morning briefing on "good morning")
+    # still wins first; only leftover small talk reaches it.
+    from skills.smalltalk import SmallTalkSkill
+
+    registry.register(SmallTalkSkill())
+
     # Software connectors (control local apps by command; NOT MCP). Off by
     # default — flipping software.enabled on registers each connector action as a
     # skill, gated by the policy engine like everything else. Guarded so a missing

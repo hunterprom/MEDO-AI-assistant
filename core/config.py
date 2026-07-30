@@ -82,6 +82,12 @@ class LLMConfig(BaseModel):
     request_timeout_s: float = 120.0
     # Ollama keep-alive: how long the model stays loaded after a request.
     keep_alive: str = "30m"
+    # Let a thinking model (qwen3…) reason in a <think> block before answering?
+    # MEDO STRIPS that block from the spoken reply, so on the chat path the
+    # reasoning is generated and then discarded — pure latency. OFF by default:
+    # a 30B stops burning ~15 s reasoning about "how are you". Turn on for deeper
+    # answers at a latency cost. Ignored by non-thinking models.
+    think: bool = False
 
 
 class RouterConfig(BaseModel):

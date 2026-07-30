@@ -38,6 +38,7 @@ llm:
   temperature: 0.6
   num_ctx: 4096                    # 8192 OOMs a 12 GB GPU with the 30B — keep 4096
   keep_alive: "30m"                # keep the model loaded between turns (no reload stalls)
+  think: false                     # qwen3 reasoning is STRIPPED anyway → off = far faster; true = deeper answers, slower
   request_timeout_s: 120
 
 router:

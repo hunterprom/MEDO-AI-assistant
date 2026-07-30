@@ -339,6 +339,9 @@ class LLMClient:
             "model": model,
             "messages": messages,
             "stream": False,
+            # OFF by default: a thinking model would otherwise burn seconds on a
+            # <think> block MEDO strips anyway. Ignored by non-thinking models.
+            "think": self._config.think,
             # Keep the model warm between turns; the default 5m unload costs a
             # 15–30s reload for a partially-offloaded 30B on this GPU.
             "keep_alive": self._config.keep_alive,
@@ -380,6 +383,7 @@ class LLMClient:
             "model": model,
             "messages": messages,
             "stream": True,
+            "think": self._config.think,   # off by default — see _chat_ollama
             "keep_alive": self._config.keep_alive,
             "options": {
                 "temperature": (
