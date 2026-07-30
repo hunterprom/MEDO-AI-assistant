@@ -291,6 +291,7 @@ class RemoteServer:
         app.router.add_post("/control/selfdev/apply", self._handle_selfdev_apply)
         app.router.add_post("/control/selfdev/discard", self._handle_selfdev_discard)
         app.router.add_post("/control/pc", self._handle_pc_control)
+        app.router.add_post("/control/dev-mode", self._handle_dev_mode)
         app.router.add_post("/control/semantic", self._handle_semantic)
         app.router.add_post("/control/browser", self._handle_browser)
         app.router.add_post("/control/modes", self._handle_modes)
@@ -536,6 +537,8 @@ class RemoteServer:
                 "has_anthropic_key": bool(self._settings.llm.anthropic_api_key),
                 # The PC CONTROL switch (may MEDO act on this computer?).
                 "pc_control": self._settings.safety.pc_control_enabled,
+                # DEVELOPER MODE — the whole security layer off (session-only).
+                "dev_mode": bool(getattr(self._settings.security, "yolo", False)),
                 # The Tier-2 semantic router: off | shadow | live.
                 "semantic": self._settings.router.semantic_mode(),
                 # The controlled browser MEDO drives (chrome/msedge/chromium/opera).
@@ -1194,6 +1197,28 @@ class RemoteServer:
             save_pc_control(enabled)
         logger.info("PC control switched %s via companion API",
                     "ON" if enabled else "OFF")
+        return web.json_response({"ok": True, "on": enabled})
+
+    async def _handle_dev_mode(self, request: web.Request) -> web.Response:
+        """The HUD's DEVELOPER MODE switch: turn the WHOLE security layer off.
+
+        When on, the policy engine allows every action and confirmations
+        auto-accept — for constraint-free local dev only. Deliberately
+        SESSION-ONLY (never persisted): a restart always returns to secure, so a
+        forgotten toggle can't leave the machine defenceless. The HUD shows a
+        loud red banner the whole time it's on.
+        """
+        body = await _json_dict(request)
+        if "on" not in body:
+            return _error(400, "body must be JSON like {\"on\": true}")
+        enabled = bool(body.get("on"))
+        self._settings.security.yolo = enabled     # live; NOT persisted
+        if enabled:
+            logger.warning("⚠ DEVELOPER MODE ON via HUD — security layer OFF, "
+                           "every action allowed, confirmations auto-accepted. "
+                           "Resets to secure on restart.")
+        else:
+            logger.info("developer mode OFF via HUD — security layer restored")
         return web.json_response({"ok": True, "on": enabled})
 
     async def _handle_semantic(self, request: web.Request) -> web.Response:

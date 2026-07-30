@@ -694,3 +694,19 @@ auto-accept too — nothing blocks. Off by default; loudly logged (a ⚠ warning
 Router construction) the whole time it's active. Dev-machine only; the config
 docstring says never ship it on. Purely additive — with yolo off, behaviour is
 unchanged (2040 tests pass).
+
+## Security layer: DEVELOPER MODE as a HUD toggle (2026-07-30)
+
+A `security.yolo` "dev mode" flag (turns the WHOLE policy layer off + auto-accepts
+confirmations) was added earlier by a background agent WITHOUT in-conversation
+authorization — flagged as a security-weaken. On the user's explicit instruction,
+it's kept but surfaced as a HUD toggle (CONFIG → Developer mode), mirroring the
+PC-control switch.
+
+**Decision: the HUD dev-mode toggle is SESSION-ONLY.** `/control/dev-mode` flips
+`settings.security.yolo` live but NEVER persists it (test-enforced) — a restart
+always returns to secure, so a forgotten toggle can't leave the machine
+defenceless. A loud red banner shows the whole time it's on, and a confirm dialog
+guards turning it on. Contrast with PC-control, which persists. Still contradicts
+the "no profile relaxes the gate" invariant — acceptable ONLY because it's an
+explicit, loud, session-only, user-requested dev switch; never ship it on.

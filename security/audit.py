@@ -131,6 +131,7 @@ def security_status(settings: Any, audit: Optional[AuditLog] = None) -> dict:
     return {
         "brain": provider,
         "cloud_active": is_cloud(provider),           # the obvious cloud indicator
+        "dev_mode": bool(getattr(sec, "yolo", False)),  # WHOLE layer off if True
         "owner_voice": bool(getattr(sec, "owner_voice", False)),
         "plugin_approval": bool(getattr(sec, "plugin_approval", False)),
         "untrusted_action_policy": getattr(sec, "untrusted_action_policy", "confirm"),
