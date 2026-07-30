@@ -135,9 +135,14 @@ class SetupOps:
             if api == self._UNUSABLE_HOSTAPI:
                 continue
             name = str(d["name"])
-            key = name[:31].strip().lower()          # MME truncates to 31 chars
+            base = name[:31].strip().lower()          # MME truncates to 31 chars
             rank = self._HOSTAPI_RANK.get(api, 9)
-            cur = picked.get(key)
+            key, cur = base, picked.get(base)
+            if cur is not None:
+                a, b = name.strip().lower(), cur["name"].strip().lower()
+                if not (a.startswith(b) or b.startswith(a)):
+                    key = f"{base}\x00{a}"            # distinct mic, same prefix
+                    cur = picked.get(key)
             if cur is None:
                 picked[key] = {"id": i, "name": name, "rank": rank}
                 continue

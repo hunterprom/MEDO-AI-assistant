@@ -68,18 +68,23 @@ _GENERIC_FILE = frozenset({
 
 
 def _launch_with(app_path: object, file_path: object) -> bool:
-    """Open a file WITH a specific app. On Windows, ``start`` resolves the Start-
-    Menu ``.lnk`` and passes the file to the target program — an argv list, never
-    a shell string, so a spoken name can't become a command. Best-effort."""
+    """Open a file WITH a specific app. On Windows, cmd's ``start`` resolves the
+    Start-Menu ``.lnk`` and passes the file to the target. A path containing cmd
+    metacharacters (which cmd would re-parse) falls back to the OS default handler
+    so a metacharacter in a path can't become a command. Best-effort."""
+    import os
     import subprocess
 
     from core.platform import IS_WINDOWS
+    app_s, file_s = str(app_path), str(file_path)
     try:
         if IS_WINDOWS:
-            subprocess.Popen(["cmd", "/c", "start", "", str(app_path),
-                              str(file_path)])
+            if re.search(r'[&|<>^()"%!]', app_s + file_s):
+                os.startfile(file_s)      # default handler — no shell re-parsing
+            else:
+                subprocess.Popen(["cmd", "/c", "start", "", app_s, file_s])
         else:
-            subprocess.Popen([str(app_path), str(file_path)])
+            subprocess.Popen([app_s, file_s])
         return True
     except Exception:
         logger.warning("open-with launch failed: %s + %s", app_path, file_path,
@@ -170,7 +175,10 @@ class FilesSkill(Skill):
         # file literally called "in Arduino IDE". Open that app (plus the named
         # file, if one was given and found) instead of a doomed name search.
         ow = _OPEN_WITH.match(query)
-        if ow:
+        # If the "app" part ends in a file extension it's really part of a
+        # filename ("open the file screenshot in chrome.png"), not an app —
+        # skip open-with so the whole phrase is searched as one filename.
+        if ow and not re.search(r"\.[a-z0-9]{1,6}$", ow.group("app").strip(), re.I):
             from skills.appfinder import find_app
 
             app = await asyncio.to_thread(find_app, ow.group("app"))

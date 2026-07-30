@@ -14,12 +14,15 @@ Pure filesystem + JSON — no model, no execution — so it's unit-tested direct
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 def _slug(text: str, limit: int = 40) -> str:
@@ -69,9 +72,15 @@ class StudioProject:
             try:
                 return json.loads(p.read_text(encoding="utf-8"))
             except Exception:
-                pass
+                # Corrupt metadata: don't silently reset to v1 and clobber the
+                # existing version dirs — recover next_n from what's on disk so
+                # history isn't overwritten.
+                logger.warning("studio: project.json unreadable at %s — "
+                               "recovering version number from disk", self.root)
+        existing = [int(d.name[1:]) for d in self.root.glob("v*")
+                    if d.name[1:].isdigit()]
         return {"domain": "", "description": "", "created_at": time.time(),
-                "next_n": 1, "versions": []}
+                "next_n": (max(existing) + 1 if existing else 1), "versions": []}
 
     def _save_meta(self) -> None:
         (self.root / "project.json").write_text(
@@ -79,23 +88,25 @@ class StudioProject:
 
     # -- versions -------------------------------------------------------------
 
-    def begin_version(self) -> Path:
-        """Allocate the next version dir and return it (metadata committed on
-        ``finalize_version``). Retries write + re-run inside this same dir."""
+    def begin_version(self) -> Tuple[int, Path]:
+        """RESERVE the next version number + its dir (returns ``(n, dir)``). The
+        number is committed immediately so two concurrent runs can't collide on
+        the same ``vN``; metadata for the entry is written by
+        ``finalize_version``. Retries write + re-run inside this same dir."""
         n = self._meta["next_n"]
         vdir = self.root / f"v{n}"
         vdir.mkdir(parents=True, exist_ok=True)
-        return vdir
+        self._meta["next_n"] = n + 1        # reserve now, not at finalize
+        self._save_meta()
+        return n, vdir
 
-    def finalize_version(self, vdir: Path, *, filename: str,
+    def finalize_version(self, n: int, vdir: Path, *, filename: str,
                          artifacts: List[str], advisories: List[dict],
                          ok: bool, error: str = "") -> Version:
-        n = self._meta["next_n"]
         version = Version(n=n, filename=filename, artifacts=list(artifacts),
                           advisories=list(advisories), ok=bool(ok), error=error,
                           created_at=time.time())
         self._meta["versions"].append(asdict(version))
-        self._meta["next_n"] = n + 1
         self._save_meta()
         return version
 

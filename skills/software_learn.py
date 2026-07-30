@@ -16,7 +16,6 @@ untrusted content (a document, a web page, another app) is refused.
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from security.capabilities import Capability
 from skills.base import Skill, SkillRequest, SkillResult
@@ -53,7 +52,10 @@ def _foreground_app(title: str, learned) -> str:
         name = m.get("display_name") or m.get("app_id") or ""
         for key in (m.get("display_name", ""), m.get("app_id", "")):
             k = (key or "").strip().lower()
-            if k and k in t and len(k) > best_len:
+            # Word-boundary match so a short learned name like "Code" doesn't
+            # fire on "barCODE studio", or "ide" on "vIDEo".
+            if k and len(k) > best_len and re.search(
+                    rf"(?<![a-z0-9]){re.escape(k)}(?![a-z0-9])", t):
                 best_name, best_len = name, len(k)
     return best_name
 
@@ -123,6 +125,11 @@ class LearnAppSkill(Skill):
                 app_map = vision_augment(app_map, velems)
                 seen_vision = sum(1 for e in app_map.elements
                                   if e.source == "vision")
+        if app_map.element_count() == 0:      # a scan that read nothing isn't a "learn"
+            return SkillResult(
+                f"I focused {app} but couldn't read any of its controls yet — its "
+                f"UI may not expose them, so I can't guide you around it.",
+                success=False, data={"app": app, "count": 0})
         knowledge.save_map(app_map, self._base_dir)
         menus = ", ".join(list(app_map.menus)[:5])
         examples = ", ".join(
@@ -186,9 +193,11 @@ class _AppLookupSkill(Skill):
             return ""
         return _foreground_app(title, knowledge.list_maps(self._base_dir))
 
-    def _resolve_app(self, parsed_app: str) -> str:
+    def _resolve_app(self, parsed_app: str, *, allow_last_app: bool = True) -> str:
         """Fill in the app when the user didn't name one: the FOCUSED learned app
-        first, then the last app named/used this session. Remembers what it picks."""
+        first, then (only if ``allow_last_app``) the last app named this session.
+        Actuation passes ``allow_last_app=False`` so it never acts on a stale
+        background app the user isn't looking at. Remembers what it picks."""
         parsed_app = (parsed_app or "").strip()
         if parsed_app:
             if self._ctx is not None:
@@ -199,7 +208,9 @@ class _AppLookupSkill(Skill):
             if self._ctx is not None:
                 self._ctx.note(fg)
             return fg
-        return self._ctx.last_app if self._ctx is not None else ""
+        if allow_last_app and self._ctx is not None:
+            return self._ctx.last_app
+        return ""
 
     def _lookup(self, app: str, target: str):
         app_map = knowledge.load_map(_app_id(app), self._base_dir)
@@ -305,7 +316,9 @@ class AppNavigateSkill(_AppLookupSkill):
             return SkillResult("I only control apps when you ask me directly.",
                                success=False, data={"refused": "untrusted"})
         app, target = self._parse(request)
-        app = self._resolve_app(app)
+        # Actuation: never fall back to a stale remembered app — only what's named
+        # or actually in focus (else "open settings" clicks a background app).
+        app = self._resolve_app(app, allow_last_app=False)
         if not target:
             return SkillResult("What should I open?", success=False)
         if not app:
@@ -315,7 +328,12 @@ class AppNavigateSkill(_AppLookupSkill):
         if err is not None:
             return err
         _, el = found
-        self._mech.focus_app(app)
+        # Verify the app actually came to the front BEFORE acting — otherwise a
+        # coordinate click (vision controls) would land in whatever IS in front.
+        if not self._mech.focus_app(app):
+            return SkillResult(
+                f"I couldn't bring {app} to the front — open it first, then ask.",
+                success=False, data={"reason": "not_open"})
         result = self._mech.ui_automation(app, el.name)
         if result.success:
             return SkillResult(f"Opened “{el.name}” in {app}.",

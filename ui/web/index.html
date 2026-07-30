@@ -2193,7 +2193,7 @@
           ab.className = 'btn-sm'; ab.textContent = a.label;
           ab.style.cssText = 'padding:1px 7px;font-size:10px';
           ab.title = `run ${a.label} in ${c.display_name}`;
-          ab.disabled = !c.enabled;
+          ab.disabled = !c.enabled || !enabled;   // grey out when the master is off too
           ab.onclick = () => runSoftwareAction(c, a);
           acts.appendChild(ab);
         }

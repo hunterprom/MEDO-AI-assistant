@@ -13,6 +13,7 @@ page, another app's output) → refused, never acted on.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any, Dict, List
@@ -55,7 +56,10 @@ class ConnectorActionSkill(Skill):
                 "comes from a document, a web page, or another app.",
                 success=False, data={"refused": "untrusted"})
 
-        det = self._connector.detect()
+        # detect() can walk Program Files / query psutil — blocking OS I/O. Keep
+        # it (and every mechanism call below) OFF the event loop so the voice loop
+        # and companion API stay responsive on the fast path.
+        det = await asyncio.to_thread(self._connector.detect)
         if not det.installed:
             return SkillResult(f"{self._connector.display_name} isn't installed "
                                f"on this computer.", success=False,
@@ -69,8 +73,8 @@ class ConnectorActionSkill(Skill):
             return SkillResult(prompt, needs_confirmation=True)
 
         # --- ensure the app is available (open it if needed) ------------------
-        if not self._connector.is_running():
-            if not self._connector.launch():
+        if not await asyncio.to_thread(self._connector.is_running):
+            if not await asyncio.to_thread(self._connector.launch):
                 return SkillResult(
                     f"{self._connector.display_name} isn't open and I couldn't "
                     f"open it.", success=False, data={"reason": "launch_failed"})
@@ -83,7 +87,7 @@ class ConnectorActionSkill(Skill):
             params.update({k: v for k, v in request.match.groupdict().items()
                            if v is not None})
         params.update(request.args or {})
-        result = self._action.run(params)
+        result = await asyncio.to_thread(self._action.run, params)
         return SkillResult(result.speech, success=result.success,
                            data={**result.data, "verified": result.verified,
                                  "app": self._connector.app_id})

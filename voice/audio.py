@@ -63,9 +63,16 @@ def _dedup_inputs(usable: list[tuple[int, str, str]]) -> list[dict]:
     resolves — and resolves to the openable endpoint — later."""
     picked: dict[str, dict] = {}
     for i, name, api in usable:
-        key = _device_key(name)
+        base = _device_key(name)
         rank = _HOSTAPI_RANK.get(api, 9)
-        cur = picked.get(key)
+        key, cur = base, picked.get(base)
+        if cur is not None:
+            a, b = name.strip().lower(), cur["name"].strip().lower()
+            if not (a.startswith(b) or b.startswith(a)):
+                # Same 31-char prefix but NOT a truncation of each other -> two
+                # genuinely different mics; keep both instead of dropping one.
+                key = f"{base}\x00{a}"
+                cur = picked.get(key)
         if cur is None:
             picked[key] = {"index": i, "name": name, "rank": rank}
             continue

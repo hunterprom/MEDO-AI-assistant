@@ -151,7 +151,11 @@ def _verdict(claims: list[dict[str, str]]) -> str:
     if "UNSUPPORTED" in tags:
         return "shaky"
     if "SUPPORTED" in tags:
-        return "solid"
+        # "solid" ⇒ "you can rely on it", so it must NOT fire when most claims went
+        # unverified: 1 SUPPORTED + 4 CANNOT_VERIFY is not something to rely on.
+        supported = sum(1 for c in claims if c["tag"] == "SUPPORTED")
+        cannot = sum(1 for c in claims if c["tag"] == "CANNOT_VERIFY")
+        return "solid" if supported >= cannot else "mixed"
     return "unverified"                     # only CANNOT_VERIFY
 
 
@@ -314,6 +318,15 @@ class SecondOpinionSkill(_CouncilBase):
                 body += (f" ({n - 1} more like it.)" if not speak_mk
                          else f" (Уште {n - 1} слични.)")
             return body + tail
+        if status == "mixed":
+            # Some claims held up but most couldn't be verified — don't imply the
+            # whole answer is reliable.
+            return (f"Го проверив со {names} — дел се потврди, но поголемиот дел не "
+                    f"можеа да го потврдат, па третирај го остатокот како непотврден."
+                    if speak_mk else
+                    f"I had {names} check that — part of it held up, but most of it "
+                    f"they couldn't verify, so treat the rest as unconfirmed."
+                    ) + tail
         # unverified (or a defensive fallthrough): fail-safe, no false confidence.
         return (f"Го прашав {names}, но не можеа да го потврдат — третирај го "
                 f"одговорот како непотврден." if speak_mk else

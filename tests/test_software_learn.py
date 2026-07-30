@@ -445,5 +445,48 @@ def test_context_resolution_asks_which_app_when_unknown(tmp_path):
     assert r.success is False and r.data.get("reason") == "not_learned"
 
 
+# -- review-hardening regressions ---------------------------------------------
+
+def test_foreground_app_needs_a_word_boundary():
+    from skills.software_learn import _foreground_app
+    learned = [{"display_name": "Code", "app_id": "code"}]
+    assert _foreground_app("Barcode Studio", learned) == ""      # not "barCODE"
+    assert _foreground_app("main.py - Code", learned) == "Code"  # a real boundary
+
+
+def test_navigate_declines_when_the_app_wont_come_to_front(tmp_path):
+    from skills.software_learn import AppNavigateSkill
+    from software.knowledge import AppMap, UIElement, save_map
+    save_map(AppMap(app_id="capcut", display_name="CapCut", elements=[
+        UIElement(name="Export", source="vision", clickable=True,
+                  vision_xy=(500, 500))]), tmp_path)
+    mech = FakeMech(can_focus=False)             # app not open / won't focus
+    r = _run(AppNavigateSkill(mech, base_dir=tmp_path),
+             args={"app": "CapCut", "target": "export"})
+    assert r.success is False and r.data.get("reason") == "not_open"
+    assert mech.invoked == [] and mech.clicked == []   # never blind-clicked
+
+
+def test_navigate_does_not_act_on_a_stale_background_app(tmp_path):
+    from core.app_context import SessionAppContext
+    from skills.software_learn import AppNavigateSkill
+    from software.knowledge import AppMap, UIElement, save_map
+    save_map(AppMap(app_id="capcut", display_name="CapCut", elements=[
+        UIElement(name="Settings", role="MenuItem", clickable=True)]), tmp_path)
+    ctx = SessionAppContext(last_app="CapCut")   # remembered, but NOT in focus
+    mech = FakeMech(title="Windows Settings")    # foreground is an unlearned app
+    r = _run_text(AppNavigateSkill(mech, base_dir=tmp_path, ctx=ctx),
+                  "open the settings")
+    assert r.success is False                     # asks which app, doesn't act
+    assert mech.invoked == [] and mech.clicked == []
+
+
+def test_learn_reports_honestly_when_it_reads_zero_controls(tmp_path):
+    from skills.software_learn import LearnAppSkill
+    r = _run(LearnAppSkill(FakeMech(can_focus=True), FakeWalker([]),
+                           base_dir=tmp_path), args={"app": "CapCut"})
+    assert r.success is False and r.data.get("count") == 0   # not a fake "learned"
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

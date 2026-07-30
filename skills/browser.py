@@ -609,11 +609,13 @@ AGENT_PROMPT = (
     "it. Choose the SINGLE next action and reply with ONLY a JSON object — no "
     "prose, no markdown. Schema:\n"
     '{"action": "click|type|scroll|back|goto|done", "index": int, '
-    '"text": str, "url": str, "say": str}\n'
+    '"text": str, "url": str, "success": bool, "say": str}\n'
     "index is the [n] of the element to act on. For type, index must be an "
     "(input) element and text is what to type. For goto, url is an absolute "
-    "URL. When the task is finished — or you cannot do it — use \"done\" and "
-    "put a short spoken result in say. Never guess a login or payment."
+    "URL. When you have actually COMPLETED the task, use \"done\" with success "
+    "true and a short spoken result in say. If you cannot do it, use \"done\" "
+    "with success FALSE and say why — never claim success for something you did "
+    "not finish. Never guess a login or payment."
 )
 
 
@@ -682,9 +684,14 @@ class BrowserAgentSkill(Skill):
                         success=False)
                 kind = str(action.get("action", "")).lower()
                 if kind == "done":
-                    return SkillResult(action.get("say") or (
-                        f"Готово: {task}." if speak_mk else f"Done: {task}."),
-                        data={"steps": step})
+                    # 'done' means finished OR impossible — honour success so a
+                    # gave-up run isn't announced as a completed one.
+                    ok = bool(action.get("success", True))
+                    say = action.get("say") or (
+                        ("Готово." if speak_mk else "Done.") if ok else
+                        ("Не можев да го завршам тоа." if speak_mk
+                         else "I couldn't finish that on the page."))
+                    return SkillResult(say, success=ok, data={"steps": step})
                 history.append(await self._apply(action, kind, elements))
             return SkillResult(
                 f"Направив {self._config.max_steps} чекори и застанав на лимитот."

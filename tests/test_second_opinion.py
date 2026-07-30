@@ -221,5 +221,15 @@ def test_matches_expected_phrasings_and_declines_unrelated():
         assert s.match(text) is None, text
 
 
+def test_verdict_is_not_solid_when_most_claims_went_unverified():
+    """1 SUPPORTED among 4 CANNOT_VERIFY must NOT read 'you can rely on it'."""
+    from skills.second_opinion import _verdict
+    assert _verdict([{"tag": "SUPPORTED"}] + [{"tag": "CANNOT_VERIFY"}] * 4) == "mixed"
+    # a verified majority still reads solid; a wrong/unsupported claim dominates.
+    assert _verdict([{"tag": "SUPPORTED"}, {"tag": "SUPPORTED"},
+                     {"tag": "CANNOT_VERIFY"}]) == "solid"
+    assert _verdict([{"tag": "SUPPORTED"}, {"tag": "WRONG"}]) == "wrong"
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

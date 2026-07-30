@@ -911,10 +911,17 @@ class RemoteServer:
                 "speech": "PC control is off — turn it on to let me do that."})
         req = SkillRequest(text="", args=dict(body.get("args") or {}),
                            context={"confirmed": bool(body.get("confirmed"))})
-        result = await self._run_skill_blocking(skill, req)
+        try:
+            result = await self._run_skill_blocking(skill, req)
+        except Exception:
+            logger.warning("software action %s/%s failed", app_id, action_name,
+                           exc_info=True)
+            return web.json_response({"ok": True, "success": False,
+                "speech": "That action failed on this machine."})
         return web.json_response(
             {"ok": True, "success": bool(result.success), "speech": result.speech,
-             "needs_confirmation": bool(result.needs_confirmation)})
+             "needs_confirmation": bool(result.needs_confirmation),
+             "verified": bool(result.data.get("verified", True))})
 
     async def _handle_software_learn(self, request: web.Request) -> web.Response:
         """Learn an app's UI from the HUD (``{app}``) — focus, safely scan
@@ -927,6 +934,9 @@ class RemoteServer:
         app = str(body.get("app") or "").strip()
         if not app:
             return _error(400, "need {\"app\": \"CapCut\"}")
+        if not self._settings.software.enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "Turn App control on first."})
         if not self._settings.safety.pc_control_enabled:
             return web.json_response({"ok": True, "success": False,
                 "speech": "PC control is off — turn it on so I can scan an app."})
@@ -939,8 +949,13 @@ class RemoteServer:
 
             vision = VisionProbe(self._settings, mechanisms=mech)
         skill = LearnAppSkill(mech, UiaWalker(), vision=vision)
-        result = await self._run_skill_blocking(
-            skill, SkillRequest(text="", args={"app": app}))
+        try:
+            result = await self._run_skill_blocking(
+                skill, SkillRequest(text="", args={"app": app}))
+        except Exception:
+            logger.warning("software learn of %r failed", app, exc_info=True)
+            return web.json_response({"ok": True, "success": False,
+                "speech": "I couldn't scan that app just now."})
         return web.json_response(
             {"ok": True, "success": bool(result.success),
              "speech": result.speech, "data": result.data})

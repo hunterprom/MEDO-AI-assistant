@@ -156,6 +156,13 @@ def test_version_history_is_pruned_to_keep(tmp_path):
     assert not (proj.root / "v1").exists()       # oldest dirs removed
 
 
+def test_extract_code_tolerates_crlf_and_trailing_tag_space():
+    from studio.brain import extract_code
+    assert extract_code("```py \nx=1\n```").strip() == "x=1"        # trailing space
+    assert extract_code("```python\r\nx=1\r\n```").strip() == "x=1"  # CRLF endings
+    assert extract_code("no fence at all").strip() == "no fence at all"
+
+
 if __name__ == "__main__":  # pragma: no cover
     import pytest
     pytest.main([__file__, "-v"])

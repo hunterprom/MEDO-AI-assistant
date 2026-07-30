@@ -93,10 +93,13 @@ class VisionProbe:
 
     async def __call__(self, app_hint: str) -> List[UIElement]:
         try:
-            image = await asyncio.to_thread(self._grab, app_hint)
+            grabbed = await asyncio.to_thread(self._grab, app_hint)
         except Exception:
             logger.warning("vision capture failed for %r", app_hint, exc_info=True)
             return []
+        # _grab returns (image, windowed); an injected capture returns just an
+        # image (assumed window-framed).
+        image, windowed = grabbed if isinstance(grabbed, tuple) else (grabbed, True)
         if image is None:
             return []
         try:
@@ -104,7 +107,14 @@ class VisionProbe:
         except Exception:
             logger.warning("vision model call failed", exc_info=True)
             return []
-        return parse_vision_elements(raw)
+        elements = parse_vision_elements(raw)
+        if not windowed:
+            # The capture was the WHOLE desktop, so the model's 0-1000 points are
+            # desktop-normalized — they can't be re-resolved to a window click.
+            # Keep the labels (useful for locate) but drop the unusable coords.
+            for el in elements:
+                el.vision_xy = None
+        return elements
 
     # -- default (real) backends ----------------------------------------------
 
@@ -120,8 +130,8 @@ class VisionProbe:
             box = (max(0, left - ox), max(0, top - oy),
                    min(img.width, right - ox), min(img.height, bottom - oy))
             if box[2] > box[0] and box[3] > box[1]:
-                return img.crop(box)
-        return img
+                return img.crop(box), True          # window-framed coords
+        return img, False                           # whole desktop — coords unusable
 
     async def _ask(self, image) -> str:
         if self._describe is not None:

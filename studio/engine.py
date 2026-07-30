@@ -69,8 +69,9 @@ class StudioEngine:
                                   PathWhitelist(self._settings.safety.whitelist_dirs))
             actor = Actor.MODEL
         except Exception:
-            logger.debug("studio: policy unavailable; sandbox runs ungated",
-                         exc_info=True)
+            logger.warning("studio: policy engine unavailable; the sandbox still "
+                           "env/cwd/timeout-isolates but runs without the policy "
+                           "authorisation gate", exc_info=True)
         return Sandbox(policy=policy, actor=actor,
                        sandbox_cmd=self._cfg.sandbox_cmd,
                        timeout_s=self._cfg.exec_timeout_s)
@@ -106,7 +107,7 @@ class StudioEngine:
 
     async def _run(self, domain: Domain, project: StudioProject, brief: Brief,
                    prior_code: str) -> StudioResult:
-        vdir = project.begin_version()
+        n, vdir = project.begin_version()
         code, error, outcome = prior_code, "", None
         attempts = 0
         for attempt in range(self._cfg.max_retries + 1):
@@ -119,7 +120,8 @@ class StudioEngine:
                 error = f"code generation failed: {exc}"
                 break
             if not code.strip():
-                error = "the brain returned no code"
+                if not error:            # keep a real execution error if we have one
+                    error = "the brain returned no code"
                 continue
             (vdir / domain.filename).write_text(code, encoding="utf-8")
             try:
@@ -135,7 +137,7 @@ class StudioEngine:
         hard_fail = any(a.level == "fail" for a in advisories)
         ok = bool(outcome and outcome.ok) and not hard_fail
         version = project.finalize_version(
-            vdir, filename=domain.filename,
+            n, vdir, filename=domain.filename,
             artifacts=list(outcome.artifacts) if outcome else [],
             advisories=[{"level": a.level, "message": a.message} for a in advisories],
             ok=ok, error=("" if ok else error))

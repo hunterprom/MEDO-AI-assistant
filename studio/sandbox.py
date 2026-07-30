@@ -19,6 +19,7 @@ import contextlib
 import logging
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,8 +27,16 @@ from typing import Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
+#: Start generated code in its own process group so a timeout kills the tree.
+_NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
 #: Env vars that look like credentials — never handed to generated code.
-_SECRET_ENV_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASS|CRED|AUTH", re.I)
+#: Best-effort by NAME: also catches connection strings that carry inline creds
+#: (DATABASE_URL, DSN, CONNECTION_STRING) and session/cookie material.
+_SECRET_ENV_RE = re.compile(
+    r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|CRED|AUTH|DSN|DATABASE_URL|"
+    r"CONNECTION|POSTGRES|MYSQL|MONGO|REDIS|SESSION|COOKIE|PRIVATE|API",
+    re.I)
 
 
 @dataclass
@@ -95,25 +104,46 @@ class Sandbox:
             return SandboxResult(False, stderr=denied, denied=denied)
         env = _scrubbed_env(cwd / ".sandbox-home")
         full = [*self._wrap, *argv]
+        # Start in its OWN process group so a timeout can kill the whole TREE
+        # (generated code may spawn children) — mirrors app/launcher.py's leak fix.
+        group_kwargs = ({"creationflags": _NEW_GROUP} if os.name == "nt"
+                        else {"start_new_session": True})
         try:
             proc = await asyncio.create_subprocess_exec(
                 *full, cwd=str(cwd), env=env,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+                **group_kwargs)
         except Exception as exc:
             return SandboxResult(False, stderr=f"couldn't start: {exc}")
         try:
             out, err = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout_s or self._timeout)
         except asyncio.TimeoutError:
-            proc.kill()
-            with contextlib.suppress(Exception):
-                await proc.wait()
+            await self._kill_tree(proc)
             return SandboxResult(False, stderr="the code timed out",
                                  timed_out=True)
         return SandboxResult(
             proc.returncode == 0, returncode=proc.returncode,
             stdout=out.decode(errors="replace"),
             stderr=err.decode(errors="replace"))
+
+    async def _kill_tree(self, proc) -> None:
+        """Kill the process AND anything it spawned — untrusted code may fork."""
+        with contextlib.suppress(Exception):
+            if os.name == "nt":
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill", "/PID", str(proc.pid), "/T", "/F",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL)
+                await asyncio.wait_for(killer.wait(), timeout=5)
+            else:
+                import signal
+
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        with contextlib.suppress(Exception):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
 
     async def run_python(self, script: Path, cwd: Path, *,
                          timeout_s: Optional[float] = None) -> SandboxResult:

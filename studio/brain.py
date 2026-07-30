@@ -14,7 +14,10 @@ import re
 
 logger = logging.getLogger(__name__)
 
-_FENCE = re.compile(r"```[\w+.-]*\n(.*?)```", re.DOTALL)
+# Tolerant of a language tag with trailing spaces and of CRLF line endings —
+# a model that emits "```py \r\n…" must still have its code extracted, or the
+# whole reply (backticks and all) gets written and fails to run.
+_FENCE = re.compile(r"```[^\n`]*\r?\n(.*?)```", re.DOTALL)
 
 
 def extract_code(reply: str) -> str:

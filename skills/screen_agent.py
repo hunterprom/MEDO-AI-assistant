@@ -37,13 +37,15 @@ SYSTEM_PROMPT = (
     "ONLY a JSON object — no prose, no markdown. Schema:\n"
     '{"action": "click|double_click|type|scroll|key|done", '
     '"x": int 0-1000, "y": int 0-1000, "text": str, '
-    '"amount": int, "keys": str, "say": str}\n'
+    '"amount": int, "keys": str, "success": bool, "say": str}\n'
     "x/y are the cursor target as coordinates on THIS image, normalized to "
     "0-1000 (x left→right, y top→bottom). Include x/y for click and "
     "double_click. text is what to type. amount is scroll distance (positive "
-    "= down). keys is a key or chord like \"enter\" or \"ctrl a\". When the "
-    "task is finished (or impossible), use action \"done\" and put a short "
-    "spoken result in say."
+    "= down). keys is a key or chord like \"enter\" or \"ctrl a\". When you have "
+    "actually COMPLETED the task, use action \"done\" with success true and a "
+    "short spoken result in say. If the task is impossible or you cannot make "
+    "progress, use action \"done\" with success FALSE and say why — never claim "
+    "success for something you did not finish."
 )
 
 
@@ -156,8 +158,12 @@ class ScreenAgentSkill(Skill):
                     "I couldn't work out the next step, so I stopped.", success=False)
             kind = str(action.get("action", "")).lower()
             if kind == "done":
-                return SkillResult(action.get("say")
-                                   or f"Done: {task}.", data={"steps": step})
+                # 'done' means finished OR impossible — honour the success flag so
+                # a gave-up run isn't reported as a completed one.
+                ok = bool(action.get("success", True))
+                say = action.get("say") or (
+                    "Done." if ok else "I couldn't finish that on screen.")
+                return SkillResult(say, success=ok, data={"steps": step})
             try:
                 desc = await asyncio.to_thread(self._act, action, w, h)
             except Exception:

@@ -15,6 +15,13 @@ from software.connector_base import HOTKEY, Action, DetectResult, SoftwareConnec
 
 _CTRL = frozenset({Capability.CONTROL_INPUT})
 _BROWSERS = ("chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe")
+#: exe -> the substring its window title ends with, so the hotkey reaches the
+#: RIGHT browser (the old code only knew Chrome/Firefox and mis-targeted Edge/
+#: Brave/Opera, or drove a background Chrome instead of the focused browser).
+_TITLE_HINTS = {
+    "chrome.exe": "Google Chrome", "msedge.exe": "Edge",
+    "firefox.exe": "Mozilla Firefox", "brave.exe": "Brave", "opera.exe": "Opera",
+}
 
 
 class BrowserConnector(SoftwareConnector):
@@ -29,9 +36,23 @@ class BrowserConnector(SoftwareConnector):
         return DetectResult(installed=installed, running=running)
 
     def _hint(self) -> str:
-        # Match any browser window; the mechanism does a substring find.
-        return "Mozilla Firefox" if self._mech.is_process_running(("firefox.exe",)) \
-            else "Chrome"
+        # Prefer the browser the user is actually LOOKING at (foreground title),
+        # so a background browser of another brand isn't driven instead.
+        fg = getattr(self._mech, "foreground_title", None)
+        title = ""
+        if fg is not None:
+            try:
+                title = (fg() or "").lower()
+            except Exception:
+                title = ""
+        for hint in _TITLE_HINTS.values():
+            if hint.lower() in title:
+                return hint
+        # else target the first browser that's actually running.
+        for exe, hint in _TITLE_HINTS.items():
+            if self._mech.is_process_running((exe,)):
+                return hint
+        return "Google Chrome"
 
     def actions(self) -> List[Action]:
         m = self._mech

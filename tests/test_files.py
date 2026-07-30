@@ -113,5 +113,22 @@ def test_app_open_works_without_a_whitelist(monkeypatch):
     assert r.success and "whitelist" not in r.speech.lower()
 
 
+def test_filename_ending_in_an_app_name_is_not_treated_as_open_with(monkeypatch,
+                                                                    tmp_path):
+    # "open the file screenshot in chrome.png" — the tail is a file EXTENSION,
+    # not an app; must not resolve an app or open the wrong file in a browser.
+    from core.safety import PathWhitelist
+    (tmp_path / "screenshot in chrome.png").write_text("x", encoding="utf-8")
+    tried_app = []
+    opened = []
+    monkeypatch.setattr(appfinder, "find_app",
+                        lambda n: tried_app.append(n) or FakeApp("Chrome"))
+    monkeypatch.setattr(files, "open_path", lambda p: opened.append(str(p)))
+    r = _run(FilesSkill(PathWhitelist([str(tmp_path)])),
+             "open the file screenshot in chrome.png")
+    assert tried_app == []                         # never tried to resolve an app
+    assert opened and opened[0].endswith("screenshot in chrome.png")  # the real file
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
