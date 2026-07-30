@@ -48,10 +48,14 @@ class LearnAppSkill(Skill):
     routing_phrases = ["learn how to use CapCut", "map Photoshop's interface",
                        "scan this app so you know it", "study the DaVinci UI"]
 
-    def __init__(self, mechanisms, walker, *, base_dir=DEFAULT_MAPS_DIR) -> None:
+    def __init__(self, mechanisms, walker, *, base_dir=DEFAULT_MAPS_DIR,
+                 vision=None) -> None:
         self._mech = mechanisms
         self._walker = walker
         self._base_dir = base_dir
+        # Optional async callable(app_hint) -> list[UIElement]: the vision backup
+        # (software.vision_probe.VisionProbe), run only when the UIA tree is thin.
+        self._vision = vision
         self.patterns = [re.compile(p, re.IGNORECASE) for p in (
             r"\blearn\s+(?:how\s+to\s+use|to\s+use)\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)(?:\s+app)?\s*$",
             r"\blearn\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)\s+(?:app|ui|interface)\s*$",
@@ -78,20 +82,34 @@ class LearnAppSkill(Skill):
                 f"I couldn't find {app} open. Open it first, then say "
                 f"“learn {app}”.", success=False,
                 data={"reason": "not_open"})
-        from software.ui_scan import scan_app
+        from software.ui_scan import is_thin, scan_app, vision_augment
 
         app_map = scan_app(self._walker, app_id=_app_id(app), display_name=app,
                            reveal_menus=True, window_hint=app)
+        # Vision backup: when UIA saw too little (custom/Electron apps like
+        # CapCut), look at a screenshot and add the controls it reveals.
+        seen_vision = 0
+        if self._vision is not None and is_thin(app_map):
+            try:
+                velems = await self._vision(app)
+            except Exception:
+                velems = []
+            if velems:
+                app_map = vision_augment(app_map, velems)
+                seen_vision = sum(1 for e in app_map.elements
+                                  if e.source == "vision")
         knowledge.save_map(app_map, self._base_dir)
         menus = ", ".join(list(app_map.menus)[:5])
         examples = ", ".join(
             f"“{e.name}”" for e in app_map.elements[:3] if e.name)
         extra = f" Menus: {menus}." if menus else ""
+        vis = f" ({seen_vision} seen visually)" if seen_vision else ""
         tail = f" Try asking me to find {examples}." if examples else ""
         return SkillResult(
-            f"Learned {app} — I mapped {app_map.element_count()} controls.{extra}"
-            f"{tail}", data={"app": app, "count": app_map.element_count(),
-                             "menus": list(app_map.menus)})
+            f"Learned {app} — I mapped {app_map.element_count()} controls{vis}."
+            f"{extra}{tail}", data={"app": app, "count": app_map.element_count(),
+                                    "vision": seen_vision,
+                                    "menus": list(app_map.menus)})
 
     def tool_schema(self) -> dict:
         return {"type": "function", "function": {
@@ -217,6 +235,20 @@ class AppNavigateSkill(_AppLookupSkill):
             return SkillResult(f"Opened “{el.name}” in {app}.",
                                data={"app": app, "name": el.name,
                                      "verified": result.verified})
+        # A vision-learned control UIA can't name: click where the model saw it,
+        # re-resolved against the LIVE window (robust if it moved, same layout).
+        if el.source == "vision" and el.vision_xy:
+            from software.ui_scan import window_point
+
+            rect = self._mech.foreground_rect()
+            if rect:
+                px, py = window_point(el.vision_xy, rect)
+                click = self._mech.click_point(px, py)
+                if click.success:
+                    return SkillResult(
+                        f"Clicked “{el.name}” in {app} where I saw it.",
+                        data={"app": app, "name": el.name, "via": "vision",
+                              "point": [px, py], "verified": False})
         return SkillResult(
             f"I know where “{el.name}” is in {app} ({el.location()}), "
             f"but couldn't activate it just now.", success=False,

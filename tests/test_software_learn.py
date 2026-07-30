@@ -31,11 +31,13 @@ class FakeWalker:
 
 
 class FakeMech:
-    def __init__(self, *, can_focus=True, invoke_ok=True):
+    def __init__(self, *, can_focus=True, invoke_ok=True, rect=(100, 100, 900, 700)):
         self.can_focus = can_focus
         self.invoke_ok = invoke_ok
+        self.rect = rect
         self.focused = []
         self.invoked = []
+        self.clicked = []
 
     def focus_app(self, hint):
         self.focused.append(hint)
@@ -45,6 +47,13 @@ class FakeMech:
         self.invoked.append((hint, name))
         return ActionResult(self.invoke_ok, "Done." if self.invoke_ok else "no",
                             verified=self.invoke_ok)
+
+    def foreground_rect(self):
+        return self.rect
+
+    def click_point(self, x, y):
+        self.clicked.append((int(x), int(y)))
+        return ActionResult(True, "Done.", verified=False)
 
 
 def _run(skill, args=None, ctx=None):
@@ -214,6 +223,120 @@ def test_locate_and_navigate_fast_paths():
     assert nav.match("in CapCut, click the export button") is not None
     # locate is read-only; a 'click' request should NOT match it
     assert loc.match("in CapCut, click the export button") is None
+
+
+# -- vision pass: parse, augment, translate, and use it ----------------------
+
+def test_parse_vision_elements_from_json_and_prose():
+    from software.vision_probe import parse_vision_elements
+    raw = ('[{"label":"Export","area":"top","x":900,"y":50},'
+           '{"label":"Effects","area":"left","x":100,"y":400}]')
+    els = parse_vision_elements(raw)
+    assert [e.name for e in els] == ["Export", "Effects"]
+    assert els[0].source == "vision" and els[0].vision_xy == (900, 50)
+    assert els[0].keywords == ("top",)
+    # embedded in prose, a dupe, and junk items -> one clean element
+    messy = 'Sure! [{"label":"Export"},{"label":"export"},{"nope":1},"x"] done'
+    assert [e.name for e in parse_vision_elements(messy)] == ["Export"]
+    assert parse_vision_elements("no json here") == []
+    assert parse_vision_elements("") == []
+
+
+def test_vision_augment_and_is_thin():
+    from software.knowledge import AppMap, UIElement
+    from software.ui_scan import is_thin, vision_augment
+    m = AppMap(app_id="x", elements=[
+        UIElement(name="Timeline", role="Pane", source="uia")])
+    assert is_thin(m) is True
+    m2 = vision_augment(m, [UIElement(name="Export", source="vision"),
+                            UIElement(name="timeline", source="vision")])  # dupe
+    assert [e.name for e in m2.elements] == ["Timeline", "Export"]
+    assert "vision added 1" in m2.notes
+    rich = AppMap(app_id="y", elements=[
+        UIElement(name=f"B{i}", role="Button", source="uia") for i in range(8)])
+    assert is_thin(rich) is False
+
+
+def test_window_point_translates_norm_to_live_pixels():
+    from software.ui_scan import window_point
+    assert window_point((500, 500), (100, 100, 900, 700)) == (500, 400)
+    assert window_point((0, 0), (100, 100, 900, 700)) == (100, 100)
+    assert window_point((1000, 1000), (100, 100, 900, 700)) == (900, 700)
+
+
+def test_vision_xy_round_trips_through_disk(tmp_path):
+    from software.knowledge import AppMap, UIElement, load_map, save_map
+    save_map(AppMap(app_id="x", elements=[
+        UIElement(name="A", source="vision", vision_xy=(12, 34))]), tmp_path)
+    assert load_map("x", tmp_path).elements[0].vision_xy == (12, 34)
+
+
+def test_learn_uses_vision_only_when_uia_is_thin(tmp_path):
+    from skills.software_learn import LearnAppSkill
+    from software.knowledge import UIElement, load_map
+
+    async def fake_vision(app):
+        return [UIElement(name="Search effects", source="vision", clickable=True,
+                          keywords=("center",), vision_xy=(500, 500))]
+
+    # thin UIA (1 control) -> vision runs and augments the map
+    r = _run(LearnAppSkill(FakeMech(), FakeWalker([RawElement("Timeline", "Pane")]),
+                           base_dir=tmp_path, vision=fake_vision),
+             args={"app": "CapCut"})
+    assert r.success and r.data.get("vision") == 1
+    m = load_map("capcut", tmp_path)
+    assert any(e.source == "vision" and e.name == "Search effects"
+               for e in m.elements)
+
+    # rich UIA (>= threshold) -> vision is NOT called
+    called = []
+
+    async def spy_vision(app):
+        called.append(app)
+        return []
+
+    rich = [RawElement(f"Button {i}", "Button") for i in range(10)]
+    r2 = _run(LearnAppSkill(FakeMech(), FakeWalker(rich), base_dir=tmp_path,
+                            vision=spy_vision), args={"app": "Notepad"})
+    assert r2.success and called == []
+
+
+def test_navigate_clicks_a_vision_control_when_uia_cannot(tmp_path):
+    from skills.software_learn import AppNavigateSkill
+    from software.knowledge import AppMap, UIElement, save_map
+    save_map(AppMap(app_id="capcut", display_name="CapCut", elements=[
+        UIElement(name="Search effects", source="vision", clickable=True,
+                  keywords=("center",), vision_xy=(500, 500))]), tmp_path)
+    mech = FakeMech(invoke_ok=False, rect=(100, 100, 900, 700))   # UIA fails
+    r = _run(AppNavigateSkill(mech, base_dir=tmp_path),
+             args={"app": "CapCut", "target": "search effects"})
+    assert r.success and r.data.get("via") == "vision"
+    assert mech.clicked == [(500, 400)]          # re-resolved against the window
+    assert mech.focused == ["CapCut"]
+
+
+def test_navigate_prefers_uia_over_the_vision_click(tmp_path):
+    from skills.software_learn import AppNavigateSkill
+    from software.knowledge import AppMap, UIElement, save_map
+    save_map(AppMap(app_id="capcut", display_name="CapCut", elements=[
+        UIElement(name="Export", source="vision", clickable=True,
+                  vision_xy=(500, 500))]), tmp_path)
+    mech = FakeMech(invoke_ok=True)              # UIA succeeds
+    r = _run(AppNavigateSkill(mech, base_dir=tmp_path),
+             args={"app": "CapCut", "target": "export"})
+    assert r.success and mech.clicked == []      # no coordinate click needed
+
+
+def test_vision_probe_captures_asks_and_parses():
+    from software.vision_probe import VisionProbe
+
+    async def fake_describe(image):
+        return '[{"label":"Export","x":900,"y":50}]'
+
+    probe = VisionProbe(settings=None, capture=lambda hint: "IMG",
+                        describe=fake_describe)
+    els = asyncio.run(probe("CapCut"))
+    assert [e.name for e in els] == ["Export"] and els[0].vision_xy == (900, 50)
 
 
 if __name__ == "__main__":  # pragma: no cover

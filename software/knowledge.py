@@ -41,7 +41,10 @@ class UIElement:
     clickable: bool = False
     rect: Optional[Tuple[int, int, int, int]] = None  # left, top, right, bottom
     source: str = "uia"             # uia | menu | vision
-    keywords: Tuple[str, ...] = ()  # extra search terms (menu name, synonyms)
+    keywords: Tuple[str, ...] = ()  # extra search terms (menu name, area, synonyms)
+    #: For vision-seen controls: the model's CENTRE point on the app window,
+    #: normalized 0-1000 (re-resolved to live pixels at click time).
+    vision_xy: Optional[Tuple[int, int]] = None
 
     def haystack(self) -> str:
         return " ".join([self.name, self.role, " ".join(self.path),
@@ -51,6 +54,8 @@ class UIElement:
         """A short, speakable 'where it lives' hint."""
         if self.source == "menu" and self.path:
             return f"in the {self.path[0]} menu"
+        if self.source == "vision" and self.keywords and self.keywords[0]:
+            return f"in the {self.keywords[0]} area"
         if self.path:
             return f"under {self.path[-1]}" if self.path[-1] else "in the window"
         return "in the window"
@@ -97,6 +102,7 @@ def load_map(app_id: str, base_dir: Path = DEFAULT_MAPS_DIR) -> Optional[AppMap]
                 rect=tuple(e["rect"]) if e.get("rect") else None,
                 source=e.get("source", "uia"),
                 keywords=tuple(e.get("keywords") or ()),
+                vision_xy=tuple(e["vision_xy"]) if e.get("vision_xy") else None,
             )
             for e in data.get("elements", []) if e.get("name")
         ]

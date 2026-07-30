@@ -117,3 +117,22 @@ class Win32Backend:
             return True
         except Exception:
             return False
+
+    def foreground_rect(self) -> Optional[tuple]:
+        try:
+            import pygetwindow as gw
+            w = gw.getActiveWindow()
+            if w is None:
+                return None
+            return (int(w.left), int(w.top), int(w.right), int(w.bottom))
+        except Exception:
+            return None
+
+    def click_point(self, x: int, y: int) -> bool:
+        try:
+            import pyautogui
+            pyautogui.click(int(x), int(y))
+            return True
+        except Exception:
+            logger.debug("click_point unavailable", exc_info=True)
+            return False

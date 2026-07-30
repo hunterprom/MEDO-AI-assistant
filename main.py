@@ -536,7 +536,13 @@ def build_registry(
             from software.ui_scan import UiaWalker
 
             walker = UiaWalker()
-            registry.register(LearnAppSkill(mech, walker))
+            # Vision backup for thin/Electron UIA trees (e.g. CapCut), if enabled.
+            vision = None
+            if settings.software.vision_scan:
+                from software.vision_probe import VisionProbe
+
+                vision = VisionProbe(settings, mechanisms=mech)
+            registry.register(LearnAppSkill(mech, walker, vision=vision))
             registry.register(AppLocateSkill(mech))
             registry.register(AppNavigateSkill(mech))
         except Exception:

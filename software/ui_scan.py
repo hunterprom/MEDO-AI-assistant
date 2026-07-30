@@ -116,6 +116,41 @@ def scan_app(walker: Walker, app_id: str, display_name: str, *,
                   notes=notes)
 
 
+def is_thin(app_map: AppMap, below: int = _VISION_HINT_BELOW) -> bool:
+    """The UIA scan saw too little to trust — a vision pass is warranted. Counts
+    only genuinely UIA-sourced controls (menu items are separate)."""
+    return sum(1 for e in app_map.elements if e.source == "uia") < below
+
+
+def vision_augment(app_map: AppMap, vision_elements) -> AppMap:
+    """Merge vision-derived controls into a map, de-duplicating by name (pure).
+    Updates ``notes`` to reflect what vision added."""
+    have = {e.name.lower() for e in app_map.elements}
+    added = 0
+    for el in vision_elements:
+        if not el.name or el.name.lower() in have:
+            continue
+        have.add(el.name.lower())
+        app_map.elements.append(el)
+        added += 1
+    app_map.notes = (f"vision added {added} controls the UIA tree didn't expose"
+                     if added else app_map.notes)
+    return app_map
+
+
+def window_point(norm_xy: Tuple[int, int],
+                 rect: Tuple[int, int, int, int]) -> Tuple[int, int]:
+    """A vision control's 0-1000 window point -> absolute screen pixels against
+    a live window ``rect`` (left, top, right, bottom). Pure — so a moved window
+    still clicks right as long as its layout hasn't changed."""
+    x, y = norm_xy
+    left, top, right, bottom = rect
+    w, h = max(1, right - left), max(1, bottom - top)
+    px = left + round(max(0, min(1000, x)) / 1000.0 * w)
+    py = top + round(max(0, min(1000, y)) / 1000.0 * h)
+    return int(px), int(py)
+
+
 class UiaWalker:
     """The real Windows walker (``uiautomation``). Defensive: any failure yields
     *less*, never an exception. It only ever OPENS menus (expand / click a menu-

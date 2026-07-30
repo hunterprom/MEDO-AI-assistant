@@ -933,7 +933,12 @@ class RemoteServer:
         mech = await asyncio.to_thread(self._software_mechanisms)
         if mech is None:
             return _error(503, "software control isn't available here")
-        skill = LearnAppSkill(mech, UiaWalker())
+        vision = None
+        if self._settings.software.vision_scan:
+            from software.vision_probe import VisionProbe
+
+            vision = VisionProbe(self._settings, mechanisms=mech)
+        skill = LearnAppSkill(mech, UiaWalker(), vision=vision)
         result = await self._run_skill_blocking(
             skill, SkillRequest(text="", args={"app": app}))
         return web.json_response(

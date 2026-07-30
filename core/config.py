@@ -847,6 +847,9 @@ class SoftwareConfig(BaseModel):
     enabled: bool = False
     #: Per-connector opt-out: {app_id: false} hides that connector.
     connectors: dict[str, bool] = Field(default_factory=dict)
+    #: Use the local vision model as a BACKUP when learning an app whose UIA tree
+    #: is thin (custom/Electron apps like CapCut). Off = UIA-only maps.
+    vision_scan: bool = True
     #: Override how to launch an app: {app_id: ["C:/path/app.exe", ...]}. Common
     #: paths are auto-detected; this is the escape hatch for non-standard installs.
     exe_paths: dict[str, list[str]] = Field(default_factory=dict)

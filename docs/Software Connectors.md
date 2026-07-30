@@ -81,6 +81,33 @@ its trigger `phrases` (EN + MK), `mechanisms` preference, declared `capabilities
 opt-in templates — verify the app's websocket/port from its live docs before
 wiring (don't hardcode an invented interface).
 
+## Learning an app's UI (know where to go)
+
+Beyond the built-in connectors, MEDO can **learn an app it doesn't have a
+connector for** — "learn how to use CapCut" (or the HUD's *Teach MEDO an app*
+box). It scans the app and remembers where its controls are, so later you can
+ask "where is the effects search in CapCut" (locate) or "open the effects panel
+in CapCut" (navigate). Three skills: `learn_app`, `locate_in_app` (read-only),
+`navigate_in_app` (actuation, policy-gated). Maps live per-install under
+`data/software_maps/` (git-ignored). Code: `software/knowledge.py` (the map +
+fuzzy search), `software/ui_scan.py` (the scan).
+
+- **How it scans (safely):** it reads the accessibility tree (UI Automation) and
+  **reveals menus then Escapes back out** — it never activates a normal control.
+- **Vision backup (UIA + vision):** custom/Electron apps like CapCut expose
+  little to UIA. When the tree comes back thin, MEDO looks at a screenshot of the
+  window with the local vision model (qwen2.5-vl) and adds the controls it sees —
+  a label, a coarse area, and the model's 0-1000 centre point
+  (`software/vision_probe.py`). Backup only, `software.vision_scan: true` by
+  default; set it false for UIA-only maps.
+- **Clicking a vision-seen control:** `navigate_in_app` tries UIA by name first;
+  if that can't reach it (no UIA name), it clicks where the model saw it,
+  **re-resolved against the live window** — so a moved window still works as long
+  as its layout hasn't changed. Honest limits: a 3B model's labels and points are
+  approximate — reliable for *locate*, best-effort for *click*.
+- **Assistant-first:** the system prompt tells the brain to PREFER these tools
+  (and the connectors) over describing steps.
+
 ---
 
 *Intertec note:* MEDO controls local software through a connector abstraction with

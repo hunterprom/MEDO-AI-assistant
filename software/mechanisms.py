@@ -96,6 +96,25 @@ class Mechanisms:
         return ActionResult(ok, "Done." if ok else "That didn't go through.",
                             verified=False)
 
+    # -- coordinate click + window rect (reach vision-seen controls) ----------
+
+    def foreground_rect(self):
+        """(left, top, right, bottom) of the foreground window, or None. Used to
+        re-resolve a vision-learned control's point against the live window."""
+        fn = getattr(self._os, "foreground_rect", None)
+        try:
+            return fn() if fn else None
+        except Exception:
+            return None
+
+    def click_point(self, x: int, y: int) -> ActionResult:
+        """Click an absolute screen pixel — the fallback for a control the vision
+        pass saw but UIA can't name. Global, so unverifiable; reported honestly."""
+        fn = getattr(self._os, "click_point", None)
+        ok = bool(fn and fn(int(x), int(y)))
+        return ActionResult(ok, "Done." if ok else "That click didn't land.",
+                            verified=False)
+
     # -- media keys (global; can't verify the effect) -------------------------
 
     def send_media_key(self, key: str) -> ActionResult:
