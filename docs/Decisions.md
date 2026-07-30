@@ -650,3 +650,20 @@ in-process plugin can't be perfectly confined (`import httpx` can't be blocked i
 running code); strong third-party sandboxing needs a subprocess and is future work.
 The controls that hold: nothing runs unapproved, skills are capability-gated, and
 generated code is quarantined.
+
+## Security layer S5: secrets accessor + cloud data-egress gate (2026-07-30)
+
+**Decision: one secrets accessor + one redactor.** `security/secrets.py`:
+`Secrets.get/has` centralizes reads (settings then secrets.local.yaml), and
+`redact()` scrubs live secret values (≥6 chars) from anything headed to a log or
+the audit trail — a reusable guarantee, not a per-call discipline. Secrets stay
+in git-ignored, 0600 secrets.local.yaml; this only reads them. At-rest encryption
+is an optional future add (needs a crypto dep), left out of the default install.
+
+**Decision: local-first means a cloud brain gets your QUESTION, not your CONTEXT.**
+`security/egress.py`: when the selected brain is a CLOUD provider (openai/
+anthropic/claude-code/codex) and it isn't opted in (`security.cloud_egress_optin`),
+the router WITHHOLDS local memory/facts from the prompt AND drops local-content
+tools (search_documents/files/…) from the tool list — so RAG documents and memory
+never leave the machine unopted-in. A local (ollama) brain always keeps context.
+Default: withhold. Verified through the real router (test_secrets_egress.py).

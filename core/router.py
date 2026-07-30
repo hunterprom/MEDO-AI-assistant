@@ -1072,6 +1072,12 @@ class Router:
         if not model:
             return RouteResult(path=RoutePath.LLM, speech=self._offline_reply)
 
+        # Cloud data-egress gate (S5): a CLOUD brain gets your question, not your
+        # local documents/memory/files — unless you opted THAT brain in.
+        from security.egress import LOCAL_CONTENT_TOOLS, local_context_allowed
+        egress_ok = local_context_allowed(self._settings.security,
+                                          self._settings.llm.provider)
+
         tools = build_tools(self._registry)
         # Don't even OFFER a tool the policy would refuse this turn (e.g. an
         # actuation tool while PC control is off) — the model answers around it
@@ -1079,6 +1085,8 @@ class Router:
         actor = self._actor_for(context)
         gated = {s.name for s in self._registry.all()
                  if self._policy.gate_skill(s, actor=actor).denied()}
+        if not egress_ok:
+            gated |= LOCAL_CONTENT_TOOLS      # no local-content tools to the cloud
         if gated:
             tools = [t for t in tools if t["function"]["name"] not in gated]
         try:
@@ -1087,6 +1095,11 @@ class Router:
             )
         except Exception:  # a broken facts DB must never take down the LLM path
             logger.exception("could not load remembered facts")
+            facts = []
+        if not egress_ok and facts:
+            # Local memory must not ride along to a cloud brain unopted-in.
+            logger.info("withholding %d local facts from cloud brain %s "
+                        "(no egress opt-in)", len(facts), self._settings.llm.provider)
             facts = []
         # Answer in the language the user spoke. The voice loop puts the code
         # Whisper detected into the context; without it we say nothing and the
