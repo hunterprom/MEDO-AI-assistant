@@ -8,6 +8,7 @@ config.yaml. Search is a filename substring match across those trees.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from core import mk
 from core.platform import open_path
 from core.safety import PathWhitelist
 from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
 
 _MAX_RESULTS = 25
 
@@ -50,6 +53,39 @@ _MK_FILE = r"датотеките|датотеката|датотека|доку
 _EN_DISK = r"computer|pc|laptop|disk|hard\s+drive|machine"
 _MK_DISK = r"компјутерот|компјутер|лаптопот|лаптоп|дискот|диск"
 
+#: "open a file in|with Arduino IDE" — the tail names an APP to open, not a file
+#: literally called "in Arduino IDE". Splits "<file?> in|with|using <app>".
+_OPEN_WITH = re.compile(
+    r"^(?P<file>.*?)\s*\b(?:in|with|using|inside)\b\s+(?P<app>[\w .+-]{2,40})\s*$",
+    re.IGNORECASE)
+
+#: Filler that means "no specific file was named" — just open the app.
+_GENERIC_FILE = frozenset({
+    "", "file", "a file", "the file", "some file", "any file", "my file",
+    "new file", "a new file", "it", "this", "that", "something", "one",
+    "document", "a document", "the document",
+})
+
+
+def _launch_with(app_path: object, file_path: object) -> bool:
+    """Open a file WITH a specific app. On Windows, ``start`` resolves the Start-
+    Menu ``.lnk`` and passes the file to the target program — an argv list, never
+    a shell string, so a spoken name can't become a command. Best-effort."""
+    import subprocess
+
+    from core.platform import IS_WINDOWS
+    try:
+        if IS_WINDOWS:
+            subprocess.Popen(["cmd", "/c", "start", "", str(app_path),
+                              str(file_path)])
+        else:
+            subprocess.Popen([str(app_path), str(file_path)])
+        return True
+    except Exception:
+        logger.warning("open-with launch failed: %s + %s", app_path, file_path,
+                       exc_info=True)
+        return False
+
 
 class FilesSkill(Skill):
     name = "files"
@@ -57,8 +93,8 @@ class FilesSkill(Skill):
     description = "Search for and open files within whitelisted folders."
 
     patterns = [
-        re.compile(r"\b(?:find|search\s+for|locate)\s+(?:a\s+|the\s+)?file[s]?\s+(?:named\s+|called\s+)?(?P<query>.+)", re.IGNORECASE),
-        re.compile(r"\bopen\s+(?:the\s+)?file\s+(?:named\s+|called\s+)?(?P<open>.+)", re.IGNORECASE),
+        re.compile(r"\b(?:find|search\s+for|locate)\s+(?:me\s+)?(?:a\s+|the\s+)?file[s]?\s+(?:named\s+|called\s+)?(?P<query>.+)", re.IGNORECASE),
+        re.compile(r"\bopen\s+(?:me\s+)?(?:the\s+)?file\s+(?:named\s+|called\s+)?(?P<open>.+)", re.IGNORECASE),
         # "search my computer for the invoice"
         re.compile(rf"\b(?:search|look)\s+(?:on\s+|in\s+|through\s+)?(?:my|the)\s+"
                    rf"(?:{_EN_DISK})\s+(?:for\s+)?(?P<query>.+)", re.IGNORECASE),
@@ -85,14 +121,39 @@ class FilesSkill(Skill):
     def _search(self, query: str) -> list[Path]:
         return search_files(self._whitelist, query, _MAX_RESULTS)
 
+    async def _open_with(self, app, file_part: str, speak_mk: bool) -> SkillResult:
+        """Open ``app`` — and, if a real filename was named and found in the
+        whitelist, open it WITH that app (so it lands in the app the user asked
+        for). "open a file in Arduino IDE" just opens Arduino IDE."""
+        name = (file_part or "").strip().strip("?.!\"'")
+        specific = name.lower() not in _GENERIC_FILE
+        target = None
+        if specific and self._whitelist.roots:
+            hits = await asyncio.to_thread(self._search, name)
+            if hits and self._whitelist.is_allowed(hits[0]):
+                target = hits[0]
+        if target is not None:
+            if not await asyncio.to_thread(_launch_with, app.path, target):
+                await asyncio.to_thread(open_path, app.path)   # fall back to app
+            return SkillResult(
+                f"Отворам {target.name} во {app.name}." if speak_mk
+                else f"Opening {target.name} in {app.name}.",
+                data={"app": app.name, "path": str(target)})
+        try:
+            await asyncio.to_thread(open_path, app.path)
+        except Exception:
+            return SkillResult(
+                f"Не успеав да го отворам {app.name}." if speak_mk
+                else f"I couldn't open {app.name}.", success=False)
+        miss_mk = f" Не најдов „{name}“." if specific else ""
+        miss = f" I couldn't find '{name}', though." if specific else ""
+        return SkillResult(
+            (f"Отворам {app.name}.{miss_mk}" if speak_mk
+             else f"Opening {app.name}.{miss}"),
+            data={"app": app.name, "path": str(app.path)})
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         speak_mk = mk.is_cyrillic(request.text)
-        if not self._whitelist.roots:
-            return SkillResult(
-                "Нема дозволени папки, па не можам да барам датотеки." if speak_mk
-                else "No file directories are whitelisted, so I can't search files.",
-                success=False,
-            )
         m = request.match
         gd = m.groupdict() if m else {}
         # LLM tool path: the model passes a `query` (and maybe action=open) that
@@ -104,6 +165,25 @@ class FilesSkill(Skill):
         if not query:
             return SkillResult("Која датотека?" if speak_mk else "Which file?",
                                success=False)
+
+        # "open/find [a file] in|with Arduino IDE" — the tail names an APP, not a
+        # file literally called "in Arduino IDE". Open that app (plus the named
+        # file, if one was given and found) instead of a doomed name search.
+        ow = _OPEN_WITH.match(query)
+        if ow:
+            from skills.appfinder import find_app
+
+            app = await asyncio.to_thread(find_app, ow.group("app"))
+            if app is not None:
+                return await self._open_with(app, ow.group("file"), speak_mk)
+
+        # Beyond here we actually search the disk, which needs whitelisted roots.
+        if not self._whitelist.roots:
+            return SkillResult(
+                "Нема дозволени папки, па не можам да барам датотеки." if speak_mk
+                else "No file directories are whitelisted, so I can't search files.",
+                success=False,
+            )
 
         # rglob over the whitelisted trees can walk thousands of files; keep it
         # off the event loop so TTS streaming and the HUD don't stall mid-turn.
