@@ -157,6 +157,10 @@ class Router:
         self._policy = PolicyEngine(
             settings.security, settings.safety,
             PathWhitelist(settings.safety.whitelist_dirs))
+        if getattr(settings.security, "yolo", False):
+            logger.warning("⚠ SECURITY LAYER OFF (security.yolo) — every action "
+                           "is allowed and confirmations are auto-accepted. "
+                           "DEV MACHINE ONLY; never ship with this on.")
         #: Tamper-evident audit trail (S6), off unless security.audit_enabled.
         #: Secret values are redacted out of every entry.
         self._audit_log = (AuditLog(redactor=Secrets(settings).redact)
@@ -621,6 +625,11 @@ class Router:
         self, text: str, context: dict[str, Any], on_delta: Any = None,
         on_llm_start: Any = None,
     ) -> RouteResult:
+        # YOLO/dev mode: auto-accept the older skill-driven confirmation gate
+        # (Power/Quit/file-edit "are you sure?") so nothing blocks development.
+        # The policy engine already allows every action in this mode.
+        if getattr(self._settings.security, "yolo", False):
+            context = {**context, "confirmed": True}
         # --- CHOICE GATE ---
         # A near-tie asked a one-word either/or; this reply answers it. Same-
         # source scoped like the confirmation gate below and kept independent of

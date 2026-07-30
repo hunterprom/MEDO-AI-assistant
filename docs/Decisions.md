@@ -683,3 +683,14 @@ records a POLICY_DENY / CONFIRM_GRANTED-DENIED / CLOUD_CALL when on.
 Security layer COMPLETE (S1–S6). Full trust model + honest threat limits (esp.
 in-process plugin confinement needing a subprocess sandbox) documented in
 docs/Security.md §8.
+
+## Security layer: YOLO / dev mode (2026-07-30)
+
+**Decision: one explicit `security.yolo` flag turns the WHOLE layer off for
+development.** When on, `PolicyEngine._check` returns ALLOW before any gate
+(pc-control, owner-voice, trust-boundary, capability-declaration), and the router
+injects `confirmed=True` so the older skill-driven "are you sure?" confirmations
+auto-accept too — nothing blocks. Off by default; loudly logged (a ⚠ warning at
+Router construction) the whole time it's active. Dev-machine only; the config
+docstring says never ship it on. Purely additive — with yolo off, behaviour is
+unchanged (2040 tests pass).

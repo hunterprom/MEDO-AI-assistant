@@ -132,6 +132,12 @@ class PolicyEngine:
     def _check(self, req: ActionRequest) -> Decision:
         cap = req.capability
 
+        # YOLO / DEV MODE: the whole layer is off — allow everything, before even
+        # the baseline actuation gate. Explicit, off by default, loudly logged.
+        if self._yolo():
+            return Decision(Effect.ALLOW, cap,
+                            "yolo/dev mode — security layer off", code="yolo")
+
         # BASELINE (always on, even when security.enabled is False): the
         # actuation master switch. Equivalent to today's
         # `controls_pc and not pc_control_enabled`.
@@ -213,6 +219,9 @@ class PolicyEngine:
 
     def _enabled(self) -> bool:
         return bool(getattr(self._security, "enabled", True))
+
+    def _yolo(self) -> bool:
+        return bool(getattr(self._security, "yolo", False))
 
     def _owner_voice_required(self) -> bool:
         return bool(getattr(self._security, "owner_voice", False))

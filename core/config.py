@@ -784,6 +784,12 @@ class SecurityConfig(BaseModel):
     skill-driven, so the default install behaves exactly as before.
     """
 
+    #: DEV / YOLO MODE — turns the WHOLE security layer OFF for constraint-free
+    #: local development. The policy engine allows EVERY action; confirmations are
+    #: auto-accepted; the PC-control, owner-voice, trust-boundary and
+    #: capability-declaration gates are all bypassed. For your own dev machine
+    #: only — NEVER ship it on. Loudly logged the whole time it's active.
+    yolo: bool = False
     #: Master switch for the NEW policy layer. False keeps ONLY the existing
     #: safety floor (the PC-control actuation gate) — it never fails open.
     enabled: bool = True

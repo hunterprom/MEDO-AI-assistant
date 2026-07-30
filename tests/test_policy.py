@@ -25,11 +25,12 @@ from security.policy import (
 
 # -- fakes --------------------------------------------------------------------
 
-def _sec(enabled=True, confirm=None, untrusted="confirm", owner_voice=False):
+def _sec(enabled=True, confirm=None, untrusted="confirm", owner_voice=False,
+         yolo=False):
     return SimpleNamespace(enabled=enabled,
                            requires_confirmation=dict(confirm or {}),
                            untrusted_action_policy=untrusted,
-                           owner_voice=owner_voice)
+                           owner_voice=owner_voice, yolo=yolo)
 
 
 def _safety(pc=True):
@@ -91,6 +92,31 @@ def test_policy_errors_fail_closed_to_deny():
     e = _engine(wl=_WL(boom=True))
     d = e.check(_req(Capability.WRITE_FILES, target="C:/whatever.txt"))
     assert d.effect is Effect.DENY and d.code == "check_error"
+
+
+# -- yolo / dev mode ----------------------------------------------------------
+
+def test_yolo_allows_everything_that_would_otherwise_be_blocked():
+    # pc off + owner-voice on: normally DENY on both counts; yolo allows it.
+    e = _engine(sec=_sec(yolo=True, owner_voice=True), safety=_safety(pc=False))
+    for cap in (Capability.POWER_CONTROL, Capability.RUN_COMMAND,
+                Capability.WRITE_FILES):
+        d = e.check(_req(cap))
+        assert d.effect is Effect.ALLOW and d.code == "yolo", cap
+
+
+def test_yolo_bypasses_the_trust_boundary_and_undeclared_gate():
+    e = _engine(sec=_sec(yolo=True, untrusted="deny"))
+    assert e.check(_req(Capability.WRITE_FILES,
+                        provenance=Provenance.UNTRUSTED)).allowed()
+    assert e.check(_req(Capability.RUN_COMMAND,
+                        declared=frozenset())).allowed()          # undeclared -> allowed
+
+
+def test_yolo_gate_skill_never_denies():
+    off = _engine(sec=_sec(yolo=True), safety=_safety(pc=False))
+    legacy = _Skill("files", controls_pc=True)
+    assert off.gate_skill(legacy).allowed()
 
 
 # -- baseline actuation gate (mirrors today's controls_pc) --------------------
