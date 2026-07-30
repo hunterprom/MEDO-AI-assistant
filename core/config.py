@@ -1122,6 +1122,32 @@ class AppBuilderConfig(BaseModel):
     permission_mode: str = "acceptEdits"
 
 
+class StudioConfig(BaseModel):
+    """MEDO Maker Studio — generate REAL engineering artifacts (electrical
+    schematics, printable 3D models, buildable code) by having the brain write
+    library code and EXECUTING it in a sandbox, with a self-correcting loop +
+    parametric iteration. Off by default: it runs generated (untrusted) code on
+    this machine — sandboxed — so turning it on opts into that. See
+    docs/Maker Studio.md."""
+
+    enabled: bool = False
+    #: Where projects land — one folder each (code + artifacts + numbered versions).
+    projects_dir: str = "~/MEDO-studio"
+    #: Brain for code generation. "" = the active default brain (local); set a
+    #: stronger model id for hard designs (cloud honours the privacy gate).
+    model: str = ""
+    #: Bounded self-correction: times an execution error is fed back for a retry.
+    max_retries: int = 3
+    #: Hard cap on each sandboxed run of generated code.
+    exec_timeout_s: float = 60.0
+    #: Optional OS-isolation wrapper prefixed to the sandboxed command (e.g.
+    #: ["firejail", "--net=none"] on Linux). Empty = process + env + cwd isolation
+    #: only — strong for the filesystem/secrets, but does NOT hard-block network.
+    sandbox_cmd: list[str] = Field(default_factory=list)
+    #: Keep at most this many versions per project (0 = unlimited).
+    keep_versions: int = 20
+
+
 class Settings(BaseSettings):
     """Root settings object — one instance per process."""
 
@@ -1163,6 +1189,7 @@ class Settings(BaseSettings):
     webhooks: list[WebhookConfig] = Field(default_factory=list)
     self_dev: SelfDevConfig = Field(default_factory=SelfDevConfig)
     app_builder: AppBuilderConfig = Field(default_factory=AppBuilderConfig)
+    studio: StudioConfig = Field(default_factory=StudioConfig)
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
