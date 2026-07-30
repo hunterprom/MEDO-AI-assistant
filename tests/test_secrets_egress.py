@@ -60,6 +60,17 @@ def test_cloud_blocked_without_optin_allowed_with():
     assert local_context_allowed(s.security, "anthropic") is True
 
 
+def test_remote_ollama_counts_as_off_machine():
+    from security.egress import local_context_allowed as lca, sends_off_machine
+    s = load_settings()
+    assert sends_off_machine("ollama", "http://127.0.0.1:11434") is False
+    assert sends_off_machine("ollama", "http://192.168.1.50:11434") is True
+    # a LAN/remote Ollama must NOT get local context without an opt-in
+    assert lca(s.security, "ollama", "http://192.168.1.50:11434") is False
+    s.security.cloud_egress_optin = {"ollama": True}
+    assert lca(s.security, "ollama", "http://192.168.1.50:11434") is True
+
+
 # -- through the real router --------------------------------------------------
 
 class _DocSkill(Skill):
@@ -124,6 +135,15 @@ async def test_local_brain_keeps_local_context():
     await r._llm_reply("what do my notes say", {})
     assert "search_documents" in llm.captured["tool_names"]
     assert "strong coffee" in llm.captured["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_remote_ollama_withholds_through_the_router():
+    r, llm = _router("ollama")
+    r._settings.llm.host = "http://192.168.1.50:11434"    # off-box Ollama
+    await r._llm_reply("what do my notes say", {})
+    assert "search_documents" not in llm.captured["tool_names"]
+    assert "strong coffee" not in llm.captured["messages"][0]["content"]
 
 
 def test_local_content_tools_named():

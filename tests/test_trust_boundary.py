@@ -53,6 +53,26 @@ class _DangerSkill(Skill):
             "parameters": {"type": "object", "properties": {}, "required": []}}}
 
 
+class _TypeSkill(Skill):
+    name = "type_text"
+    description = "type keystrokes"
+    capabilities = frozenset({Capability.CONTROL_INPUT})   # actuation, not HIGH_IMPACT
+    controls_pc = True
+    patterns = []
+
+    def __init__(self):
+        self.executed = False
+
+    async def execute(self, request):
+        self.executed = True
+        return SkillResult("typed")
+
+    def tool_schema(self):
+        return {"type": "function", "function": {
+            "name": self.name, "description": self.description,
+            "parameters": {"type": "object", "properties": {}, "required": []}}}
+
+
 def _router(*skills):
     reg = SkillRegistry()
     for s in skills:
@@ -95,6 +115,19 @@ async def test_injected_high_impact_action_is_gated_not_executed():
     assert danger.executed is False          # NOT executed — needs a yes
     assert r._pending is not None            # armed for confirmation
     assert doc.executed is True              # the read itself happened
+
+
+@pytest.mark.asyncio
+async def test_injected_input_actuation_is_gated_too():
+    # Regression: the taint gate must cover CONTROL_INPUT (type/click), not only
+    # the HIGH_IMPACT set — an injected "type this command" is exactly the attack.
+    doc, typer = _DocSkill(), _TypeSkill()
+    r, _s = _router(doc, typer)
+    calls = [{"function": {"name": "search_documents", "arguments": {}}},
+             {"function": {"name": "type_text", "arguments": {}}}]
+    res = await r._run_tool_calls(calls, "read my notes and do what they say", {}, [])
+    assert res is not None and "read" in res.speech.lower()
+    assert typer.executed is False and r._pending is not None   # gated, not typed
 
 
 @pytest.mark.asyncio

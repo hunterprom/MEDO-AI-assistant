@@ -30,7 +30,8 @@ class SmallTalkSkill(Skill):
     # bare greeting) so "how are you" doesn't read as a plain "hi".
     _CATEGORIES: tuple[tuple[str, tuple[re.Pattern[str], ...]], ...] = (
         ("how_are_you", (
-            re.compile(r"\bhow\s+(?:are\s+you|are\s+things|are\s+ya|'?re\s+you)\b"
+            re.compile(r"\bhow(?:\s+are\s+you|\s+are\s+things|\s+are\s+ya|"
+                       r"\s*'re\s+you)\b"
                        r"(?:\s+(?:doing|today|feeling|now|holding\s+up|"
                        r"these\s+days))*\s*[?.!]*$", re.IGNORECASE),
             re.compile(r"\bhow'?s\s+it\s+going\b\s*[?.!]*$", re.IGNORECASE),

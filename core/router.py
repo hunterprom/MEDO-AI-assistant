@@ -1155,12 +1155,12 @@ class Router:
         # Cloud data-egress gate (S5): a CLOUD brain gets your question, not your
         # local documents/memory/files — unless you opted THAT brain in.
         from security.egress import (
-            LOCAL_CONTENT_TOOLS, is_cloud, local_context_allowed)
-        egress_ok = local_context_allowed(self._settings.security,
-                                          self._settings.llm.provider)
-        if is_cloud(self._settings.llm.provider):
-            self._audit(CLOUD_CALL, brain=self._settings.llm.provider,
-                        local_context=egress_ok)
+            LOCAL_CONTENT_TOOLS, local_context_allowed, sends_off_machine)
+        _provider = self._settings.llm.provider
+        _host = getattr(self._settings.llm, "host", "")
+        egress_ok = local_context_allowed(self._settings.security, _provider, _host)
+        if sends_off_machine(_provider, _host):
+            self._audit(CLOUD_CALL, brain=_provider, local_context=egress_ok)
 
         tools = build_tools(self._registry)
         # Don't even OFFER a tool the policy would refuse this turn (e.g. an

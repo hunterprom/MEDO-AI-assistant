@@ -47,7 +47,7 @@ class WindowConnector(SoftwareConnector):
             Action("minimize", "Minimize the current window.",
                    (r"\bminimi[sz]e\b", r"\bминимизирај\b"),
                    (HOTKEY,), _CTRL,
-                   lambda p: m.send_app_hotkey("", "win+down")),
+                   lambda p: m.send_global_hotkey("win+down")),
             Action("close_window", "Close an app's window.",
                    (r"\bclose\s+(?P<app>.+)", r"\bзатвори\b"),
                    (HOTKEY, ACCESSIBILITY), _CTRL, self._close,

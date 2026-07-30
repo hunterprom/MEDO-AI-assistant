@@ -50,6 +50,18 @@ def test_language_pair_must_differ(tmp_path):
     assert got["language_primary"] == "en" and got["language_secondary"] == "de"
 
 
+def test_set_field_also_enforces_the_pair_differs(tmp_path):
+    # The invariant must hold on a single-field set too (default primary is "en").
+    p = tmp_path / "settings.json"
+    with pytest.raises(ValueError):
+        s.set_field("language_secondary", "en", p)
+    # a different language is fine, and set_language_pair still swaps atomically
+    s.set_field("language_secondary", "de", p)
+    s.set_language_pair("mk", "en", p)          # would transiently equal if not atomic
+    got = s.get_all(p)
+    assert got["language_primary"] == "mk" and got["language_secondary"] == "en"
+
+
 def test_manual_profile_override_marks_it(tmp_path):
     p = tmp_path / "settings.json"
     s.set_profile("balanced", p)

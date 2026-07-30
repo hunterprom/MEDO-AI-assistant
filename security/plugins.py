@@ -10,11 +10,14 @@ allow?").
 Honest limit (documented in docs/Security.md): once approved and imported, an
 in-process plugin cannot be perfectly confined — Python can't stop `import httpx`
 inside already-running code. The controls that DO hold: (1) nothing runs until
-approved, (2) the plugin's SKILLS are policy-gated at runtime to only their
-DECLARED capabilities (the engine denies an undeclared one), and (3) generated
-code goes through quarantine + tests + explicit apply (core/self_dev.py). For
-strong confinement of untrusted third-party code, a subprocess sandbox is future
-work.
+approved, (2) at runtime the engine gates each of a plugin's SKILLS to the
+capabilities THAT SKILL declares (an undeclared one is denied) — note this is the
+skill's own ``capabilities``, which a well-behaved plugin keeps consistent with
+the module-level ``CAPABILITIES`` shown at review, but the two are not yet
+auto-reconciled, so a skill declaring MORE than its module advertised is an
+authoring inconsistency the review doesn't catch; and (3) generated code goes
+through quarantine + tests + explicit apply (core/self_dev.py). For strong
+confinement of untrusted third-party code, a subprocess sandbox is future work.
 """
 
 from __future__ import annotations

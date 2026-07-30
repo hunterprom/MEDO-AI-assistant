@@ -34,6 +34,8 @@ def _run(text: str):
 @pytest.mark.parametrize("text", [
     "how are you", "How are you?", "how are you doing", "how are you doing today",
     "how are you feeling", "how's it going", "how are things",
+    "how're you", "how're you doing",             # contraction
+
     "hi", "hello", "hey", "hi there", "hello medo", "howdy",
     "thanks", "thank you", "thanks a lot", "cheers", "much appreciated",
     "good night", "goodnight", "good night medo",

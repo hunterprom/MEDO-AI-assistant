@@ -112,11 +112,16 @@ class SetupOps:
 
     # -- microphone -----------------------------------------------------------
 
+    def _input_devices(self) -> List[tuple]:
+        """(real sounddevice id, name) for every INPUT device — the id, not the
+        filtered position, is what sd.rec needs."""
+        import sounddevice as sd
+        return [(i, d["name"]) for i, d in enumerate(sd.query_devices())
+                if d.get("max_input_channels", 0) > 0]
+
     def list_microphones(self) -> List[str]:
         try:
-            import sounddevice as sd
-            return [d["name"] for d in sd.query_devices()
-                    if d.get("max_input_channels", 0) > 0]
+            return [name for _id, name in self._input_devices()]
         except Exception:
             return []
 
@@ -124,8 +129,12 @@ class SetupOps:
         try:
             import numpy as np
             import sounddevice as sd
+            devices = self._input_devices()
+            if not (0 <= index < len(devices)):
+                return False
+            device_id = devices[index][0]           # map list position -> real id
             rec = sd.rec(int(0.6 * 16000), samplerate=16000, channels=1,
-                         dtype="float32")
+                         dtype="float32", device=device_id)   # the SELECTED mic
             sd.wait()
             rms = float(np.sqrt(np.mean(np.square(rec))))
             return rms > 0.005          # heard *something* above the noise floor

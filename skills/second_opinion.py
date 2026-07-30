@@ -237,15 +237,12 @@ class SecondOpinionSkill(_CouncilBase):
             return SkillResult(NO_BRAIN_MK if speak_mk else NO_BRAIN, success=False)
 
         council = self._council
-        # Pick who audits by the ANSWER's field, not the (often generic) question:
-        # "are you sure?" should hand THIS answer to the major it's closest to —
-        # an answer about low-voltage wiring goes to the electrical engineer, not a
-        # default. Fall back to the question's field, then the default, only when
-        # the answer names no discipline.
-        picked = (rank_specialists(answer, council,
-                                   self._settings.council.max_members)
-                  or rank_specialists(question, council,
-                                      self._settings.council.max_members))
+        # Pick who audits by the field the ANSWER (with the question for context)
+        # is closest to — an answer about low-voltage wiring goes to the electrical
+        # engineer, not a default. Rank the answer AND the question together so an
+        # incidental word in a short answer can't outvote the real topic.
+        picked = rank_specialists(f"{answer}\n{question}", council,
+                                  self._settings.council.max_members)
         if not picked:
             fallback = find_specialist(self._settings.council.default_agent, council)
             picked = [fallback] if fallback else list(council[:1])

@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PKG = ROOT / "packaging"
+PKG = Path(__file__).resolve().parent      # this dir (winsetup/)
 
 
 def _pyinstaller(venv: str, spec: str) -> None:

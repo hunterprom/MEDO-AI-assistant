@@ -1,7 +1,12 @@
 """Tamper-evident security audit log + the HUD security-status provider (S6).
 
 Append-only, HASH-CHAINED JSONL: each entry carries the hash of the previous one,
-so editing, deleting, or reordering any entry is detectable (``verify``). It
+so EDITING a field, deleting a MIDDLE entry, reordering, or duplicating is
+detectable (``verify``). Honest limit: trailing TRUNCATION (an attacker with
+file-write access lopping off the most recent lines) leaves a valid prefix and is
+NOT detectable from the file alone — closing that needs an external anchor (a
+signed head / append-only store), and an attacker who can rewrite this local file
+already implies a compromised host, which docs/Security.md puts out of scope. It
 records security-relevant EVENTS as metadata only — event type, capability, skill,
 actor, decision, reason — never secret values (string fields are run through the
 redactor) and never message/document PAYLOADS.
@@ -97,8 +102,9 @@ class AuditLog:
 
     def verify(self) -> Tuple[bool, int]:
         """Re-walk the chain. Returns (ok, first_bad_index); (True, -1) when the
-        log is intact. Any edited field (hash mismatch) or broken link (prev
-        mismatch) is caught."""
+        log is intact. An edited field (hash mismatch) or a broken link (prev
+        mismatch) is caught — but NOT trailing truncation (a valid prefix); see
+        the module docstring."""
         prev = _GENESIS
         for i, entry in enumerate(self.entries()):
             stored = entry.get("hash")
@@ -124,13 +130,15 @@ class AuditLog:
 def security_status(settings: Any, audit: Optional[AuditLog] = None) -> dict:
     """Plain-language security state for the HUD panel: which brain (with a big
     LOCAL/CLOUD badge), the guards' on/off, and recent security events."""
-    from security.egress import is_cloud
+    from security.egress import sends_off_machine
 
     provider = getattr(settings.llm, "provider", "ollama")
+    host = getattr(settings.llm, "host", "")
     sec = settings.security
     return {
         "brain": provider,
-        "cloud_active": is_cloud(provider),           # the obvious cloud indicator
+        # True for a cloud provider OR a remote/LAN Ollama — anything off-box.
+        "cloud_active": sends_off_machine(provider, host),
         "dev_mode": bool(getattr(sec, "yolo", False)),  # WHOLE layer off if True
         "owner_voice": bool(getattr(sec, "owner_voice", False)),
         "plugin_approval": bool(getattr(sec, "plugin_approval", False)),

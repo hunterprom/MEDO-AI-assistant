@@ -85,6 +85,17 @@ class Mechanisms:
             ok, "Done." if ok else "That key didn't go through.",
             verified=ok, data={"restored_focus": restored})
 
+    # -- global hotkey (no target window; the OS routes to the foreground) -----
+
+    def send_global_hotkey(self, keys: str) -> ActionResult:
+        """Send a hotkey to whatever is in the FOREGROUND (e.g. win+down to
+        minimize the current window). Unlike send_app_hotkey there is no window to
+        find/focus — so it works when the request names no app. Global, so the
+        effect can't be verified."""
+        ok = self._os.send_keys(keys)
+        return ActionResult(ok, "Done." if ok else "That didn't go through.",
+                            verified=False)
+
     # -- media keys (global; can't verify the effect) -------------------------
 
     def send_media_key(self, key: str) -> ActionResult:

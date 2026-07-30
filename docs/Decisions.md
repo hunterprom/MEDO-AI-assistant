@@ -741,3 +741,38 @@ The PROVIDER never changes — only the model string; `_pick_brain` returns the 
 client. Skipped for CLI agents (their model isn't a swappable tier) and for an
 unset/offline model. `fast_model` must match the active provider. Default:
 Ollama qwen3:30b / llama3.2:3b.
+
+## Bug sweep across the new features (2026-07-30)
+
+Adversarial review (3 agents) across the security layer, one-click app, connectors,
+and the latency changes; each finding verified against the code before fixing.
+
+**Fixed (real bugs):**
+- **Injection gate too narrow** (`security/trust.py`): `DANGEROUS_CAPS` reused the
+  owner-voice `HIGH_IMPACT` set, which omits `control_input`/`control_browser`/
+  `LEGACY_ACTUATION` — so injected content could type/click/open apps un-gated.
+  Now `DANGEROUS_CAPS = ACTUATION_CAPS` (everything that acts on the machine, minus
+  network so "search & play" stays smooth).
+- **Egress keyed on provider name** (`security/egress.py`): a remote/LAN Ollama
+  (`llm.host` off-box) was treated as local and leaked RAG/memory. Now host-aware
+  (`sends_off_machine`); a non-loopback Ollama needs an opt-in and shows CLOUD.
+- **build.py wrong dir** (`winsetup/build.py`): still pointed at the renamed
+  `packaging/` → the one-command build failed. Now `winsetup/`.
+- **Launcher orphans** (`app/launcher.py`): SIGTERM didn't stop the tray (so
+  `stop_all` never ran) and the process group was never signalled. Now the signal
+  handler stops the tray, and a `_Proc` wrapper CTRL_BREAKs then `taskkill /T /F`
+  the whole tree.
+- **Mic test ignored the selection** (`app/setup_ops.py`): recorded from the OS
+  default. Now maps the list index → real device id and passes `device=`.
+- **minimize connector broken** (`software/`): routed win+down through find-a-named-
+  window with an empty hint → never sent. Added `send_global_hotkey`.
+- **Second-opinion mis-routed on prose** (`core/council.py`): ranking on the answer
+  exposed common-word electrical triggers ("led"/"ground"/"current") — dropped them
+  and now rank answer+question combined.
+- Minor: language-pair invariant enforced in `set_field` too; smalltalk catches
+  "how're you".
+
+**Softened overclaims (honest limits, not code bugs):** audit `verify()` doesn't
+catch trailing truncation (needs an external anchor; a rewritable local file
+implies a compromised host = out of scope); plugin runtime gates each skill to ITS
+OWN declared caps (not auto-reconciled with the reviewed module CAPABILITIES).

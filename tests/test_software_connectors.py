@@ -178,6 +178,14 @@ def test_media_key_is_sent_but_unverified():
     assert r.success and b.media == ["next"] and r.data["verified"] is False
 
 
+def test_minimize_sends_a_global_hotkey_no_window_needed():
+    # Regression: minimize named no window, so routing it through find-a-window
+    # returned "couldn't find that app's window" and never sent win+down.
+    b = FakeBackend(windows=())                 # no windows at all
+    r = _run(_skill(WindowConnector(_mech(b)), "minimize"))
+    assert r.success and b.keys_sent == ["win+down"]
+
+
 # -- S2: CLI + API adapters go through the policy engine ----------------------
 
 def test_cli_adapter_refuses_without_the_capability():

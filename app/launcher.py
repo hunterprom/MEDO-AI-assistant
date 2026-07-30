@@ -99,15 +99,66 @@ def hud_url(settings) -> str:
 
 # -- real process spawner ------------------------------------------------------
 
-def _spawn(cmd: List[str]) -> subprocess.Popen:
+class _Proc:
+    """A Popen wrapper that kills the whole child TREE, not just the direct PID.
+
+    Windows ``TerminateProcess`` doesn't cascade to the process group, so a plain
+    ``proc.terminate()`` would orphan any grandchildren the engine spawned.
+    ``terminate()`` sends CTRL_BREAK to the group (we created one) so children
+    shut down GRACEFULLY (the engine runs its own cleanup); ``kill()`` is the
+    forceful ``taskkill /T /F`` fallback the supervisor uses after the grace
+    timeout. Exposes the slice of Popen the supervisor needs."""
+
+    def __init__(self, popen: subprocess.Popen) -> None:
+        self._p = popen
+
+    def poll(self):
+        return self._p.poll()
+
+    def wait(self, timeout=None):
+        return self._p.wait(timeout)
+
+    def terminate(self) -> None:
+        if os.name == "nt":
+            try:
+                self._p.send_signal(signal.CTRL_BREAK_EVENT)  # whole group
+                return
+            except Exception:
+                pass
+            self._tree_kill()
+        else:
+            try:
+                self._p.terminate()
+            except Exception:
+                pass
+
+    def kill(self) -> None:
+        self._tree_kill() if os.name == "nt" else self._safe(self._p.kill)
+
+    def _tree_kill(self) -> None:
+        try:
+            subprocess.run(["taskkill", "/PID", str(self._p.pid), "/T", "/F"],
+                           capture_output=True, timeout=10)
+        except Exception:
+            self._safe(self._p.kill)
+
+    @staticmethod
+    def _safe(fn) -> None:
+        try:
+            fn()
+        except Exception:
+            pass
+
+
+def _spawn(cmd: List[str]) -> _Proc:
     kwargs: dict = {}
     if os.name == "nt":
-        # Own process group so a wedged child TREE can be killed as a unit
-        # (the current run.bat's orphan-leak comes from not doing this).
+        # Own process group so the whole child TREE can be signalled/killed as a
+        # unit (the current run.bat's orphan leak comes from not doing this).
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    return subprocess.Popen(cmd, **kwargs)
+    return _Proc(subprocess.Popen(cmd, **kwargs))
 
 
 # -- integration glue (not unit-tested) ---------------------------------------
@@ -150,9 +201,16 @@ def run() -> None:  # pragma: no cover - desktop integration
     sup = Supervisor(children, spawn=_spawn, now=time.monotonic,
                      on_error=_notify_error)
     stop = threading.Event()
+    tray = {"icon": None}
 
     def shutdown(*_a) -> None:
         stop.set()
+        icon = tray["icon"]
+        if icon is not None:      # unblock icon.run() so the finally tears down
+            try:
+                icon.stop()
+            except Exception:
+                pass
 
     atexit.register(lambda: sup.stop_all())
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -166,7 +224,7 @@ def run() -> None:  # pragma: no cover - desktop integration
     threading.Thread(target=_open_hud_when_ready, args=(sup, settings, stop),
                      daemon=True).start()
 
-    icon = _make_tray(sup, settings, stop)
+    icon = tray["icon"] = _make_tray(sup, settings, stop)
     try:
         if icon is not None:
             icon.run()               # blocks on the tray until Quit

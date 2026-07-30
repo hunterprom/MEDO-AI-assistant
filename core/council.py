@@ -65,10 +65,15 @@ COUNCIL: tuple[Specialist, ...] = (
         "current, power budgets, grounding, pull-ups, protection and part "
         "selection. You are practical: you name real parts and real values, "
         "and you flag anything that would let the magic smoke out.",
-        ("circuit", "voltage", "current", "resistor", "capacitor", "led",
-         "ground", "amp", "power supply", "mosfet", "transistor", "pcb",
-         "solder", "wire", "wiring", "electrician", "mains", "струја",
-         "напон", "отпорник", "коло", "жица", "струен"),
+        # NOTE: "led"/"ground"/"current" were dropped — as bare words they
+        # false-match ordinary prose ("a null pointer LED to the crash", "feet on
+        # the GROUND", "the CURRENT approach"), which mis-routed second-opinion
+        # audits once it started ranking on the answer text. Real electrical
+        # content still routes via the specific terms below.
+        ("circuit", "voltage", "resistor", "capacitor", "amp", "power supply",
+         "mosfet", "transistor", "pcb", "solder", "wire", "wiring",
+         "electrician", "mains", "струја", "напон", "отпорник", "коло",
+         "жица", "струен"),
         aliases=("електроинженер", "електро инженер", "инженер за струја",
                  "electronics engineer", "electrical"),
         wants_tools=True,

@@ -60,6 +60,11 @@ def set_field(key: str, value: Any, path=None) -> Any:
     """Validate then persist one setting. Raises ValueError/KeyError on a bad
     value — the invalid state is never written."""
     validated = _validate(key, value)
+    if key in ("language_primary", "language_secondary"):
+        other_key = ("language_secondary" if key == "language_primary"
+                     else "language_primary")
+        if validated == get_all(path).get(other_key):
+            raise ValueError("the two languages must be different")
     data = _us.load(path)
     data.setdefault("app", {})[key] = validated
     _us.save(data, path)
@@ -67,13 +72,17 @@ def set_field(key: str, value: Any, path=None) -> Any:
 
 
 def set_language_pair(primary: str, secondary: str, path=None) -> None:
-    """The 2-language feature: both must be supported and DIFFERENT."""
+    """The 2-language feature: both must be supported and DIFFERENT. Written
+    atomically (both at once) so the pair is never transiently equal."""
     _validate("language_primary", primary)
     _validate("language_secondary", secondary)
     if primary == secondary:
         raise ValueError("the two languages must be different")
-    set_field("language_primary", primary, path)
-    set_field("language_secondary", secondary, path)
+    data = _us.load(path)
+    app = data.setdefault("app", {})
+    app["language_primary"] = primary
+    app["language_secondary"] = secondary
+    _us.save(data, path)
 
 
 def set_profile(name: str, path=None) -> str:
