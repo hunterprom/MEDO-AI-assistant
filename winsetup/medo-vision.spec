@@ -11,7 +11,11 @@
 # analyzer, so collect them explicitly or the frozen sidecar fails at runtime
 # with "graph not found".
 
+import os
+
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+ICON = os.path.join(SPECPATH, "medo.ico")   # the MEDO logo, embedded in the exe
 
 hiddenimports = collect_submodules("mediapipe")
 datas = collect_data_files("mediapipe", include_py_files=True)  # incl. .binarypb
@@ -28,5 +32,5 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="medo-vision",
-          console=False, disable_windowed_traceback=True)
+          console=False, disable_windowed_traceback=True, icon=ICON)
 coll = COLLECT(exe, a.binaries, a.datas, name="medo-vision")

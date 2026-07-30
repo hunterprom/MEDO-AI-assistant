@@ -7,7 +7,11 @@
 # them (keeps the installer small). The vision sidecar is a SEPARATE bundle
 # (medo-vision.spec) because mediapipe pins numpy<2.
 
+import os
+
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+ICON = os.path.join(SPECPATH, "medo.ico")   # the MEDO logo, embedded in the exe
 
 hiddenimports = []
 # faster-whisper + onnxruntime + ctranslate2 hide their backends from the analyzer.
@@ -39,5 +43,5 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="medo-engine",
-          console=False, disable_windowed_traceback=True)
+          console=False, disable_windowed_traceback=True, icon=ICON)
 coll = COLLECT(exe, a.binaries, a.datas, name="medo-engine")

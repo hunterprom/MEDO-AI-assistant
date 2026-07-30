@@ -15,12 +15,14 @@ AppPublisher={#Publisher}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 UninstallDisplayName={#AppName}
-UninstallDisplayIcon={app}\{#AppExe}
+UninstallDisplayIcon={app}\medo.ico
 OutputBaseFilename=MEDO-Setup
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=admin
 WizardStyle=modern
+; The MEDO logo: icon of MEDO-Setup.exe itself and of the wizard window.
+SetupIconFile=medo.ico
 ArchitecturesInstallIn64BitMode=x64compatible
 ; CODE SIGNING (see docs/Packaging.md): without a signed exe, Windows SmartScreen
 ; will warn on first run. Sign dist\MEDO\MEDO.exe and MEDO-Setup.exe with
@@ -35,10 +37,12 @@ Source: "..\dist\MEDO\*";         DestDir: "{app}";          Flags: recursesubdi
 ; ...engine and vision as SEPARATE bundles in subfolders (vision = numpy<2 env).
 Source: "..\dist\medo-engine\*";  DestDir: "{app}\engine";   Flags: recursesubdirs ignoreversion
 Source: "..\dist\medo-vision\*";  DestDir: "{app}\vision";   Flags: recursesubdirs ignoreversion
+; App icon — used by the shortcuts and Programs & Features (see [Icons] below).
+Source: "medo.ico";               DestDir: "{app}";          Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#AppName}";          Filename: "{app}\{#AppExe}"
-Name: "{commondesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"
+Name: "{group}\{#AppName}";          Filename: "{app}\{#AppExe}"; IconFilename: "{app}\medo.ico"
+Name: "{commondesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; IconFilename: "{app}\medo.ico"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Run]
