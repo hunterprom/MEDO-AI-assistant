@@ -26,8 +26,16 @@ from core.safety import PathWhitelist, is_affirmative, is_negative
 from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
 from llm.tools import build_tools, coerce_args, dispatch_tool
+from security.audit import (
+    CLOUD_CALL,
+    CONFIRM_DENIED,
+    CONFIRM_GRANTED,
+    POLICY_DENY,
+    AuditLog,
+)
 from security.capabilities import effective_capabilities
 from security.policy import Actor, PolicyEngine, Provenance
+from security.secrets import Secrets
 from security.trust import DANGEROUS_CAPS, UNTRUSTED_CONTENT_TOOLS, mark_untrusted
 from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
@@ -149,6 +157,11 @@ class Router:
         self._policy = PolicyEngine(
             settings.security, settings.safety,
             PathWhitelist(settings.safety.whitelist_dirs))
+        #: Tamper-evident audit trail (S6), off unless security.audit_enabled.
+        #: Secret values are redacted out of every entry.
+        self._audit_log = (AuditLog(redactor=Secrets(settings).redact)
+                           if getattr(settings.security, "audit_enabled", False)
+                           else None)
         #: Lazily-built local Ollama client used to answer live-info queries when
         #: the selected brain is a CLI agent that can't use MEDO's tools.
         self._tool_brain: OllamaClient | None = None
@@ -732,6 +745,11 @@ class Router:
             return Actor.LAN_CLIENT
         return Actor.LOCAL_USER
 
+    def _audit(self, event: str, **fields: Any) -> None:
+        """Record a security-relevant event (no-op unless auditing is on)."""
+        if self._audit_log is not None:
+            self._audit_log.record(event, **fields)
+
     async def _run_skill(self, skill: Skill, request: SkillRequest,
                          path: RoutePath = RoutePath.FAST) -> RouteResult:
         """Execute a fast-path (or semantic-tier) skill, deferring for
@@ -745,6 +763,7 @@ class Router:
         """
         gate = self._policy.gate_skill(skill, actor=self._actor_for(request.context))
         if gate.denied():
+            self._audit(POLICY_DENY, skill=skill.name, code=gate.code)
             speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
                       else gate.reason)
             return RouteResult(path=path, speech=speech, skill_name=skill.name)
@@ -786,6 +805,7 @@ class Router:
                 return RouteResult(path=RoutePath.FAST, speech=speech,
                                   skill_name=skill.name)
             request.context = {**request.context, "confirmed": True}
+            self._audit(CONFIRM_GRANTED, skill=skill.name)
             outcome = await self._safe_execute(skill, request)  # performs the action
             return RouteResult(
                 path=RoutePath.FAST,
@@ -795,6 +815,7 @@ class Router:
             )
         if is_negative(text):
             self._pending = None
+            self._audit(CONFIRM_DENIED, skill=skill.name)
             return RouteResult(path=RoutePath.FAST, speech=CANCELLED_REPLY)
         # Anything else: don't guess with a destructive action — cancel and re-route.
         self._pending = None
@@ -1074,9 +1095,13 @@ class Router:
 
         # Cloud data-egress gate (S5): a CLOUD brain gets your question, not your
         # local documents/memory/files — unless you opted THAT brain in.
-        from security.egress import LOCAL_CONTENT_TOOLS, local_context_allowed
+        from security.egress import (
+            LOCAL_CONTENT_TOOLS, is_cloud, local_context_allowed)
         egress_ok = local_context_allowed(self._settings.security,
                                           self._settings.llm.provider)
+        if is_cloud(self._settings.llm.provider):
+            self._audit(CLOUD_CALL, brain=self._settings.llm.provider,
+                        local_context=egress_ok)
 
         tools = build_tools(self._registry)
         # Don't even OFFER a tool the policy would refuse this turn (e.g. an

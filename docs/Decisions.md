@@ -667,3 +667,19 @@ the router WITHHOLDS local memory/facts from the prompt AND drops local-content
 tools (search_documents/files/…) from the tool list — so RAG documents and memory
 never leave the machine unopted-in. A local (ollama) brain always keeps context.
 Default: withhold. Verified through the real router (test_secrets_egress.py).
+
+## Security layer S6: tamper-evident audit log + security surface (2026-07-30)
+
+**Decision: append-only, HASH-CHAINED audit — metadata only.** `security/audit.py`:
+each entry carries the previous entry's hash, so any edit/delete/reorder is
+detected by `verify()`. Records security events (policy denials, confirmations,
+cloud calls, …) as metadata — event type, capability, skill, actor, decision —
+never secret values (redacted) or message/document PAYLOADS.
+`python -m security.audit --report` verifies the chain + aggregates.
+`security_status()` feeds the HUD panel (active brain + LOCAL/CLOUD badge, guard
+on/off states, recent events). Off by default (`security.audit_enabled`); router
+records a POLICY_DENY / CONFIRM_GRANTED-DENIED / CLOUD_CALL when on.
+
+Security layer COMPLETE (S1–S6). Full trust model + honest threat limits (esp.
+in-process plugin confinement needing a subprocess sandbox) documented in
+docs/Security.md §8.

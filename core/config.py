@@ -812,6 +812,9 @@ class SecurityConfig(BaseModel):
     #: default (bundled plugins load as before); on = an un-approved plugin's code
     #: is not even imported until the user approves it (python -m security.plugins).
     plugin_approval: bool = False
+    #: S6: write the tamper-evident audit log of security-relevant events. Off by
+    #: default (no extra disk writes); on = python -m security.audit --report.
+    audit_enabled: bool = False
 
 
 class SoftwareConfig(BaseModel):

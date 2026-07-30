@@ -199,3 +199,67 @@ security model relies on two things staying true: **the network stays private
 only extend it with code you trust (plugins, MCP servers, cloud providers)**.
 Hold those, and MEDO is safe. Break either, and it's as exposed as any tool
 that can see your screen and move your mouse.
+
+---
+
+## 8. The MEDO Security Layer (central policy engine — 2026-07)
+
+The scattered guards above were unified behind ONE deny-by-default policy engine
+(`security/`), so protections are coherent, testable, and hard to bypass. All of
+it is additive and config-gated — `security.enabled` keeps the actuation safety
+floor even when off; the newer gates default off so nothing changes until you
+turn them on.
+
+**The one authority.** Every side-effectful action routes through
+`PolicyEngine.check(ActionRequest) → allow | confirm | deny`. It is a PURE
+function (heavily unit-tested) and **fails closed** — any error denies. The router
+gates its fast, semantic, and LLM-tool paths through it.
+
+**Capabilities (least privilege).** Skills/plugins/devices declare what they need
+from this vocabulary; anything undeclared is denied:
+`read_files`, `write_files`, `run_command`, `control_input`, `power_control`,
+`session_control`, `network`, `control_browser`, `control_device`,
+`use_cloud_brain`, `install_plugin`, `modify_self`. Read-only sensing declares
+nothing and is always allowed. The coarse `controls_pc` bit is kept and *derived*
+(an invariant test guarantees it equals "holds an actuation capability").
+
+**Trust boundary (the headline injection defense).** Instructions come ONLY from
+the authenticated user's voice/text. Everything else — documents, web pages, tool
+output, device data, memory — is DATA. Content from RAG/web tools is WRAPPED as
+untrusted before the model sees it, and the system prompt says wrapped content is
+quoted data. The hard backstop is the **post-LLM action gate**: even if injected
+text convinces the model to emit a high-impact action, that action is re-judged
+with `UNTRUSTED` provenance and CONFIRMED or DENIED — proposing ≠ executing.
+
+**Owner voice (optional).** With `security.owner_voice` on, high-impact actions
+require the enrolled OWNER's voice (local speaker verification; only a voiceprint
+embedding is stored, never audio). Fails closed if not enrolled.
+
+**Plugin gate (optional).** With `security.plugin_approval` on, a new/changed
+plugin's declared capabilities are read STATICALLY and its code is NOT imported
+until you approve it (`python -m security.plugins`). Approval is digest-bound.
+
+**Cloud data-egress.** A cloud brain gets your question, not your local
+documents/memory/files — unless you opt THAT brain in (`cloud_egress_optin`).
+Secrets are centralized (`security/secrets.py`) and redacted from logs + the audit.
+
+**Audit (optional).** With `security.audit_enabled` on, security events (policy
+denials, confirmations, cloud calls…) are written to a HASH-CHAINED log —
+metadata only, no payloads/secrets. `python -m security.audit --report` verifies
+the chain (any edit/delete is detected) and summarizes.
+
+**Honest limits (still out of scope):**
+- **In-process plugin confinement.** Approval stops unapproved code from running
+  and skills are capability-gated, but once an approved plugin is imported, Python
+  can't stop `import httpx` inside it. Strong third-party confinement needs a
+  subprocess sandbox — future work.
+- **A compromised OS / an attacker already on the machine.** A local app can't
+  defend a host that's already owned.
+- Prompt-injection defense is defense-in-depth, not a proof — the post-LLM gate
+  is the reliable backstop, the prompt marking is a helpful nudge.
+
+**Interview note:** MEDO has a central deny-by-default policy engine with a hard
+user-instruction-vs-external-data trust boundary, post-LLM action gating against
+prompt injection, capability-scoped plugin sandboxing, optional local speaker
+verification for high-impact actions, a local-first cloud-egress gate, and a
+hash-chained audit log.
