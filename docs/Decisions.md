@@ -728,3 +728,16 @@ line instead of the LLM. Registered LATE so a real skill (a morning briefing on
 "good morning") still wins first. Patterns are tight + mostly END-ANCHORED so
 "how are you going to fix this?" is NOT small talk — the adversarial non-matches
 are the load-bearing tests.
+
+## Latency: auto model TIER within the same brain (2026-07-30)
+
+**Decision: a simple turn uses a lighter model of the SAME provider; a complex
+one keeps the strong model.** `llm.auto_model` + `llm.fast_model`: a deterministic
+classifier (`pick_model_tier`) sends short/conversational turns to `fast_model`
+(qwen3:30b -> llama3.2:3b, or opus/sonnet -> haiku) and keeps `default_model` for
+anything with a complexity signal (why/explain/compare/derive/code/long/multi-
+question). It leans STRONG on any signal, so a hard question is never downgraded.
+The PROVIDER never changes — only the model string; `_pick_brain` returns the same
+client. Skipped for CLI agents (their model isn't a swappable tier) and for an
+unset/offline model. `fast_model` must match the active provider. Default:
+Ollama qwen3:30b / llama3.2:3b.

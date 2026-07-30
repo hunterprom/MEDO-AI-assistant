@@ -75,6 +75,35 @@ _FOLLOWUP_RE = re.compile(
 def _is_followup_question(text: str) -> bool:
     return "?" in text or bool(_FOLLOWUP_RE.search(text))
 
+
+#: Signals a turn is COMPLEX enough to want the STRONG model; everything else is
+#: short/simple/conversational and gets the FAST model of the same provider.
+#: Deterministic (no extra round-trip) and leans strong on ANY signal, so a hard
+#: question is never downgraded — only clearly-simple turns are sped up.
+_STRONG_QUERY_RE = re.compile(
+    r"\b(why|explain|analy[sz]e|compare|versus|derive|prove|proof|design|"
+    r"architect\w*|evaluate|trade[- ]?offs?|calculate|optimi[sz]e|debug|refactor|"
+    r"algorithm|justify|implication|reasoning|step[- ]by[- ]step|walk me through|"
+    r"in detail|pros and cons|objasni|зошто|анализ|спореди|докажи)\b",
+    re.IGNORECASE)
+_CODE_QUERY_RE = re.compile(
+    r"\b(code|function|traceback|stack trace|regex|sql|compile\w*|python|"
+    r"javascript|typescript|rust|golang)\b", re.IGNORECASE)
+
+
+def pick_model_tier(text: str, *, long_words: int = 24) -> str:
+    """'fast' for short/simple turns, 'strong' for complex/reasoning ones."""
+    t = (text or "").strip()
+    if not t:
+        return "fast"
+    if len(t.split()) >= long_words:          # a long, multi-part question
+        return "strong"
+    if t.count("?") >= 2:                      # several questions at once
+        return "strong"
+    if _STRONG_QUERY_RE.search(t) or _CODE_QUERY_RE.search(t):
+        return "strong"
+    return "fast"
+
 #: How many tool rounds before we force a final text answer (loop guard).
 MAX_TOOL_ROUNDS = 4
 #: Re-check a DOWN council tool-brain no more than once per this many seconds,
@@ -1036,7 +1065,28 @@ class Router:
                 logger.info("auto tool-brain: %r needs live info -> %s",
                             text, self._settings.llm.tool_brain_model)
                 return tb, self._settings.llm.tool_brain_model, True
-        return self._llm, self.model, False
+        return self._llm, self._tier_model(text), False
+
+    def _tier_model(self, text: str) -> str | None:
+        """Auto-pick a lighter model of the SAME provider for a simple turn.
+
+        The brain (provider) never changes — only the model TIER: qwen3:30b ->
+        llama3.2:3b, or opus/sonnet -> haiku. Enabled by ``llm.auto_model`` with a
+        same-provider ``llm.fast_model``; a complex question always keeps the
+        strong model. Never overrides an unset/offline model (so tests that null
+        the model stay offline)."""
+        model = self.model
+        fast = self._settings.llm.fast_model
+        # CLI agents (claude-code/codex) aren't a swappable model tier — their
+        # "model" is the agent's; leave it. Tiering is for ollama/openai/anthropic.
+        if self._settings.llm.provider in CLI_PROVIDERS:
+            return model
+        if (model and fast and self._settings.llm.auto_model
+                and pick_model_tier(text) == "fast"):
+            if fast != model:
+                logger.info("auto-model: simple turn -> %s (from %s)", fast, model)
+            return fast
+        return model
 
     def _wants_live_info(self, text: str) -> bool:
         """Whether this turn likely needs live/online info the CLI agent can't get.

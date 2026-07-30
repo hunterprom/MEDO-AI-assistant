@@ -72,6 +72,13 @@ class LLMConfig(BaseModel):
     cli_timeout_s: float = 180.0
     default_model: str | None = None
     fallback_model: str = "llama3.2:3b"
+    # Auto model TIER (same brain, lighter model on simple turns). When
+    # ``auto_model`` is on, a short/simple question uses ``fast_model`` and a
+    # complex/reasoning one keeps ``default_model`` — e.g. qwen3:30b -> llama3.2:3b,
+    # or opus/sonnet -> haiku. ``fast_model`` MUST be a model of the ACTIVE
+    # provider (empty = never downgrade). The provider never changes.
+    auto_model: bool = False
+    fast_model: str = ""
     # Auto tool-brain: the CLI agents (claude-code/codex) can't use MEDO's tools,
     # so a query that needs live/online info (search, "latest…", "who won…") is
     # run on this local Ollama model for that ONE turn — it has web_search and

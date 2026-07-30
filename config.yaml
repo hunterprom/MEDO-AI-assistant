@@ -30,6 +30,11 @@ llm:
   # stripped in llm/client.py. Falls back to the first installed model if absent.
   default_model: "qwen3:30b"
   fallback_model: "llama3.2:3b"
+  # Auto model tier (same brain): a simple/short question uses fast_model, a
+  # complex one keeps default_model. fast_model MUST match the active provider
+  # (qwen3:30b -> llama3.2:3b for Ollama; opus/sonnet -> a haiku for Anthropic).
+  auto_model: true
+  fast_model: "llama3.2:3b"
   # Auto tool-brain: the CLI brains (claude-code/codex) can't use MEDO's tools,
   # so a query needing live/online info is answered by this local Ollama model
   # for that ONE turn (it has web_search etc.), then MEDO reverts to your
