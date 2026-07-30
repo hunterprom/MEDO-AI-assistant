@@ -221,6 +221,8 @@ class RemoteServer:
         # polls; a human approves in the HUD. Pruned on every touch by TTL.
         self._pair_requests: dict[str, dict] = {}
         self._udp_transport: asyncio.DatagramTransport | None = None
+        # Lazily-built Mechanisms for the SOFTWARE CONTROL panel's live status.
+        self._software_mech = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
         self._sys: dict = {"cpu": None, "ram": None, "gpu": None}
@@ -282,6 +284,8 @@ class RemoteServer:
         app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_post("/control/mcp", self._handle_mcp_add)
         app.router.add_post("/control/mcp/remove", self._handle_mcp_remove)
+        app.router.add_get("/software", self._handle_software_status)
+        app.router.add_post("/control/software", self._handle_software_control)
         app.router.add_get("/routines", self._handle_routines_status)
         app.router.add_post("/control/routines", self._handle_routines_set)
         app.router.add_get("/webhooks", self._handle_webhooks_status)
@@ -767,6 +771,92 @@ class RemoteServer:
             {"ok": True, "enabled": self._settings.mcp.enabled,
              "configured": configured, "servers": servers}
         )
+
+    def _software_mechanisms(self):
+        """A Mechanisms for connector detect() (installed/running), built lazily
+        and cached. Windows-only (Win32Backend); returns None anywhere it can't
+        be built, so the panel degrades to metadata-only rather than erroring."""
+        if getattr(self, "_software_mech", None) is not None:
+            return self._software_mech
+        try:
+            from core.safety import PathWhitelist
+            from security.policy import PolicyEngine
+            from software.mechanisms import Mechanisms
+            from software.win32_backend import Win32Backend
+
+            policy = PolicyEngine(self._settings.security, self._settings.safety,
+                                  PathWhitelist(self._settings.safety.whitelist_dirs))
+            self._software_mech = Mechanisms(
+                Win32Backend(), policy,
+                exe_paths=self._settings.software.exe_paths)
+        except Exception:
+            logger.debug("software mechanisms unavailable", exc_info=True)
+            self._software_mech = None
+        return self._software_mech
+
+    async def _handle_software_status(self, request: web.Request) -> web.Response:
+        """Software connectors (control local apps by command) for the HUD panel:
+        the master switch, and each connector's on/off, live availability, and
+        the kinds of commands it understands."""
+        from software.connectors import CONNECTOR_CLASSES
+
+        sw = self._settings.software
+        mech = await asyncio.to_thread(self._software_mechanisms)
+        connectors = []
+        for cls in CONNECTOR_CLASSES:
+            app_id = getattr(cls, "app_id", "") or cls.__name__
+            entry = {
+                "app_id": app_id,
+                "display_name": getattr(cls, "display_name", app_id) or app_id,
+                "enabled": sw.connectors.get(app_id, True) is not False,
+                "actions": [], "installed": None, "running": None,
+            }
+            try:
+                conn = cls(mech)
+                entry["actions"] = [a.name.replace("_", " ")
+                                    for a in conn.actions()]
+                if mech is not None:
+                    det = await asyncio.to_thread(conn.detect)
+                    entry["installed"] = bool(det.installed)
+                    entry["running"] = bool(det.running)
+            except Exception:
+                logger.debug("connector %s introspect failed", app_id,
+                             exc_info=True)
+            connectors.append(entry)
+        return web.json_response(
+            {"ok": True, "enabled": bool(sw.enabled), "connectors": connectors})
+
+    async def _handle_software_control(self, request: web.Request) -> web.Response:
+        """The HUD's SOFTWARE CONTROL panel: master ``{"on": bool}`` and/or a
+        per-connector ``{"app_id":..., "app_on": bool}``. Connectors register at
+        startup, so a change takes effect on the next restart (``restart: true``);
+        it's persisted per machine so the choice survives."""
+        from core.config import save_software
+
+        body = await _json_dict(request)
+        sw = self._settings.software
+        changed: dict = {}
+        if "on" in body:
+            sw.enabled = bool(body["on"])
+            changed["enabled"] = sw.enabled
+        app_id = body.get("app_id")
+        if app_id is not None:
+            if "app_on" not in body:
+                return _error(400, "per-connector toggle needs "
+                                   "{\"app_id\":..., \"app_on\": true|false}")
+            val = bool(body["app_on"])
+            sw.connectors[str(app_id)] = val
+            changed.setdefault("connectors", {})[str(app_id)] = val
+        if not changed:
+            return _error(400, "body must set {\"on\": bool} and/or "
+                               "{\"app_id\":..., \"app_on\": bool}")
+        if self._persist_secrets:
+            save_software(enabled=changed.get("enabled"),
+                          connectors=changed.get("connectors"))
+        logger.info("software control updated via HUD: %s", changed)
+        return web.json_response({"ok": True, "enabled": bool(sw.enabled),
+                                  "connectors": dict(sw.connectors),
+                                  "restart": True})
 
     async def _handle_mcp_add(self, request: web.Request) -> web.Response:
         """Add/update an MCP server from the HUD: name + URL (+ optional bearer

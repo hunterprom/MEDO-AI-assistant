@@ -283,5 +283,61 @@ def test_register_software_adds_to_a_registry():
     assert n > 0 and reg.find_match("pause the music") is not None
 
 
+# -- S5: the HUD SOFTWARE CONTROL panel (endpoints + persistence) -------------
+
+def _serve(check):
+    """Run ``check(client, settings)`` against a live RemoteServer (no persist)."""
+    from aiohttp.test_utils import TestClient, TestServer
+    from core.events import EventBus, StateMachine
+    from remote.server import RemoteServer
+
+    async def run():
+        settings = load_settings()
+        server = RemoteServer(settings, router=None, sm=StateMachine(EventBus()))
+        client = TestClient(TestServer(server.build_app()))
+        await client.start_server()
+        try:
+            return await check(client, settings)
+        finally:
+            await client.close()
+    return asyncio.run(run())
+
+
+def test_software_status_lists_connectors_and_actions():
+    async def check(client, settings):
+        d = await (await client.get("/software")).json()
+        assert d["ok"] and d["enabled"] is False               # off by default
+        ids = {c["app_id"] for c in d["connectors"]}
+        assert {"media", "window", "browser"} <= ids           # all shipped ones
+        media = next(c for c in d["connectors"] if c["app_id"] == "media")
+        assert media["enabled"] is True and "play pause" in media["actions"]
+    _serve(check)
+
+
+def test_software_control_toggles_master_and_per_connector():
+    async def check(client, settings):
+        r = await (await client.post("/control/software", json={"on": True})).json()
+        assert r["ok"] and r["enabled"] is True and r["restart"] is True
+        assert settings.software.enabled is True               # applied live
+        r2 = await (await client.post(
+            "/control/software", json={"app_id": "browser", "app_on": False})).json()
+        assert r2["connectors"]["browser"] is False
+        assert settings.software.connectors["browser"] is False
+        # a per-connector toggle without app_on, and an empty body, are 400s
+        assert (await client.post("/control/software",
+                                  json={"app_id": "media"})).status == 400
+        assert (await client.post("/control/software", json={})).status == 400
+    _serve(check)
+
+
+def test_software_choice_persists_and_reloads(tmp_path):
+    from core.config import apply_local_secrets, save_software
+    p = tmp_path / "overrides.yaml"
+    save_software(enabled=True, connectors={"browser": False}, path=p)
+    settings = apply_local_secrets(load_settings(), p)
+    assert settings.software.enabled is True
+    assert settings.software.connectors.get("browser") is False
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

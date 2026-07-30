@@ -1306,6 +1306,12 @@ def apply_local_secrets(settings: Settings, path: Path = SECRETS_PATH) -> Settin
         settings.browser.channel = str(browser["channel"])
     if "executable_path" in browser:
         settings.browser.executable_path = str(browser["executable_path"])
+    software = data.get("software", {}) or {}  # the HUD's SOFTWARE CONTROL panel
+    if "enabled" in software:
+        settings.software.enabled = bool(software["enabled"])
+    if isinstance(software.get("connectors"), dict):
+        settings.software.connectors.update(
+            {str(k): bool(v) for k, v in software["connectors"].items()})
     for name, spec in (data.get("mcp_servers", {}) or {}).items():
         # MCP servers added from the HUD (their auth tokens are secret, so they
         # live here, never in config.yaml). Merged onto any config.yaml servers.
@@ -1409,6 +1415,25 @@ def save_pc_control(enabled: bool, path: Path = SECRETS_PATH) -> None:
         _write_local(data, path)
     except Exception:
         logging.getLogger(__name__).exception("could not persist the PC-control switch")
+
+
+def save_software(enabled: bool | None = None, connectors: dict | None = None,
+                  path: Path = SECRETS_PATH) -> None:
+    """Persist the HUD's SOFTWARE CONTROL panel (control other local apps by
+    command). ``enabled`` is the master switch; ``connectors`` is a per-app
+    ``{app_id: on}`` map merged onto what's stored. Remembered per machine."""
+    try:
+        data = _read_local(path)
+        sw = data.setdefault("software", {})
+        if enabled is not None:
+            sw["enabled"] = bool(enabled)
+        if connectors:
+            sw.setdefault("connectors", {}).update(
+                {str(k): bool(v) for k, v in connectors.items()})
+        _write_local(data, path)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "could not persist the software-control panel")
 
 
 def save_semantic_mode(mode: str, path: Path = SECRETS_PATH) -> str:

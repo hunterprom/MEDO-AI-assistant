@@ -813,6 +813,10 @@
         <button class="toggle" id="cfg-dev"><span class="knob"></span></button>
       </div>
       <div class="setting">
+        <div class="info"><span class="name">App control</span><span class="desc">LET MEDO CONTROL LOCAL APPS BY VOICE — MEDIA · WINDOWS · BROWSER · DIRECT CONTROL, NOT MCP · GATED BY THE POLICY ENGINE · APPLIES ON RESTART · MANAGE PER-APP UNDER CONNECT</span></div>
+        <button class="toggle" id="cfg-software"><span class="knob"></span></button>
+      </div>
+      <div class="setting">
         <div class="info"><span class="name" data-i18n="continuous">Continuous conversation</span><span class="desc">KEEP LISTENING AFTER EACH REPLY — NO WAKE WORD BETWEEN TURNS</span></div>
         <button class="toggle" id="cfg-continuous"><span class="knob"></span></button>
       </div>
@@ -969,6 +973,18 @@
           THEIR TOOLS BECOME SKILLS THE BRAIN CAN CALL · CONNECTS ON RESTART · LOCAL (COMMAND) SERVERS STILL GO IN config.yaml → mcp.servers · DROP-IN PYTHON SKILLS GO IN plugins/
         </div>
       </div>
+      <div class="head" style="margin-top:8px">SOFTWARE CONTROL · LOCAL APPS</div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">Local apps</span><span class="desc" id="sw-desc">CONTROL MEDIA / WINDOWS / BROWSER BY VOICE · DIRECT LOCAL CONTROL, NOT MCP · LOADING…</span></div>
+        <div style="display:flex;gap:10px;align-items:center;padding:2px 0 6px">
+          <button class="toggle" id="sw-master"><span class="knob"></span></button>
+          <span style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#8fb8dd">LET MEDO CONTROL LOCAL APPS</span>
+        </div>
+        <div id="sw-list" class="sr-list"></div>
+        <div id="sw-hint" style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.06em">
+          EACH APP'S COMMANDS BECOME SKILLS THE BRAIN CAN RUN (SAY "PAUSE", "MINIMISE", "NEW TAB", "CLOSE NOTEPAD") · EVERY ONE GATED BY THE POLICY ENGINE, NEVER TRIGGERED BY A DOCUMENT OR WEB PAGE · APPLIES ON RESTART
+        </div>
+      </div>
       <div class="head" style="margin-top:8px">ROUTINES · SCHEDULED</div>
       <div class="setting col-layout">
         <div class="info"><span class="name">Proactive routines</span><span class="desc" id="routines-desc">AT A TIME, MEDO ASKS THESE THINGS &amp; ANNOUNCES THE ANSWERS · RUNS DAILY · TAKES A RESTART</span></div>
@@ -1103,7 +1119,7 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'core') scrollChat();    // the chat panel lives here now
-    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadRoutines(); loadWebhooks(); loadSelfDev(); loadLinkDevices(); loadPairPending(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadSoftware(); loadRoutines(); loadWebhooks(); loadSelfDev(); loadLinkDevices(); loadPairPending(); }
     clusterOnShow(screen === 'cluster');   // start/stop the animation loop
   }
   $('tab-core').onclick = () => go('core');
@@ -2127,6 +2143,66 @@
       } else st.textContent = r.error || 'failed';
     } catch { st.textContent = 'API offline'; }
   };
+
+  /* ---- SOFTWARE CONTROL: control local apps by command (not MCP) ---- */
+  async function setSoftwareMaster(on) {
+    try {
+      const r = await (await fetch(`${API}/control/software`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ on }),
+      })).json();
+      if (r.ok) { log(`APP CONTROL ${r.enabled ? 'ENABLED' : 'DISABLED'} · RESTART TO APPLY`); loadSoftware(); }
+    } catch { log('APP CONTROL — API offline'); }
+  }
+  $('cfg-software').onclick = () => setSoftwareMaster(!$('cfg-software').classList.contains('on'));
+  $('sw-master').onclick = () => setSoftwareMaster(!$('sw-master').classList.contains('on'));
+
+  async function loadSoftware() {
+    const desc = $('sw-desc'), list = $('sw-list');
+    try {
+      const d = await (await fetch(`${API}/software`)).json();
+      const enabled = !!d.enabled;
+      $('cfg-software').classList.toggle('on', enabled);   // top-level toggle
+      $('sw-master').classList.toggle('on', enabled);      // in-panel toggle
+      const conns = d.connectors || [];
+      const on = conns.filter(c => c.enabled).length;
+      desc.textContent = enabled
+        ? `CONTROL LOCAL APPS BY VOICE · ${on}/${conns.length} CONNECTOR(S) ON · DIRECT CONTROL, NOT MCP`
+        : 'CONTROL LOCAL APPS BY VOICE · OFF · FLIP THE SWITCH TO LET MEDO DRIVE MEDIA / WINDOWS / BROWSER';
+      list.innerHTML = '';
+      for (const c of conns) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:4px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
+        // availability: ● installed · ✕ not installed · ○ unknown (feature off)
+        const avail = c.installed === false ? '✕' : (c.installed ? '●' : '○');
+        const color = c.installed === false ? '#ff7a6b' : (c.installed ? '#6ee7a8' : '#4a6d94');
+        const b = document.createElement('span'); b.textContent = avail; b.style.color = color;
+        b.title = c.installed === false ? 'not installed' : (c.installed ? 'available' : 'status shows once App control is on');
+        const n = document.createElement('span'); n.textContent = c.display_name;
+        n.style.cssText = 'color:#c9e6ff;min-width:66px;text-transform:capitalize';
+        const t = document.createElement('span');
+        t.textContent = (c.actions || []).slice(0, 6).join(' · ') + ((c.actions || []).length > 6 ? ' · …' : '');
+        t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
+        const tg = document.createElement('button');
+        tg.className = 'toggle' + (c.enabled ? ' on' : '');
+        tg.innerHTML = '<span class="knob"></span>';
+        tg.style.cssText = 'transform:scale(.78);margin-left:auto';
+        tg.title = 'enable/disable this connector';
+        tg.onclick = async () => {
+          const want = !c.enabled;
+          try {
+            const r = await (await fetch(`${API}/control/software`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ app_id: c.app_id, app_on: want }),
+            })).json();
+            if (r.ok) { log(`SOFTWARE · ${(c.display_name || c.app_id).toUpperCase()} ${want ? 'ON' : 'OFF'} · RESTART TO APPLY`); loadSoftware(); }
+          } catch { log('SOFTWARE — API offline'); }
+        };
+        row.append(b, n, t, tg);
+        list.appendChild(row);
+      }
+    } catch { desc.textContent = 'CONTROL LOCAL APPS BY VOICE · API OFFLINE'; }
+  }
 
   /* ---- proactive routines ---- */
   let _routines = [];
