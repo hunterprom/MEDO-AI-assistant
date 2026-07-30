@@ -989,6 +989,11 @@
           BUTTONS RUN AN ACTION NOW · THE BRAIN PREFERS THESE OVER DESCRIBING STEPS · EVERY ONE GATED BY THE POLICY ENGINE, NEVER TRIGGERED BY A DOCUMENT OR WEB PAGE · LEARNING REVEALS MENUS THEN BACKS OUT (READ-ONLY-ISH) · SAY "OPEN THE EFFECTS PANEL IN CAPCUT" ONCE LEARNED
         </div>
       </div>
+      <div class="head" style="margin-top:8px">MAKER STUDIO · PROJECTS</div>
+      <div class="setting col-layout">
+        <div class="info"><span class="name">Studio projects</span><span class="desc" id="studio-desc">SCHEMATICS · 3D MODELS · SCRIPTS — MADE BY WRITING REAL CODE &amp; RUNNING IT · LOADING…</span></div>
+        <div id="studio-list" class="sr-list"></div>
+      </div>
       <div class="head" style="margin-top:8px">ROUTINES · SCHEDULED</div>
       <div class="setting col-layout">
         <div class="info"><span class="name">Proactive routines</span><span class="desc" id="routines-desc">AT A TIME, MEDO ASKS THESE THINGS &amp; ANNOUNCES THE ANSWERS · RUNS DAILY · TAKES A RESTART</span></div>
@@ -1123,7 +1128,7 @@
     document.body.dataset.screen = screen;
     for (const [s, id] of Object.entries(screens)) $(id).classList.toggle('active', s === screen);
     if (screen === 'core') scrollChat();    // the chat panel lives here now
-    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadSoftware(); loadRoutines(); loadWebhooks(); loadSelfDev(); loadLinkDevices(); loadPairPending(); }
+    if (screen === 'config') { loadFacts(); loadDocsStats(); loadMcp(); loadSoftware(); loadStudio(); loadRoutines(); loadWebhooks(); loadSelfDev(); loadLinkDevices(); loadPairPending(); }
     clusterOnShow(screen === 'cluster');   // start/stop the animation loop
   }
   $('tab-core').onclick = () => go('core');
@@ -2249,6 +2254,28 @@
       row.append(n, t, rm);
       box.appendChild(row);
     }
+  }
+
+  async function loadStudio() {
+    const desc = $('studio-desc'), list = $('studio-list');
+    if (!desc || !list) return;
+    try {
+      const d = await (await fetch(`${API}/studio`)).json();
+      const ps = d.projects || [];
+      desc.textContent = d.enabled
+        ? `${ps.length} PROJECT(S) · SCHEMATICS / 3D MODELS / SCRIPTS · MADE BY WRITING REAL CODE & RUNNING IT`
+        : 'MADE BY WRITING REAL CODE & RUNNING IT · DISABLED (studio.enabled) · SCHEMATICS / 3D / SCRIPTS';
+      list.innerHTML = '';
+      const icon = { schematic: '▚', model3d: '⬡', code: '⌨' };
+      for (const p of ps.slice(0, 8)) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:10px;align-items:baseline;padding:3px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
+        const b = document.createElement('span'); b.textContent = icon[p.domain] || '·'; b.style.color = p.ok ? '#6ee7a8' : '#c9a24a';
+        const n = document.createElement('span'); n.textContent = p.description || p.domain; n.style.cssText = 'color:#c9e6ff;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+        const t = document.createElement('span'); t.textContent = `${p.versions} ver${p.versions === 1 ? '' : 's'}`; t.style.color = '#4a6d94';
+        row.append(b, n, t); list.appendChild(row);
+      }
+    } catch { desc.textContent = 'MAKER STUDIO · API OFFLINE'; }
   }
 
   $('sw-learn').onclick = async () => {

@@ -289,6 +289,7 @@ class RemoteServer:
         app.router.add_post("/software/action", self._handle_software_action)
         app.router.add_post("/software/learn", self._handle_software_learn)
         app.router.add_post("/software/forget", self._handle_software_forget)
+        app.router.add_get("/studio", self._handle_studio_projects)
         app.router.add_get("/routines", self._handle_routines_status)
         app.router.add_post("/control/routines", self._handle_routines_set)
         app.router.add_get("/webhooks", self._handle_webhooks_status)
@@ -959,6 +960,16 @@ class RemoteServer:
         return web.json_response(
             {"ok": True, "success": bool(result.success),
              "speech": result.speech, "data": result.data})
+
+    async def _handle_studio_projects(self, request: web.Request) -> web.Response:
+        """Maker Studio projects for the HUD panel (newest first)."""
+        from studio.projects import list_projects
+
+        projects = await asyncio.to_thread(
+            list_projects, self._settings.studio.projects_dir)
+        return web.json_response(
+            {"ok": True, "enabled": bool(self._settings.studio.enabled),
+             "projects": projects})
 
     async def _handle_software_forget(self, request: web.Request) -> web.Response:
         """Forget a learned app (``{app}``) — deletes its map."""

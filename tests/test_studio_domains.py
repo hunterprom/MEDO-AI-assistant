@@ -198,5 +198,61 @@ def test_studio_skill_reports_a_successful_build(tmp_path, monkeypatch):
     assert r.success and "model.stl" in r.speech and "watertight" in r.speech
 
 
+# -- code domain (S4) — real sandboxed run verifies it ------------------------
+
+def test_code_domain_runs_and_self_verifies(tmp_path):
+    from studio.domains.code import CodeDomain
+    from studio.sandbox import Sandbox
+    (tmp_path / "main.py").write_text("assert 1 + 1 == 2\nprint('ok')\n",
+                                      encoding="utf-8")
+    out = _run(CodeDomain().execute("", tmp_path, Sandbox()))
+    assert out.ok and out.artifacts == ["main.py"] and "ok" in out.stdout
+
+
+def test_code_domain_fails_when_the_script_raises(tmp_path):
+    from studio.domains.code import CodeDomain
+    from studio.sandbox import Sandbox
+    (tmp_path / "main.py").write_text("assert False, 'boom'\n", encoding="utf-8")
+    out = _run(CodeDomain().execute("", tmp_path, Sandbox()))
+    assert out.ok is False and "boom" in out.stderr
+
+
+def test_code_domain_check_flags_missing_self_tests(tmp_path):
+    from studio.domains.code import CodeDomain
+    (tmp_path / "main.py").write_text("print('hi')\n", encoding="utf-8")
+    assert any(a.level == "warn"
+               for a in CodeDomain().check(ExecOutcome(ok=True), tmp_path))
+    (tmp_path / "main.py").write_text("assert True\n", encoding="utf-8")
+    assert any(a.level == "info"
+               for a in CodeDomain().check(ExecOutcome(ok=True), tmp_path))
+
+
+def test_code_skill_matches_and_extracts():
+    from core.config import load_settings
+    from skills.maker_studio import CodeBuildSkill
+    m = CodeBuildSkill(load_settings()).match(
+        "write me a script that renames files by date")
+    assert m is not None and "renames files" in m.groupdict()["desc"].lower()
+
+
+# -- studio projects (S5) -----------------------------------------------------
+
+def test_studio_projects_skill_lists_and_handles_empty(tmp_path):
+    from core.config import load_settings
+    from skills.maker_studio import StudioProjectsSkill
+    s = load_settings()
+    s.studio.projects_dir = str(tmp_path)
+    skill = StudioProjectsSkill(s)
+    r = _run(skill.execute(SkillRequest(text="show my studio projects",
+                                        match=skill.match("show my studio projects"))))
+    assert r.success is False and r.data.get("count") == 0
+    # once a project exists, it lists it
+    from studio.projects import StudioProject
+    StudioProject.create(tmp_path, "model3d", "a gear")
+    r2 = _run(skill.execute(SkillRequest(text="show my studio projects",
+                                         match=skill.match("show my studio projects"))))
+    assert r2.success and r2.data.get("count") == 1
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

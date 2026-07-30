@@ -145,3 +145,81 @@ class DesignCircuitSkill(_StudioSkill):
         from studio.domains.schematic import SchematicDomain
 
         super().__init__(settings, SchematicDomain(), engine=engine)
+
+
+class CodeBuildSkill(_StudioSkill):
+    name = "build_code"
+    description = ("Build a small self-contained script/tool from a description, "
+                   "then RUN it in the sandbox to verify it works (its own "
+                   "self-tests must pass). Use for 'write me a script/tool that…'.")
+    _verb = "build"
+    _noun = "the script"
+    _ask = "What should the script do?"
+    routing_phrases = ["write me a script that renames files by date",
+                       "build a tool to convert csv to json",
+                       "make a python function that validates an IBAN"]
+
+    # NOTE: narrower than app_builder's MakeAppSkill (script/tool/utility, not
+    # app/website/game); both are off by default and are alternative approaches.
+    patterns = [
+        re.compile(r"\b(?:build|write|make|create|code|scaffold|generate)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:python\s+)?(?:script|tool|utility|cli|function|parser|converter)\b(?:\s+(?:that|to|which|for)\s+)?(?P<desc>.+)", re.IGNORECASE),
+    ]
+
+    def __init__(self, settings, *, engine=None) -> None:
+        from studio.domains.code import CodeDomain
+
+        super().__init__(settings, CodeDomain(), engine=engine)
+
+
+class StudioProjectsSkill(Skill):
+    """S5 — 'show my studio projects' / 'open my last model/schematic'."""
+
+    name = "studio_projects"
+    controls_pc = True                     # opening a folder acts on the PC
+    description = ("List your Maker Studio projects, or open the most recent one "
+                   "(schematic / 3D model / script).")
+    routing_phrases = ["show my studio projects", "open my last 3d model",
+                       "open my last schematic", "what have I made in studio"]
+    patterns = [
+        re.compile(r"\b(?:show|list|what are|what)\s+(?:my\s+)?(?:maker\s+)?studio\s+projects\b", re.IGNORECASE),
+        re.compile(r"\b(?:open|show)\s+my\s+(?:last|latest|recent)\s+(?:studio\s+)?(?P<kind>schematic|circuit|3-?d\s*model|model|script|project)\b", re.IGNORECASE),
+    ]
+
+    _KIND = {"schematic": "schematic", "circuit": "schematic", "model": "model3d",
+             "3d model": "model3d", "3dmodel": "model3d", "script": "code"}
+
+    def __init__(self, settings) -> None:
+        self._settings = settings
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        from studio.projects import list_projects
+
+        projects = list_projects(self._settings.studio.projects_dir)
+        gd = request.match.groupdict() if request.match else {}
+        kind = (gd.get("kind") or "").lower().replace(" ", "")
+        want = self._KIND.get(kind, self._KIND.get(kind.replace("3-d", "3d"), ""))
+        if want:
+            projects = [p for p in projects if p.get("domain") == want] or projects
+        if not projects:
+            return SkillResult("You don't have any Maker Studio projects yet.",
+                               success=False, data={"count": 0})
+        if request.match is not None and "open" in request.text.lower():
+            newest = projects[0]
+            from core.platform import open_path
+            try:
+                open_path(newest["path"])
+            except Exception:
+                pass
+            return SkillResult(
+                f"Opening your last one — {newest.get('description') or newest['path']}.",
+                data={"path": newest["path"]})
+        names = ", ".join(p.get("description") or p["domain"] for p in projects[:6])
+        return SkillResult(
+            f"You have {len(projects)} Studio project"
+            f"{'s' if len(projects) != 1 else ''}: {names}.",
+            data={"count": len(projects)})
+
+    def tool_schema(self) -> dict:
+        return {"type": "function", "function": {
+            "name": self.name, "description": self.description,
+            "parameters": {"type": "object", "properties": {}, "required": []}}}

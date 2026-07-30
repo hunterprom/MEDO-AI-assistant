@@ -561,12 +561,19 @@ def build_registry(
     # libraries are optional (each skill degrades with an "install X" message).
     if settings.studio.enabled:
         try:
-            from skills.maker_studio import DesignCircuitSkill, Model3DSkill
+            from skills.maker_studio import (
+                CodeBuildSkill,
+                DesignCircuitSkill,
+                Model3DSkill,
+                StudioProjectsSkill,
+            )
 
             registry.register(DesignCircuitSkill(settings))
             registry.register(Model3DSkill(settings))
+            registry.register(CodeBuildSkill(settings))
+            registry.register(StudioProjectsSkill(settings))
             logging.getLogger(__name__).info(
-                "Maker Studio: schematic + 3D skills registered")
+                "Maker Studio: schematic + 3D + code + projects skills registered")
         except Exception:
             logging.getLogger(__name__).warning(
                 "Maker Studio skills failed to load", exc_info=True)

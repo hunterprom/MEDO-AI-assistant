@@ -52,6 +52,24 @@ numbered versions.
   - Say: *"model a bracket for a motor"*, *"3D-print a phone stand"*, *"design an
     enclosure for an ESP32"*.
 
+- **S4 — Code building** (`studio/domains/code.py`): the brain writes a
+  self-contained Python script (with its own `assert` self-tests), and MEDO
+  **runs it in the sandbox to verify it works** — the run *is* the check (exit 0
+  = its self-tests passed). A script with no self-tests is flagged (`warn`).
+  Generated code only ever runs in the sandbox with declared capabilities, is
+  never auto-installed into MEDO, and any out-of-sandbox action needs
+  confirmation.
+  - Say: *"write me a script that renames files by date"*, *"build a tool to
+    convert CSV to JSON"*.
+
+## S5 — projects, HUD, listing
+
+Every creation is a project folder under `studio.projects_dir`. Ask *"show my
+studio projects"* or *"open my last 3D model / schematic / script"*
+(`studio_projects` skill), or see them in the HUD **CONFIG → Maker Studio ·
+Projects** panel (recent projects, domain icon, version count). The companion API
+exposes `GET /studio`.
+
 ## Security / sandbox (the hard dependency)
 
 Generated code is UNTRUSTED — the model wrote it. `studio/sandbox.py` runs it:
