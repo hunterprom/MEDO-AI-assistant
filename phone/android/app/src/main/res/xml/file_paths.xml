@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- The temp JPEG we hand to the camera app lives in the app cache dir. -->
+    <cache-path name="medo_cam" path="."/>
+</paths>

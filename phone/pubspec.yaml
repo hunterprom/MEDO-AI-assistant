@@ -1,0 +1,29 @@
+name: medo_phone
+description: "MEDO — on-device voice assistant (phone). Fast-path skills run
+  locally; open-ended questions fall back to a cloud model you configure."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.4 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+  speech_to_text: ^6.6.0        # on-device Android speech recognition
+  flutter_tts: ^4.0.0           # on-device text-to-speech
+  http: ^1.2.0                  # cloud chat + weather/search/news HTTP
+  shared_preferences: ^2.2.0    # local notes / facts / reminders / settings
+  intl: ^0.18.1                 # date + number formatting
+  xml: ^6.5.0                   # RSS news parsing
+  medo_link:                    # shared "connect to MEDO" client (watch + phone)
+    path: ../packages/medo_link
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
