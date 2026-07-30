@@ -12,6 +12,26 @@ set -u
 
 say() { printf "\033[36m[medo]\033[0m %s\n" "$1"; }
 
+# The MEDO logo (the presence sphere), rendered for the terminal on every launch.
+banner() {
+  printf '\033]0;MEDO\007'                 # set the window/tab title
+  printf '\033[36m'                        # MEDO blue
+  cat <<'EOF'
+        .  *  .
+      *   (O)   *
+        .  *  .
+
+   __  __ ___ ___   ___
+  |  \/  | __|   \ / _ \
+  | |\/| | _|| |) | (_) |
+  |_|  |_|___|___/ \___/
+
+        local-first AI, on your hardware
+EOF
+  printf '\033[0m\n'
+}
+banner
+
 PYBIN="$(command -v python3.12 || command -v python3)"
 if [ -z "$PYBIN" ]; then echo "Python 3.12 not found. Install it first."; exit 1; fi
 

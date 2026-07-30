@@ -9,6 +9,21 @@ REM  straight up. Delete .medo-setup-done to force the one-time setup again.
 REM ============================================================================
 cd /d "%~dp0"
 setlocal
+title MEDO
+
+REM --- MEDO logo (the presence sphere, rendered for the console) ---------------
+echo(
+echo         .  *  .
+echo       *   (O)   *
+echo         .  *  .
+echo(
+echo    __  __ ___ ___   ___
+echo   ^|  \/  ^| __^|   \ / _ \
+echo   ^| ^|\/^| ^| _^|^| ^|) ^| (_) ^|
+echo   ^|_^|  ^|_^|___^|___/ \___/
+echo(
+echo         local-first AI, on your hardware
+echo(
 
 REM 0. Ollama environment ------------------------------------------------------
 REM    Model store lives on D: and pinned CUDA host buffers must be off, or a
