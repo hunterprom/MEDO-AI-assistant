@@ -8,6 +8,30 @@ actions, and each action becomes a routable skill through the *same* registratio
 path MEDO Link uses. Off by default (`software.enabled: false`) — flipping it on
 is purely additive.
 
+## Turn it on — the HUD panel
+
+You don't have to edit `config.yaml`. Open the HUD (`localhost:8730`) → **CONFIG**:
+
+- **App control** — a top-level toggle, next to *PC control* and *Developer mode*.
+  It's the master switch: on = MEDO may drive your local apps by voice/text.
+- **Software control · local apps** — a panel (under the CONNECT/connectors
+  section) with, per connector (**media**, **window**, **browser**):
+  - a **live availability** dot — ● installed · ✕ not installed · ○ shown once the
+    feature is on;
+  - the **kinds of commands** it understands (e.g. media → `play pause · next
+    track · volume up …`), so you can see what to say;
+  - a **per-connector toggle** to enable just that one.
+
+Changes **apply on the next restart** (connectors register at startup, like MCP
+servers), and are **remembered per machine** — persisted to the git-ignored
+overrides (`secrets.local.yaml`), never `config.yaml`.
+
+Under the hood the panel is two companion-API endpoints: `GET /software`
+(master + per-connector state, live detect, and each connector's actions) and
+`POST /control/software` (`{"on": bool}` for the master switch and/or
+`{"app_id": ..., "app_on": bool}` per connector). The trust boundary and policy
+gating below are unchanged whether you toggle from the HUD or `config.yaml`.
+
 ## The control ladder (robust → brittle, degrades gracefully)
 
 Every action prefers mechanisms in this order; if none is available it says so —

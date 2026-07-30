@@ -152,7 +152,10 @@ and its actions; each becomes a routable skill gated by the policy engine, over 
 robustness ladder (native API/CLI → app hotkeys → accessibility automation).
 Sending or posting **always confirms first**, and only your own voice/text can
 trigger control — never content from a document or another app. Off by default
-(`software.enabled`); adding an app is a new connector file, not a core edit. See
+(`software.enabled`) — flip it on without touching config from the HUD **CONFIG**
+tab: an **App control** master toggle plus a **Software control** panel with a
+per-connector switch, live availability, and the commands each app understands.
+Adding an app is a new connector file, not a core edit. See
 [`docs/Software Connectors.md`](docs/Software%20Connectors.md).
 
 ### Make things — documents, presentations, spreadsheets, apps
