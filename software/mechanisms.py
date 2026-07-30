@@ -107,6 +107,15 @@ class Mechanisms:
         except Exception:
             return None
 
+    def foreground_title(self):
+        """Title of the foreground window, or None — the app-context signal for
+        'which app am I in' (matched against the learned apps by the skills)."""
+        fn = getattr(self._os, "foreground_title", None)
+        try:
+            return fn() if fn else None
+        except Exception:
+            return None
+
     def click_point(self, x: int, y: int) -> ActionResult:
         """Click an absolute screen pixel — the fallback for a control the vision
         pass saw but UIA can't name. Global, so unverifiable; reported honestly."""

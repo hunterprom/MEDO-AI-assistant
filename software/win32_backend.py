@@ -128,6 +128,14 @@ class Win32Backend:
         except Exception:
             return None
 
+    def foreground_title(self) -> Optional[str]:
+        try:
+            import pygetwindow as gw
+            w = gw.getActiveWindow()
+            return (w.title or "") if w is not None else None
+        except Exception:
+            return None
+
     def click_point(self, x: int, y: int) -> bool:
         try:
             import pyautogui

@@ -542,9 +542,15 @@ def build_registry(
                 from software.vision_probe import VisionProbe
 
                 vision = VisionProbe(settings, mechanisms=mech)
-            registry.register(LearnAppSkill(mech, walker, vision=vision))
-            registry.register(AppLocateSkill(mech))
-            registry.register(AppNavigateSkill(mech))
+            # Shared app-context so "open the tools menu" / "find me tools"
+            # resolve to the app in focus (or the one just named).
+            from core.app_context import SessionAppContext
+
+            app_ctx = SessionAppContext()
+            registry.register(LearnAppSkill(mech, walker, vision=vision,
+                                            ctx=app_ctx))
+            registry.register(AppLocateSkill(mech, ctx=app_ctx))
+            registry.register(AppNavigateSkill(mech, ctx=app_ctx))
         except Exception:
             logging.getLogger(__name__).warning(
                 "software connectors failed to load", exc_info=True)

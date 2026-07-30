@@ -36,6 +36,28 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip()).strip(" ?.!")
 
 
+#: UI nouns that anchor a context-less request ("open the TOOLS menu") — safe to
+#: fast-path because they clearly name an app control, not a general question.
+_UI_NOUN = (r"menu|menus|panel|panels|tab|tabs|toolbar|sidebar|button|slider|"
+            r"checkbox|dropdown|ribbon|inspector|timeline|effects|settings|"
+            r"preferences|options")
+_UI_NOUN_RE = re.compile(rf"\s+(?:{_UI_NOUN})\s*$", re.IGNORECASE)
+
+
+def _foreground_app(title: str, learned) -> str:
+    """The learned app whose name shows in the foreground window title, else ''.
+    Prefers the longest name match ('Arduino IDE' over a bare 'IDE')."""
+    t = (title or "").lower()
+    best_name, best_len = "", 0
+    for m in learned:
+        name = m.get("display_name") or m.get("app_id") or ""
+        for key in (m.get("display_name", ""), m.get("app_id", "")):
+            k = (key or "").strip().lower()
+            if k and k in t and len(k) > best_len:
+                best_name, best_len = name, len(k)
+    return best_name
+
+
 class LearnAppSkill(Skill):
     """Scan an app the user names and remember its UI."""
 
@@ -49,13 +71,14 @@ class LearnAppSkill(Skill):
                        "scan this app so you know it", "study the DaVinci UI"]
 
     def __init__(self, mechanisms, walker, *, base_dir=DEFAULT_MAPS_DIR,
-                 vision=None) -> None:
+                 vision=None, ctx=None) -> None:
         self._mech = mechanisms
         self._walker = walker
         self._base_dir = base_dir
         # Optional async callable(app_hint) -> list[UIElement]: the vision backup
         # (software.vision_probe.VisionProbe), run only when the UIA tree is thin.
         self._vision = vision
+        self._ctx = ctx        # core.app_context.SessionAppContext (shared) or None
         self.patterns = [re.compile(p, re.IGNORECASE) for p in (
             r"\blearn\s+(?:how\s+to\s+use|to\s+use)\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)(?:\s+app)?\s*$",
             r"\blearn\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)\s+(?:app|ui|interface)\s*$",
@@ -82,6 +105,8 @@ class LearnAppSkill(Skill):
                 f"I couldn't find {app} open. Open it first, then say "
                 f"“learn {app}”.", success=False,
                 data={"reason": "not_open"})
+        if self._ctx is not None:          # you're clearly working in it now
+            self._ctx.note(app)
         from software.ui_scan import is_thin, scan_app, vision_augment
 
         app_map = scan_app(self._walker, app_id=_app_id(app), display_name=app,
@@ -121,11 +146,25 @@ class LearnAppSkill(Skill):
 
 
 class _AppLookupSkill(Skill):
-    """Shared parse + map lookup for the locate / navigate pair."""
+    """Shared parse + app-context resolution + map lookup for locate / navigate."""
 
-    def __init__(self, mechanisms, *, base_dir=DEFAULT_MAPS_DIR) -> None:
+    def __init__(self, mechanisms, *, base_dir=DEFAULT_MAPS_DIR, ctx=None) -> None:
         self._mech = mechanisms
         self._base_dir = base_dir
+        self._ctx = ctx        # core.app_context.SessionAppContext (shared) or None
+
+    def match(self, text: str):
+        found = super().match(text)
+        if found is None:
+            return None
+        app = _clean(found.groupdict().get("app") or "")
+        # A context-less UI request (no app named) fast-paths ONLY when an app was
+        # named recently — a cheap in-memory check, no OS call on every utterance.
+        # Otherwise it falls to the LLM, which still resolves the FOCUSED app in
+        # execute (via the optional-app tool + _resolve_app).
+        if not app and not (self._ctx and self._ctx.last_app):
+            return None
+        return found
 
     def _parse(self, request: SkillRequest):
         app = target = ""
@@ -136,6 +175,32 @@ class _AppLookupSkill(Skill):
         target = target or _clean(str(request.args.get("target", "")))
         return app, target
 
+    def _foreground_current(self) -> str:
+        """The learned app currently in the foreground, or '' (live OS look)."""
+        fn = getattr(self._mech, "foreground_title", None) if self._mech else None
+        try:
+            title = fn() if fn else None
+        except Exception:
+            title = None
+        if not title:
+            return ""
+        return _foreground_app(title, knowledge.list_maps(self._base_dir))
+
+    def _resolve_app(self, parsed_app: str) -> str:
+        """Fill in the app when the user didn't name one: the FOCUSED learned app
+        first, then the last app named/used this session. Remembers what it picks."""
+        parsed_app = (parsed_app or "").strip()
+        if parsed_app:
+            if self._ctx is not None:
+                self._ctx.note(parsed_app)
+            return parsed_app
+        fg = self._foreground_current()
+        if fg:
+            if self._ctx is not None:
+                self._ctx.note(fg)
+            return fg
+        return self._ctx.last_app if self._ctx is not None else ""
+
     def _lookup(self, app: str, target: str):
         app_map = knowledge.load_map(_app_id(app), self._base_dir)
         if app_map is None:
@@ -143,6 +208,10 @@ class _AppLookupSkill(Skill):
                 f"I haven't learned {app} yet. Say “learn {app}” and "
                 f"I'll map it.", success=False, data={"reason": "not_learned"})
         hits = knowledge.search(app_map, target)
+        if not hits:                       # "tools menu" -> also try just "tools"
+            core = _UI_NOUN_RE.sub("", target).strip()
+            if core and core != target:
+                hits = knowledge.search(app_map, core)
         if not hits:
             return None, SkillResult(
                 f"I didn't find anything like “{target}” in what I "
@@ -154,10 +223,12 @@ class _AppLookupSkill(Skill):
         return {"type": "function", "function": {
             "name": self.name, "description": self.description,
             "parameters": {"type": "object", "properties": {
-                "app": {"type": "string", "description": "The learned app."},
+                "app": {"type": "string",
+                        "description": "The learned app. OMIT to use the app the "
+                                       "user is currently working in (focused)."},
                 "target": {"type": "string",
-                           "description": "The control/panel to find."}},
-                "required": ["app", "target"]}}}
+                           "description": "The control/panel/menu to find."}},
+                "required": ["target"]}}}
 
 
 class AppLocateSkill(_AppLookupSkill):
@@ -166,17 +237,22 @@ class AppLocateSkill(_AppLookupSkill):
     name = "locate_in_app"
     description = ("Say where a control/panel/feature is in an app you've "
                    "learned, without touching anything. Use for 'where is X in "
-                   "APP'.")
+                   "APP' or 'find the X panel'. If the user doesn't name an app, "
+                   "OMIT app — it uses the app they're working in.")
     controls_pc = False
     routing_phrases = ["where is the effects search in CapCut",
-                       "locate the export button in Premiere"]
+                       "locate the export button in Premiere",
+                       "where's the tools menu"]
 
-    def __init__(self, mechanisms, *, base_dir=DEFAULT_MAPS_DIR) -> None:
-        super().__init__(mechanisms, base_dir=base_dir)
+    def __init__(self, mechanisms, *, base_dir=DEFAULT_MAPS_DIR, ctx=None) -> None:
+        super().__init__(mechanisms, base_dir=base_dir, ctx=ctx)
         self.patterns = [re.compile(p, re.IGNORECASE) for p in (
             r"\bwhere(?:'s| is| are)\s+(?:the\s+)?(?P<target>.+?)\s+in\s+(?P<app>[\w .+-]{2,40})\s*\??$",
             r"\b(?:find|locate|show me)\s+(?:the\s+)?(?P<target>.+?)\s+in\s+(?P<app>[\w .+-]{2,40})\s*\??$",
             r"\bin\s+(?P<app>[\w .+-]{2,40}?),?\s+where(?:'s| is)\s+(?:the\s+)?(?P<target>.+?)\s*\??$",
+            # context-less (no app named) — UI-noun-anchored so it stays safe:
+            rf"\bwhere(?:'s| is| are)\s+(?:the\s+)?(?P<target>[\w .+-]*?(?:{_UI_NOUN}))\s*\??$",
+            rf"\b(?:find|locate|show me)\s+(?:me\s+)?(?:the\s+)?(?P<target>[\w .+-]*?(?:{_UI_NOUN}))\s*\??$",
         )]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
@@ -184,9 +260,12 @@ class AppLocateSkill(_AppLookupSkill):
             return SkillResult("I only do that when you ask me directly.",
                                success=False, data={"refused": "untrusted"})
         app, target = self._parse(request)
-        if not app or not target:
-            return SkillResult("Tell me what to find and in which app.",
-                               success=False)
+        app = self._resolve_app(app)
+        if not target:
+            return SkillResult("What should I find?", success=False)
+        if not app:
+            return SkillResult(
+                "Which app? Open it, or say 'in <app>'.", success=False)
         found, err = self._lookup(app, target)
         if err is not None:
             return err
@@ -203,18 +282,22 @@ class AppNavigateSkill(_AppLookupSkill):
     name = "navigate_in_app"
     description = ("Go to / click a control in an app you've learned — focuses "
                    "the app and activates the control. Prefer this to describing "
-                   "steps. Use for 'open/go to/click X in APP'.")
+                   "steps. Use for 'open/go to/click X in APP' or 'open the X "
+                   "menu'. If the user doesn't name an app, OMIT app — it uses "
+                   "the app they're working in.")
     controls_pc = True
     capabilities = frozenset({Capability.CONTROL_INPUT})
     routing_phrases = ["open the effects panel in CapCut",
                        "go to the export button in Premiere",
-                       "click the search box in CapCut"]
+                       "open the tools menu"]
 
-    def __init__(self, mechanisms, *, base_dir=DEFAULT_MAPS_DIR) -> None:
-        super().__init__(mechanisms, base_dir=base_dir)
+    def __init__(self, mechanisms, *, base_dir=DEFAULT_MAPS_DIR, ctx=None) -> None:
+        super().__init__(mechanisms, base_dir=base_dir, ctx=ctx)
         self.patterns = [re.compile(p, re.IGNORECASE) for p in (
             r"\b(?:open|go to|goto|click|press|select|activate)\s+(?:the\s+)?(?P<target>.+?)\s+in\s+(?P<app>[\w .+-]{2,40})\s*\??$",
             r"\bin\s+(?P<app>[\w .+-]{2,40}?),?\s+(?:open|go to|goto|click|press|select|activate)\s+(?:the\s+)?(?P<target>.+?)\s*\??$",
+            # context-less (no app named) — UI-noun-anchored so it stays safe:
+            rf"\b(?:open|go to|goto|click|press|select|show)\s+(?:the\s+)?(?P<target>[\w .+-]*?(?:{_UI_NOUN}))\s*\??$",
         )]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
@@ -222,9 +305,12 @@ class AppNavigateSkill(_AppLookupSkill):
             return SkillResult("I only control apps when you ask me directly.",
                                success=False, data={"refused": "untrusted"})
         app, target = self._parse(request)
-        if not app or not target:
-            return SkillResult("Tell me what to open and in which app.",
-                               success=False)
+        app = self._resolve_app(app)
+        if not target:
+            return SkillResult("What should I open?", success=False)
+        if not app:
+            return SkillResult(
+                "Which app? Open it, or say 'in <app>'.", success=False)
         found, err = self._lookup(app, target)
         if err is not None:
             return err

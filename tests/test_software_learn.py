@@ -31,13 +31,18 @@ class FakeWalker:
 
 
 class FakeMech:
-    def __init__(self, *, can_focus=True, invoke_ok=True, rect=(100, 100, 900, 700)):
+    def __init__(self, *, can_focus=True, invoke_ok=True, rect=(100, 100, 900, 700),
+                 title=""):
         self.can_focus = can_focus
         self.invoke_ok = invoke_ok
         self.rect = rect
+        self.title = title
         self.focused = []
         self.invoked = []
         self.clicked = []
+
+    def foreground_title(self):
+        return self.title
 
     def focus_app(self, hint):
         self.focused.append(hint)
@@ -59,6 +64,12 @@ class FakeMech:
 def _run(skill, args=None, ctx=None):
     return asyncio.run(skill.execute(
         SkillRequest(text="", args=args or {}, context=ctx or {})))
+
+
+def _run_text(skill, text):
+    """Route text through match() (so groupdict targets are parsed) then execute."""
+    return asyncio.run(skill.execute(
+        SkillRequest(text=text, match=skill.match(text))))
 
 
 def _learn_capcut(tmp_path):
@@ -337,6 +348,101 @@ def test_vision_probe_captures_asks_and_parses():
                         describe=fake_describe)
     els = asyncio.run(probe("CapCut"))
     assert [e.name for e in els] == ["Export"] and els[0].vision_xy == (900, 50)
+
+
+# -- app-context tracking: resolve the app in focus / just named --------------
+
+def test_foreground_app_matches_longest_learned_name():
+    from skills.software_learn import _foreground_app
+    learned = [{"display_name": "IDE", "app_id": "ide"},
+               {"display_name": "Arduino IDE", "app_id": "arduino ide"}]
+    assert _foreground_app("sketch | Arduino IDE 2.3.2", learned) == "Arduino IDE"
+    assert _foreground_app("Notepad", learned) == ""       # nothing learned matches
+
+
+def test_session_context_remembers_last_app():
+    from core.app_context import SessionAppContext
+    ctx = SessionAppContext()
+    ctx.note("CapCut")
+    assert ctx.last_app == "CapCut"
+    ctx.note("")                              # blank doesn't clobber
+    assert ctx.last_app == "CapCut"
+
+
+def test_context_less_pattern_needs_a_current_app():
+    from core.app_context import SessionAppContext
+    from skills.software_learn import AppNavigateSkill
+    # no context -> the context-less pattern declines (falls to the LLM)
+    assert AppNavigateSkill(FakeMech(), ctx=SessionAppContext()).match(
+        "open the tools menu") is None
+    # once an app is remembered -> it claims the fast path
+    assert AppNavigateSkill(FakeMech(), ctx=SessionAppContext(last_app="CapCut")
+                            ).match("open the tools menu") is not None
+    # an explicit 'in <app>' always matches regardless of context
+    assert AppNavigateSkill(FakeMech()).match(
+        "open the export panel in CapCut") is not None
+
+
+def test_navigate_resolves_the_focused_app(tmp_path):
+    from core.app_context import SessionAppContext
+    from skills.software_learn import AppNavigateSkill
+    from software.knowledge import AppMap, UIElement, save_map
+    save_map(AppMap(app_id="capcut", display_name="CapCut", elements=[
+        UIElement(name="Tools", role="MenuItem", clickable=True)]), tmp_path)
+    ctx = SessionAppContext(last_app="CapCut")           # so match() claims it
+    mech = FakeMech(invoke_ok=True, title="Untitled - CapCut")
+    r = _run_text(AppNavigateSkill(mech, base_dir=tmp_path, ctx=ctx),
+                  "open the tools menu")
+    assert r.success and "Tools" in r.speech             # no app named, focus won
+    assert mech.focused == ["CapCut"] and mech.invoked[0][1] == "Tools"
+
+
+def test_locate_falls_back_to_last_app(tmp_path):
+    from core.app_context import SessionAppContext
+    from skills.software_learn import AppLocateSkill
+    from software.knowledge import AppMap, UIElement, save_map
+    save_map(AppMap(app_id="capcut", display_name="CapCut", elements=[
+        UIElement(name="Export", role="Button", clickable=True)]), tmp_path)
+    ctx = SessionAppContext(last_app="CapCut")
+    mech = FakeMech(title="Some Unrelated Window")        # foreground not learned
+    r = _run_text(AppLocateSkill(mech, base_dir=tmp_path, ctx=ctx),
+                  "where's the export button")
+    assert r.success and "Export" in r.speech             # used the remembered app
+
+
+def test_llm_path_no_app_uses_focused_app_and_remembers_it(tmp_path):
+    from core.app_context import SessionAppContext
+    from skills.software_learn import AppLocateSkill
+    from software.knowledge import AppMap, UIElement, save_map
+    save_map(AppMap(app_id="capcut", display_name="CapCut", elements=[
+        UIElement(name="Tools", role="MenuItem", clickable=True)]), tmp_path)
+    ctx = SessionAppContext()                             # empty
+    mech = FakeMech(title="project - CapCut")
+    skill = AppLocateSkill(mech, base_dir=tmp_path, ctx=ctx)
+    r = asyncio.run(skill.execute(SkillRequest(text="", args={"target": "tools"})))
+    assert r.success and "Tools" in r.speech
+    assert ctx.last_app == "CapCut"                       # focused app remembered
+
+
+def test_learn_notes_the_app_in_context(tmp_path):
+    from core.app_context import SessionAppContext
+    from skills.software_learn import LearnAppSkill
+    ctx = SessionAppContext()
+    _run(LearnAppSkill(FakeMech(can_focus=True),
+                       FakeWalker([RawElement("X", "Button")]),
+                       base_dir=tmp_path, ctx=ctx), args={"app": "CapCut"})
+    assert ctx.last_app == "CapCut"
+
+
+def test_context_resolution_asks_which_app_when_unknown(tmp_path):
+    from core.app_context import SessionAppContext
+    from skills.software_learn import AppLocateSkill
+    ctx = SessionAppContext(last_app="CapCut")   # lets match() claim it...
+    mech = FakeMech(title="Unrelated")           # ...but nothing learned/focused
+    # no map for CapCut here -> not_learned (context resolved an app but it's new)
+    r = _run_text(AppLocateSkill(mech, base_dir=tmp_path, ctx=ctx),
+                  "where's the tools menu")
+    assert r.success is False and r.data.get("reason") == "not_learned"
 
 
 if __name__ == "__main__":  # pragma: no cover
