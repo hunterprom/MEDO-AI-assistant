@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/img/medo-logo.png" alt="MEDO" width="128" height="111">
+</p>
+
 # MEDO — a local-first AI desktop assistant
 
 **MEDO is a two-language (English/Macedonian) voice + gesture assistant that runs

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/img/medo-logo.png" alt="MEDO" width="128" height="111">
+</p>
+
 # MEDO — the detailed guide
 
 This is the long-form reference. For the two-minute version see
