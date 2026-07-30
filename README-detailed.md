@@ -140,6 +140,17 @@ sequential-thinking, filesystem, memory, Brave Search. Flip one on and drop its
 secret into the git-ignored `secrets.local.yaml` under `mcp_env:` — injected into
 the environment, never written to `config.yaml`.
 
+### Software connectors — control local apps by command (not MCP)
+
+Beyond MCP, MEDO can control other desktop apps by **direct local mechanisms** —
+"play/pause", "minimize", "new tab", "close Notepad". A connector declares an app
+and its actions; each becomes a routable skill gated by the policy engine, over a
+robustness ladder (native API/CLI → app hotkeys → accessibility automation).
+Sending or posting **always confirms first**, and only your own voice/text can
+trigger control — never content from a document or another app. Off by default
+(`software.enabled`); adding an app is a new connector file, not a core edit. See
+[`docs/Software Connectors.md`](docs/Software%20Connectors.md).
+
 ### Make things — documents, presentations, spreadsheets, apps
 - **"make me a five-page document about X"**, **"create a presentation on solar
   batteries"**, **"make a spreadsheet of the team roster"** → MEDO composes the
@@ -228,7 +239,33 @@ be forwarded beyond your LAN. Within that boundary the trust model is:
   test/lint gate in a scrubbed, HOME/TEMP-isolated environment, behind a
   denylist and human apply-approval.
 
-See [`docs/Security.md`](docs/Security.md) for the full threat model.
+### The central policy engine
+
+Those guards are unified behind **one deny-by-default policy engine**
+(`security/`): every side-effectful action routes through
+`PolicyEngine.check() → allow | confirm | deny` (pure, fail-closed), over a
+capability vocabulary each skill/plugin/device declares. Additive and
+config-gated, it adds:
+
+- **Trust boundary** — documents, web pages, tool output and memory are DATA,
+  never instructions: wrapped as untrusted before the model sees them, and a
+  **post-LLM action gate** re-judges any high-impact action induced by that
+  content — an injected *"delete my files"* is confirmed or denied, never
+  auto-run.
+- **Owner voice** *(optional)* — high-impact actions can require the enrolled
+  owner's voice (fully local; only a voiceprint embedding is stored, never audio).
+- **Plugin approval** *(optional)* — a new/changed plugin's capabilities are read
+  statically and its code isn't imported until you approve it.
+- **Cloud egress** — a cloud brain gets your question, not your local
+  documents/memory, unless you opt that brain in.
+- **Audit** *(optional)* — a hash-chained, tamper-evident log of security events
+  (`python -m security.audit --report`).
+- **Developer mode** — a HUD toggle (CONFIG → Developer mode) turns the whole
+  layer off for local dev; **session-only** (resets to secure on restart), with a
+  loud on-screen banner. Never ship it on.
+
+See [`docs/Security.md`](docs/Security.md) for the full threat model and honest
+limits.
 
 ---
 
@@ -314,6 +351,21 @@ git pull
 Re-launch; the venvs and models are reused. If `requirements.txt` changed, delete
 `.venv` (and `.venv-vision` if `requirements-vision.txt` changed) and the next
 launch rebuilds them.
+
+## Packaging into a one-click app
+
+For non-technical users, an app layer (`app/` + `winsetup/`) wraps MEDO into a
+one-click Windows installer: a tray **launcher** that supervises Ollama + the
+engine + the vision sidecar (restart-with-backoff, clean teardown — no orphans),
+**hardware detection** that auto-fits a model profile to the machine (a weak
+laptop gets a small brain; a 24 GB GPU gets the 30B), a **first-run wizard**
+(installs Ollama, downloads the right model with a progress bar, tests the mic),
+and a friendly Settings screen — no terminal, no `config.yaml`. Build with
+`python winsetup/build.py`; see [`docs/Packaging.md`](docs/Packaging.md) for the
+dependency notes (the mediapipe/numpy split) and a manual install checklist. The
+dev workflow (`run.bat` + `config.yaml`) is untouched.
+
+---
 
 ## Configuration
 

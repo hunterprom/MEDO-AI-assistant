@@ -248,6 +248,12 @@ denials, confirmations, cloud calls…) are written to a HASH-CHAINED log —
 metadata only, no payloads/secrets. `python -m security.audit --report` verifies
 the chain (any edit/delete is detected) and summarizes.
 
+**Developer mode.** A HUD toggle (CONFIG → Developer mode) turns the WHOLE layer
+off for constraint-free local development — every action allowed, confirmations
+auto-accepted. It is **session-only** (never persisted; a restart returns to
+secure) and shows a loud red on-screen banner the whole time. Dev machines only —
+never ship it on. (`security.yolo`; the HUD toggle at `/control/dev-mode`.)
+
 **Honest limits (still out of scope):**
 - **In-process plugin confinement.** Approval stops unapproved code from running
   and skills are capability-gated, but once an approved plugin is imported, Python

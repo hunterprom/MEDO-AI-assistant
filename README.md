@@ -32,8 +32,16 @@ can put a question to — or turn loose on its *own* answers.
 - 🌐 **Does things** — searches sites where you actually search, *drives* Chrome
   through the DOM, remembers facts semantically, and makes documents,
   presentations, spreadsheets and small apps.
-- 🧩 **Extensible** — drop a `.py` in `plugins/`, plug in any **MCP** server, or
-  pair the Wear OS **watch app**; a HUD at `localhost:8730` renders it all live.
+- 🎮 **Controls other apps** — "play/pause", "minimize", "new tab", "close
+  Notepad" by **direct local control** (not MCP), each gated by the policy engine.
+- 🛡 **Safe by default** — one **deny-by-default policy engine** gates every
+  action, behind a user-instruction-vs-content **trust boundary** that stops a
+  document or web page from turning injected text into a command; secrets stay
+  local, and a cloud brain gets your question, not your files.
+  → **[Security](docs/Security.md)**
+- 🧩 **Extensible** — drop a `.py` in `plugins/` (capability-reviewed), plug in
+  any **MCP** server, or pair the Wear OS **watch app**; a HUD at
+  `localhost:8730` renders it all live.
 
 ## Install
 
@@ -57,6 +65,11 @@ No winget/Homebrew? Install [Ollama](https://ollama.com/download) and
 [Obsidian](https://obsidian.md) by hand and re-run. Full walkthrough:
 **[README-detailed.md → Install & first run](README-detailed.md#install--first-run)**.
 
+**Packaging it for someone non-technical?** An app layer (`app/` + `winsetup/`)
+builds a one-click Windows installer — a tray launcher that supervises every
+process, hardware-fit model selection, and a first-run wizard with progress bars,
+no terminal. See **[docs/Packaging.md](docs/Packaging.md)**.
+
 ```
 .venv\Scripts\python -m pytest      # run the tests
 ```
@@ -78,6 +91,10 @@ serves that token to loopback only; the vision sidecar binds `127.0.0.1`.
 
 - **[README-detailed.md](README-detailed.md)** — every feature, the security
   model, configuration, and troubleshooting.
+- **[`docs/Security.md`](docs/Security.md)** — the deny-by-default policy engine,
+  trust boundary, and honest threat model ·
+  **[`docs/Software Connectors.md`](docs/Software%20Connectors.md)** ·
+  **[`docs/Packaging.md`](docs/Packaging.md)**.
 - **[`docs/`](docs/)** — an Obsidian vault: architecture, runbook, bug log,
   decisions, roadmap.
 - **[`config.yaml`](config.yaml)** — one file configures everything
