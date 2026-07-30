@@ -155,3 +155,39 @@ def test_resolve_input_device_passthrough_and_single(monkeypatch):
     assert resolve_input_device(9) == 9
     _fake_inputs(monkeypatch, [(2, "Microphone (NVIDIA Broadcast)", "MME")])
     assert resolve_input_device("nvidia") == 2
+
+
+def test_lists_every_mic_once_across_host_apis(monkeypatch):
+    """Detect ALL mics: collapse per-host-API duplicates to one entry each, and
+    surface a mic that only exists on WASAPI (a Bluetooth headset) — the case
+    the old MME-only picker dropped."""
+    from voice.audio import list_input_devices
+
+    _fake_inputs(monkeypatch, [
+        # One physical mic on two host APIs: MME truncates the name to 31 chars,
+        # WASAPI gives the full name. They must collapse to a single entry.
+        (0, "Microphone (High Definition Aud", "MME"),               # 31-char MME
+        (5, "Microphone (High Definition Audio Device)", "Windows WASAPI"),
+        # A headset mic that only appears under WASAPI — invisible before.
+        (9, "Headset (A25 Stereo)", "Windows WASAPI"),
+    ])
+    devices = list_input_devices()
+    names = [d["name"] for d in devices]
+    assert len(devices) == 2                          # collapsed, not 3 rows
+    assert any("A25" in n for n in names)             # WASAPI-only mic detected
+    hd = next(d for d in devices if "High Definition" in d["name"])
+    assert hd["index"] == 0                           # kept the openable MME index
+    assert hd["name"] == "Microphone (High Definition Aud"  # truncation-safe name
+
+
+def test_resolve_prefers_the_openable_host_api(monkeypatch):
+    """A mic enumerated on several host APIs resolves to the one we can open at
+    16 kHz (MME > DirectSound > WASAPI), not whichever came first."""
+    from voice.audio import resolve_input_device
+
+    _fake_inputs(monkeypatch, [
+        (7, "Microphone (High Definition Audio Device)", "Windows WASAPI"),
+        (3, "Microphone (High Definition Aud", "MME"),
+        (5, "Microphone (High Definition Audi", "Windows DirectSound"),
+    ])
+    assert resolve_input_device("high definition") == 3

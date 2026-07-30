@@ -112,12 +112,41 @@ class SetupOps:
 
     # -- microphone -----------------------------------------------------------
 
+    # Windows lists each mic once per host API; WDM-KS pins can't be opened at
+    # all, and MME/DirectSound resample to any rate while WASAPI often refuses a
+    # non-native one. (Mirrors voice.audio's device logic — app/ deliberately
+    # doesn't import voice/, so the small dedup is repeated here.)
+    _UNUSABLE_HOSTAPI = "Windows WDM-KS"
+    _HOSTAPI_RANK = {"MME": 0, "Windows DirectSound": 1, "Windows WASAPI": 2}
+
     def _input_devices(self) -> List[tuple]:
-        """(real sounddevice id, name) for every INPUT device — the id, not the
-        filtered position, is what sd.rec needs."""
+        """(real sounddevice id, name) for every physical INPUT device, listed
+        ONCE. Drops the unopenable WDM-KS pins and collapses each mic's
+        per-host-API copies to a single entry — keeping the id on the most-
+        openable host API (the real id, not a filtered position, is what sd.rec
+        needs)."""
         import sounddevice as sd
-        return [(i, d["name"]) for i, d in enumerate(sd.query_devices())
-                if d.get("max_input_channels", 0) > 0]
+        apis = [a["name"] for a in sd.query_hostapis()]
+        picked: dict = {}
+        for i, d in enumerate(sd.query_devices()):
+            if d.get("max_input_channels", 0) <= 0:
+                continue
+            api = apis[d["hostapi"]] if d["hostapi"] < len(apis) else "?"
+            if api == self._UNUSABLE_HOSTAPI:
+                continue
+            name = str(d["name"])
+            key = name[:31].strip().lower()          # MME truncates to 31 chars
+            rank = self._HOSTAPI_RANK.get(api, 9)
+            cur = picked.get(key)
+            if cur is None:
+                picked[key] = {"id": i, "name": name, "rank": rank}
+                continue
+            if rank < cur["rank"]:
+                cur["id"], cur["rank"] = i, rank
+            if len(name) < len(cur["name"]):
+                cur["name"] = name
+        return [(p["id"], p["name"])
+                for p in sorted(picked.values(), key=lambda p: p["id"])]
 
     def list_microphones(self) -> List[str]:
         try:

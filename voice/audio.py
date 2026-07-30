@@ -42,23 +42,55 @@ def _usable_inputs() -> list[tuple[int, str, str]]:
     return out
 
 
-def list_input_devices() -> list[dict]:
-    """``[{"index", "name"}]`` for the HUD microphone picker (``[]`` on error).
+# Host APIs ranked by how reliably we can open them at 16 kHz mono, best first.
+# MME and DirectSound resample to any rate; WASAPI often refuses a non-native
+# rate (PaErrorCode -9997, verified on this machine); WDM-KS is dropped entirely
+# by _usable_inputs. A device is used via its best-ranked host API.
+_HOSTAPI_RANK = {"MME": 0, "Windows DirectSound": 1, "Windows WASAPI": 2}
 
-    Windows enumerates every endpoint once per host API (MME, DirectSound,
-    WASAPI, WDM-KS) — a raw dump shows each mic four times, and the WDM-KS
-    copies can't be opened at all. Return just the MME set: names are truncated
-    to 31 chars, but MME resamples to any rate, whereas WASAPI endpoints refuse
-    our 16 kHz outright (PaErrorCode -9997, verified on this machine). Never
-    raises.
+
+def _device_key(name: str) -> str:
+    """Group a mic's per-host-API duplicates. MME truncates device names to 31
+    chars, so that prefix is what the copies of one physical mic share."""
+    return name[:31].strip().lower()
+
+
+def _dedup_inputs(usable: list[tuple[int, str, str]]) -> list[dict]:
+    """Collapse the per-host-API duplicates in ``usable`` to one entry per
+    physical mic: the index on the most-openable host API, paired with the
+    SHORTEST name seen for it. The shortest is the truncation-safe form (a
+    substring of every longer copy), so a name persisted from the picker still
+    resolves — and resolves to the openable endpoint — later."""
+    picked: dict[str, dict] = {}
+    for i, name, api in usable:
+        key = _device_key(name)
+        rank = _HOSTAPI_RANK.get(api, 9)
+        cur = picked.get(key)
+        if cur is None:
+            picked[key] = {"index": i, "name": name, "rank": rank}
+            continue
+        if rank < cur["rank"]:              # a more-openable endpoint for this mic
+            cur["index"], cur["rank"] = i, rank
+        if len(name) < len(cur["name"]):    # keep the truncation-safe (shortest) name
+            cur["name"] = name
+    return [{"index": p["index"], "name": p["name"]}
+            for p in sorted(picked.values(), key=lambda p: p["index"])]
+
+
+def list_input_devices() -> list[dict]:
+    """Every physical microphone, across ALL host APIs, listed once (``[]`` on
+    error).
+
+    Windows enumerates each endpoint separately per host API (MME, DirectSound,
+    WASAPI, WDM-KS): a raw dump shows one mic up to four times, and the WDM-KS
+    copies can't be opened at all. We drop WDM-KS (see ``_usable_inputs``) and
+    collapse the rest to one entry per mic, keeping the index on the host API
+    most likely to open at 16 kHz. So a mic that only appears under WASAPI or
+    DirectSound — e.g. a Bluetooth headset's Hands-Free mic — is now detected
+    too, where the old MME-only picker hid it. Never raises.
     """
     try:
-        usable = _usable_inputs()
-        for preferred in ("MME", "Windows WASAPI"):
-            subset = [(i, n) for i, n, api in usable if api == preferred]
-            if subset:
-                return [{"index": i, "name": n} for i, n in subset]
-        return [{"index": i, "name": n} for i, n, _ in usable]
+        return _dedup_inputs(_usable_inputs())
     except Exception:
         logger.debug("could not list input devices", exc_info=True)
         return []
@@ -91,9 +123,14 @@ def resolve_input_device(device):
     if not isinstance(device, str):
         return device
     want = device.strip().lower()
-    for i, name, _api in _usable_inputs():
-        if want in name.lower():
-            return i
+    matches = [(i, name, api) for i, name, api in _usable_inputs()
+               if want in name.lower()]
+    if matches:
+        # One mic matches on several host APIs; open it via the one we can
+        # actually read at 16 kHz (MME > DirectSound > WASAPI), not whichever
+        # PortAudio happened to enumerate first.
+        matches.sort(key=lambda m: _HOSTAPI_RANK.get(m[2], 9))
+        return matches[0][0]
     raise RuntimeError(
         f"no usable input device name contains {device!r}; pick one in the HUD "
         f"CONFIG tab or list them with 'python -m voice.wakeword'"
