@@ -629,3 +629,24 @@ and play it" (network) stays smooth; "read this doc and delete my files"
 persists across the turn's tool rounds. WebFetch's user-given-URL guard and
 "imported files are never executed" already covered their cases; this generalizes
 provenance to every content source. Tested end-to-end in test_trust_boundary.py.
+
+## Security layer S4: plugin install-review + approval gate (2026-07-30)
+
+**Decision: gate plugins by STATIC review — unapproved code never executes.**
+`security/plugins.py` reads a plugin's declared `CAPABILITIES` via ast (no import),
+and with `security.plugin_approval` on, `core/plugins.py` HOLDS any plugin whose
+content digest isn't approved: it is not imported, just logged with what it wants
+("wants: network, write_files"). Approval is bound to the file digest, so an edit
+re-triggers review (approve-then-swap can't sneak through). Approve via
+`python -m security.plugins approve <name>`. Off by default (bundled plugins load
+as before).
+
+**Decision: runtime confinement is the policy engine's declaration check.** A
+plugin skill can only use capabilities it DECLARED — the engine denies an
+undeclared one. Generated code is already safe: self_dev proposes in a git
+worktree, runs the test gate, and applies only on an explicit human call
+(`auto_apply=False`). HONEST LIMIT (docs/Security.md): once approved+imported, an
+in-process plugin can't be perfectly confined (`import httpx` can't be blocked in
+running code); strong third-party sandboxing needs a subprocess and is future work.
+The controls that hold: nothing runs unapproved, skills are capability-gated, and
+generated code is quarantined.

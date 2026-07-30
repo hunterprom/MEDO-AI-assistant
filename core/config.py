@@ -808,6 +808,10 @@ class SecurityConfig(BaseModel):
     owner_voice_threshold: float = 0.75
     #: S5: per-cloud-brain opt-in to send local RAG/memory/file context out.
     cloud_egress_optin: dict[str, bool] = Field(default_factory=dict)
+    #: S4: require explicit approval before a NEW/CHANGED plugin is loaded. Off by
+    #: default (bundled plugins load as before); on = an un-approved plugin's code
+    #: is not even imported until the user approves it (python -m security.plugins).
+    plugin_approval: bool = False
 
 
 class SoftwareConfig(BaseModel):

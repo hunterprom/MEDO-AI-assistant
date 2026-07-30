@@ -471,13 +471,19 @@ def build_registry(
     # "search obsidian for …". A broken plugin is skipped, never fatal.
     from core.plugins import load_plugins
 
+    _plugin_store = None
+    if settings.security.plugin_approval:
+        from security.plugins import PluginApprovalStore
+
+        _plugin_store = PluginApprovalStore()
     load_plugins(registry, {
         "settings": settings,
         "announcer": announcer,
         "summarize": summarize,
         "reminders": reminder_store,
         "doc_index": doc_index,
-    })
+    }, require_approval=settings.security.plugin_approval,
+       approval_store=_plugin_store)
 
     # "open <anything installed>" — deliberately last of the openers: its
     # pattern is broad by necessity, so it only ever sees what the configured
