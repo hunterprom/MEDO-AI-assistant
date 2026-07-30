@@ -526,6 +526,19 @@ def build_registry(
                               exe_paths=settings.software.exe_paths)
             n = register_software(registry, settings, mech)
             logging.getLogger(__name__).info("software connectors: %d actions", n)
+            # Learning: scan an app's UI ("learn CapCut") and later find / go to
+            # its controls. Foundation — locate + single-step navigate.
+            from skills.software_learn import (
+                AppLocateSkill,
+                AppNavigateSkill,
+                LearnAppSkill,
+            )
+            from software.ui_scan import UiaWalker
+
+            walker = UiaWalker()
+            registry.register(LearnAppSkill(mech, walker))
+            registry.register(AppLocateSkill(mech))
+            registry.register(AppNavigateSkill(mech))
         except Exception:
             logging.getLogger(__name__).warning(
                 "software connectors failed to load", exc_info=True)

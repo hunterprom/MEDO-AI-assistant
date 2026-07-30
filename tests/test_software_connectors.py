@@ -285,8 +285,11 @@ def test_register_software_adds_to_a_registry():
 
 # -- S5: the HUD SOFTWARE CONTROL panel (endpoints + persistence) -------------
 
-def _serve(check):
-    """Run ``check(client, settings)`` against a live RemoteServer (no persist)."""
+def _serve(check, *, mech=None):
+    """Run ``check(client, settings)`` against a live RemoteServer (no persist).
+
+    Pass ``mech`` to inject a fake Mechanisms (so connector actions hit a
+    FakeBackend, never the real OS / real media keys)."""
     from aiohttp.test_utils import TestClient, TestServer
     from core.events import EventBus, StateMachine
     from remote.server import RemoteServer
@@ -294,6 +297,8 @@ def _serve(check):
     async def run():
         settings = load_settings()
         server = RemoteServer(settings, router=None, sm=StateMachine(EventBus()))
+        if mech is not None:
+            server._software_mech = mech      # pre-empts building a Win32Backend
         client = TestClient(TestServer(server.build_app()))
         await client.start_server()
         try:
@@ -310,8 +315,43 @@ def test_software_status_lists_connectors_and_actions():
         ids = {c["app_id"] for c in d["connectors"]}
         assert {"media", "window", "browser"} <= ids           # all shipped ones
         media = next(c for c in d["connectors"] if c["app_id"] == "media")
-        assert media["enabled"] is True and "play pause" in media["actions"]
+        assert media["enabled"] is True
+        assert any(a["name"] == "play_pause" for a in media["actions"])
+        assert "learned" in d                       # learned-apps list present
     _serve(check)
+
+
+def test_software_action_runs_a_connector_action():
+    backend = FakeBackend()
+
+    async def check(client, settings):
+        settings.software.enabled = True            # master on (live)
+        settings.safety.pc_control_enabled = True   # PC control on
+        r = await (await client.post(
+            "/software/action",
+            json={"app_id": "media", "action": "play_pause"})).json()
+        assert r["ok"] and r["success"] is True     # ran through the skill
+        assert backend.media == ["play_pause"]      # hit the (fake) mechanism
+        # gated: with PC control off, it refuses without touching anything
+        settings.safety.pc_control_enabled = False
+        r2 = await (await client.post(
+            "/software/action",
+            json={"app_id": "media", "action": "play_pause"})).json()
+        assert r2["success"] is False and "PC control" in r2["speech"]
+        assert backend.media == ["play_pause"]      # nothing new happened
+        # master off -> refuses too
+        settings.safety.pc_control_enabled = True
+        settings.software.enabled = False
+        r3 = await (await client.post(
+            "/software/action",
+            json={"app_id": "media", "action": "play_pause"})).json()
+        assert r3["success"] is False
+        # unknown action -> 404
+        settings.software.enabled = True
+        assert (await client.post(
+            "/software/action",
+            json={"app_id": "media", "action": "nope"})).status == 404
+    _serve(check, mech=_mech(backend))
 
 
 def test_software_control_toggles_master_and_per_connector():

@@ -981,8 +981,12 @@
           <span style="font-family:'Share Tech Mono',monospace;font-size:11px;color:#8fb8dd">LET MEDO CONTROL LOCAL APPS</span>
         </div>
         <div id="sw-list" class="sr-list"></div>
+        <div class="head" style="margin-top:8px;font-size:11px">TEACH MEDO AN APP · IT SCANS THE UI SO IT KNOWS WHERE THINGS ARE</div>
+        <div class="field"><label>APP NAME — the app must be open on screen (e.g. CapCut)</label><input id="sw-learn-name" placeholder="CapCut" autocomplete="off" spellcheck="false" /></div>
+        <div class="rowbtns"><button class="btn-sm" id="sw-learn">LEARN THIS APP</button><span id="sw-learn-status"></span></div>
+        <div id="sw-learned" class="sr-list"></div>
         <div id="sw-hint" style="font-family:'Share Tech Mono',monospace;font-size:10px;color:#4a6d94;letter-spacing:.06em">
-          EACH APP'S COMMANDS BECOME SKILLS THE BRAIN CAN RUN (SAY "PAUSE", "MINIMISE", "NEW TAB", "CLOSE NOTEPAD") · EVERY ONE GATED BY THE POLICY ENGINE, NEVER TRIGGERED BY A DOCUMENT OR WEB PAGE · APPLIES ON RESTART
+          BUTTONS RUN AN ACTION NOW · THE BRAIN PREFERS THESE OVER DESCRIBING STEPS · EVERY ONE GATED BY THE POLICY ENGINE, NEVER TRIGGERED BY A DOCUMENT OR WEB PAGE · LEARNING REVEALS MENUS THEN BACKS OUT (READ-ONLY-ISH) · SAY "OPEN THE EFFECTS PANEL IN CAPCUT" ONCE LEARNED
         </div>
       </div>
       <div class="head" style="margin-top:8px">ROUTINES · SCHEDULED</div>
@@ -2180,9 +2184,19 @@
         b.title = c.installed === false ? 'not installed' : (c.installed ? 'available' : 'status shows once App control is on');
         const n = document.createElement('span'); n.textContent = c.display_name;
         n.style.cssText = 'color:#c9e6ff;min-width:66px;text-transform:capitalize';
-        const t = document.createElement('span');
-        t.textContent = (c.actions || []).slice(0, 6).join(' · ') + ((c.actions || []).length > 6 ? ' · …' : '');
-        t.style.cssText = 'color:#4a6d94;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
+        // quick-action buttons — run an action right now (the brain prefers
+        // these too). A confirm-required action asks first.
+        const acts = document.createElement('div');
+        acts.style.cssText = 'display:flex;gap:4px;flex-wrap:wrap;flex:1';
+        for (const a of (c.actions || []).slice(0, 8)) {
+          const ab = document.createElement('button');
+          ab.className = 'btn-sm'; ab.textContent = a.label;
+          ab.style.cssText = 'padding:1px 7px;font-size:10px';
+          ab.title = `run ${a.label} in ${c.display_name}`;
+          ab.disabled = !c.enabled;
+          ab.onclick = () => runSoftwareAction(c, a);
+          acts.appendChild(ab);
+        }
         const tg = document.createElement('button');
         tg.className = 'toggle' + (c.enabled ? ' on' : '');
         tg.innerHTML = '<span class="knob"></span>';
@@ -2198,11 +2212,59 @@
             if (r.ok) { log(`SOFTWARE · ${(c.display_name || c.app_id).toUpperCase()} ${want ? 'ON' : 'OFF'} · RESTART TO APPLY`); loadSoftware(); }
           } catch { log('SOFTWARE — API offline'); }
         };
-        row.append(b, n, t, tg);
+        row.append(b, n, acts, tg);
         list.appendChild(row);
       }
+      renderLearned(d.learned || []);
     } catch { desc.textContent = 'CONTROL LOCAL APPS BY VOICE · API OFFLINE'; }
   }
+
+  async function runSoftwareAction(c, a, confirmed) {
+    if (a.confirm && !confirmed) {
+      if (!confirm(`Run "${a.label}" in ${c.display_name}?`)) return;
+      confirmed = true;
+    }
+    try {
+      const r = await (await fetch(`${API}/software/action`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app_id: c.app_id, action: a.name, confirmed: !!confirmed }),
+      })).json();
+      if (r.needs_confirmation && !confirmed) return runSoftwareAction(c, a, true);
+      log(`SOFTWARE · ${c.display_name.toUpperCase()} · ${a.label.toUpperCase()} — ${r.success ? 'DONE' : (r.speech || 'no')}`);
+    } catch { log('SOFTWARE — API offline'); }
+  }
+
+  function renderLearned(learned) {
+    const box = $('sw-learned'); box.innerHTML = '';
+    for (const m of learned) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:10px;align-items:center;padding:3px 0;font-family:"Share Tech Mono",monospace;font-size:11px';
+      const n = document.createElement('span'); n.textContent = '✔ ' + (m.display_name || m.app_id); n.style.color = '#6ee7a8';
+      const t = document.createElement('span'); t.textContent = `${m.count} controls learned`; t.style.cssText = 'color:#4a6d94;flex:1';
+      const rm = document.createElement('button'); rm.textContent = '×'; rm.className = 'btn-sm';
+      rm.style.cssText = 'margin-left:auto;padding:0 8px'; rm.title = 'forget this app';
+      rm.onclick = async () => {
+        try { await fetch(`${API}/software/forget`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ app: m.app_id }) }); log(`SOFTWARE · FORGOT ${(m.display_name || m.app_id).toUpperCase()}`); loadSoftware(); } catch { log('SOFTWARE — API offline'); }
+      };
+      row.append(n, t, rm);
+      box.appendChild(row);
+    }
+  }
+
+  $('sw-learn').onclick = async () => {
+    const name = $('sw-learn-name').value.trim(), st = $('sw-learn-status');
+    if (!name) { st.textContent = 'type an app name'; return; }
+    st.textContent = 'scanning…';
+    try {
+      const r = await (await fetch(`${API}/software/learn`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app: name }),
+      })).json();
+      st.textContent = r.speech || (r.success ? 'learned' : 'failed');
+      if (r.success) $('sw-learn-name').value = '';
+      loadSoftware();
+    } catch { st.textContent = 'API offline'; }
+  };
 
   /* ---- proactive routines ---- */
   let _routines = [];

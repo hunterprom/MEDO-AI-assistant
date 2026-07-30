@@ -57,3 +57,6 @@ logs/
 
 # real captured wake-word audio = the user's own voice; keep it local
 models/wakeword/real/
+
+# Learned app UI maps — per-install, machine-specific (software/knowledge.py).
+data/software_maps/

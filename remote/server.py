@@ -286,6 +286,9 @@ class RemoteServer:
         app.router.add_post("/control/mcp/remove", self._handle_mcp_remove)
         app.router.add_get("/software", self._handle_software_status)
         app.router.add_post("/control/software", self._handle_software_control)
+        app.router.add_post("/software/action", self._handle_software_action)
+        app.router.add_post("/software/learn", self._handle_software_learn)
+        app.router.add_post("/software/forget", self._handle_software_forget)
         app.router.add_get("/routines", self._handle_routines_status)
         app.router.add_post("/control/routines", self._handle_routines_set)
         app.router.add_get("/webhooks", self._handle_webhooks_status)
@@ -813,8 +816,10 @@ class RemoteServer:
             }
             try:
                 conn = cls(mech)
-                entry["actions"] = [a.name.replace("_", " ")
-                                    for a in conn.actions()]
+                entry["actions"] = [
+                    {"name": a.name, "label": a.name.replace("_", " "),
+                     "confirm": bool(a.requires_confirmation)}
+                    for a in conn.actions()]
                 if mech is not None:
                     det = await asyncio.to_thread(conn.detect)
                     entry["installed"] = bool(det.installed)
@@ -823,8 +828,12 @@ class RemoteServer:
                 logger.debug("connector %s introspect failed", app_id,
                              exc_info=True)
             connectors.append(entry)
+        from software.knowledge import list_maps
+
+        learned = await asyncio.to_thread(list_maps)
         return web.json_response(
-            {"ok": True, "enabled": bool(sw.enabled), "connectors": connectors})
+            {"ok": True, "enabled": bool(sw.enabled), "connectors": connectors,
+             "learned": learned})
 
     async def _handle_software_control(self, request: web.Request) -> web.Response:
         """The HUD's SOFTWARE CONTROL panel: master ``{"on": bool}`` and/or a
@@ -857,6 +866,90 @@ class RemoteServer:
         return web.json_response({"ok": True, "enabled": bool(sw.enabled),
                                   "connectors": dict(sw.connectors),
                                   "restart": True})
+
+    @staticmethod
+    async def _run_skill_blocking(skill, req):
+        """Run a skill whose ``execute`` does blocking OS work, off the loop."""
+        return await asyncio.to_thread(lambda: asyncio.run(skill.execute(req)))
+
+    async def _handle_software_action(self, request: web.Request) -> web.Response:
+        """Run ONE connector action from a HUD button
+        (``{app_id, action, confirmed?}``). Goes through the same
+        ConnectorActionSkill as voice, and honours the master + PC-control
+        switches (calling the skill directly would otherwise skip the router's
+        gate)."""
+        from skills.base import SkillRequest
+        from software.connectors import CONNECTOR_CLASSES
+        from software.registry import ConnectorActionSkill
+
+        body = await _json_dict(request)
+        app_id = str(body.get("app_id") or "").strip()
+        action_name = str(body.get("action") or "").strip()
+        if not app_id or not action_name:
+            return _error(400, "need {\"app_id\":..., \"action\":...}")
+        if not self._settings.software.enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "Turn App control on first."})
+        mech = await asyncio.to_thread(self._software_mechanisms)
+        if mech is None:
+            return _error(503, "software control isn't available here")
+        cls = next((c for c in CONNECTOR_CLASSES
+                    if getattr(c, "app_id", "") == app_id), None)
+        if cls is None:
+            return _error(404, f"no connector {app_id!r}")
+        try:
+            conn = cls(mech)
+            action = next((a for a in conn.actions()
+                           if a.name == action_name), None)
+        except Exception:
+            action = None
+        if action is None:
+            return _error(404, f"no action {action_name!r} on {app_id}")
+        skill = ConnectorActionSkill(conn, action)
+        if skill.controls_pc and not self._settings.safety.pc_control_enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "PC control is off — turn it on to let me do that."})
+        req = SkillRequest(text="", args=dict(body.get("args") or {}),
+                           context={"confirmed": bool(body.get("confirmed"))})
+        result = await self._run_skill_blocking(skill, req)
+        return web.json_response(
+            {"ok": True, "success": bool(result.success), "speech": result.speech,
+             "needs_confirmation": bool(result.needs_confirmation)})
+
+    async def _handle_software_learn(self, request: web.Request) -> web.Response:
+        """Learn an app's UI from the HUD (``{app}``) — focus, safely scan
+        (reveal menus, back out), and remember it. Gated by PC control."""
+        from skills.base import SkillRequest
+        from skills.software_learn import LearnAppSkill
+        from software.ui_scan import UiaWalker
+
+        body = await _json_dict(request)
+        app = str(body.get("app") or "").strip()
+        if not app:
+            return _error(400, "need {\"app\": \"CapCut\"}")
+        if not self._settings.safety.pc_control_enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "PC control is off — turn it on so I can scan an app."})
+        mech = await asyncio.to_thread(self._software_mechanisms)
+        if mech is None:
+            return _error(503, "software control isn't available here")
+        skill = LearnAppSkill(mech, UiaWalker())
+        result = await self._run_skill_blocking(
+            skill, SkillRequest(text="", args={"app": app}))
+        return web.json_response(
+            {"ok": True, "success": bool(result.success),
+             "speech": result.speech, "data": result.data})
+
+    async def _handle_software_forget(self, request: web.Request) -> web.Response:
+        """Forget a learned app (``{app}``) — deletes its map."""
+        from software.knowledge import forget_map
+
+        body = await _json_dict(request)
+        app = str(body.get("app") or "").strip()
+        if not app:
+            return _error(400, "need {\"app\": ...}")
+        forgot = await asyncio.to_thread(forget_map, app)
+        return web.json_response({"ok": True, "forgot": bool(forgot)})
 
     async def _handle_mcp_add(self, request: web.Request) -> web.Response:
         """Add/update an MCP server from the HUD: name + URL (+ optional bearer
