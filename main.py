@@ -555,6 +555,22 @@ def build_registry(
             logging.getLogger(__name__).warning(
                 "software connectors failed to load", exc_info=True)
 
+    # Maker Studio (S2/S3): design real electrical schematics + printable 3D
+    # models by having the brain write library code (SchemDraw / CadQuery) and
+    # EXECUTING it in the sandbox. Off unless studio.enabled; the engineering
+    # libraries are optional (each skill degrades with an "install X" message).
+    if settings.studio.enabled:
+        try:
+            from skills.maker_studio import DesignCircuitSkill, Model3DSkill
+
+            registry.register(DesignCircuitSkill(settings))
+            registry.register(Model3DSkill(settings))
+            logging.getLogger(__name__).info(
+                "Maker Studio: schematic + 3D skills registered")
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Maker Studio skills failed to load", exc_info=True)
+
     # Last, once every skill exists: the user's own trigger phrases from
     # config.yaml (skills.triggers). They are appended to the very same
     # `patterns` list the built-ins use, so nothing downstream — the router,

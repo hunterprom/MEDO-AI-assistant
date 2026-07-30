@@ -56,7 +56,7 @@ class StudioEngine:
         self._cfg = settings.studio
         self._base_dir = (Path(base_dir).expanduser() if base_dir
                           else Path(self._cfg.projects_dir).expanduser())
-        self._brain = brain or Brain(model=self._cfg.model)
+        self._brain = brain or Brain(model=self._cfg.model, settings=settings)
         self._sandbox = sandbox or self._default_sandbox()
 
     def _default_sandbox(self) -> Sandbox:

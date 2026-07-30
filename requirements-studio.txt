@@ -1,0 +1,10 @@
+# Maker Studio optional dependencies (only needed when studio.enabled = true).
+# MEDO degrades gracefully without them — each skill says "install X" instead of
+# failing. Install with:
+#   .venv\Scripts\pip install -r requirements-studio.txt
+#
+schemdraw        # S2 — electrical schematics (pure-Python, renders SVG/PNG)
+cadquery         # S3 — parametric 3D models -> STL/STEP (LARGE: pulls OCP/OpenCascade)
+#
+# KiCad CLI (optional, for a real EDA netlist/board export) is a separate SYSTEM
+# install, not a pip package: https://www.kicad.org/download/
