@@ -26,7 +26,9 @@ from core.safety import PathWhitelist, is_affirmative, is_negative
 from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from llm.prompts import system_prompt
 from llm.tools import build_tools, coerce_args, dispatch_tool
-from security.policy import Actor, PolicyEngine
+from security.capabilities import effective_capabilities
+from security.policy import Actor, PolicyEngine, Provenance
+from security.trust import DANGEROUS_CAPS, UNTRUSTED_CONTENT_TOOLS, mark_untrusted
 from skills.base import Skill, SkillRegistry, SkillRequest, SkillResult
 
 #: A query "needs live info" (search the web, current events) when it trips one
@@ -166,6 +168,8 @@ class Router:
         #: path, so the follow-up chain survives web_search's skill_name-less
         #: synthesis result. Reset at the top of every route().
         self._turn_used_live_info = False
+        #: Trust boundary (S3): tainted once an untrusted-content tool runs.
+        self._turn_untrusted_context = False
         #: Set within a turn when an ambiguous confirmation reply (neither yes nor
         #: no) is cancelled and RE-ROUTED as a genuine command — so route() records
         #: that fresh command as a normal turn instead of suppressing it like a
@@ -538,6 +542,10 @@ class Router:
             and self._pending_choice[2].get("source")
             == (context or {}).get("source"))
         self._turn_used_live_info = False
+        # Trust boundary (S3): set when a tool that ingests untrusted external
+        # content (RAG/web) runs this turn, so a LATER high-impact action is
+        # gated as possibly injection-induced. Reset each turn.
+        self._turn_untrusted_context = False
         self._rerouted_from_confirmation = False
         self._rerouted_from_choice = False
         # Cleared each turn so a stale embedding can never attach to a later
@@ -1161,6 +1169,13 @@ class Router:
         direct: list[str] = []
         needs_synthesis = False
         used_skill: str | None = None
+        actor = self._actor_for(context)
+        # Trust boundary (S3): the turn is tainted if an untrusted-content tool
+        # already ran, OR one is in THIS batch (proposed alongside the action).
+        batch_has_content = any(
+            (c.get("function") or {}).get("name", "") in UNTRUSTED_CONTENT_TOOLS
+            for c in tool_calls)
+        tainted = self._turn_untrusted_context or batch_has_content
 
         for call in tool_calls:
             fn = call.get("function", {})
@@ -1170,13 +1185,32 @@ class Router:
             # Coerce string-typed args now, so a stashed confirmation request
             # (re-executed on "yes") carries clean args too — not just dispatch.
             args = coerce_args(gated_skill, args)
-            gate = (self._policy.gate_skill(gated_skill,
-                                            actor=self._actor_for(context))
+            # An action induced by untrusted content this turn is judged with
+            # UNTRUSTED provenance — the post-LLM injection gate.
+            caps = (effective_capabilities(gated_skill)
+                    if gated_skill is not None else frozenset())
+            provenance = (Provenance.UNTRUSTED
+                          if tainted and (caps & DANGEROUS_CAPS)
+                          else Provenance.USER)
+            gate = (self._policy.gate_skill(gated_skill, actor=actor,
+                                            provenance=provenance)
                     if gated_skill is not None else None)
+            if gate is not None and gate.code == "untrusted_confirm":
+                # The model proposed a high-impact action that seems to come from
+                # content it read, not from the user. Never silently execute —
+                # require an explicit yes (or deny, per untrusted_action_policy).
+                self._pending = (gated_skill,
+                                 SkillRequest(text=text, args=args, context=context))
+                return RouteResult(
+                    path=RoutePath.LLM, skill_name=name,
+                    speech=("That looks like it came from something I read, not "
+                            "from you. Do you want me to go ahead? Say yes to "
+                            "confirm."))
             if gate is not None and gate.denied():
                 # Belt to the tool-filter's braces: even a hallucinated call to a
                 # gated tool is refused (e.g. an actuation tool while PC control
-                # is off) — the policy engine is the single authority.
+                # is off, or an injected action when the policy is deny) — the
+                # policy engine is the single authority.
                 speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
                           else gate.reason)
                 result = SkillResult(speech, success=False)
@@ -1203,7 +1237,14 @@ class Router:
                 # web_search answers via synthesis (no skill_name on the final
                 # RouteResult), so flag it here or the follow-up chain breaks.
                 self._turn_used_live_info = True
-            messages.append({"role": "tool", "name": name, "content": result.speech})
+            if name in UNTRUSTED_CONTENT_TOOLS:
+                # Taint the turn (a later high-impact action is now gated) AND
+                # wrap the content so the model treats it as quoted data.
+                self._turn_untrusted_context = True
+                content = mark_untrusted(result.speech, name)
+            else:
+                content = result.speech
+            messages.append({"role": "tool", "name": name, "content": content})
             if name in SYNTHESIS_TOOLS:
                 needs_synthesis = True
             elif not result.success:

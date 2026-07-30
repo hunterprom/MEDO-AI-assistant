@@ -610,3 +610,22 @@ provenance is refused — only the user's own voice/text drives software. Three
 reference connectors (media, window, browser) + a documented template; adding an
 app is a new file, not a core edit. docs/Software Connectors.md has the ladder,
 template, and security rules.
+
+## Security layer S3: prompt-injection trust boundary (2026-07-30)
+
+**Decision: the post-LLM action gate is the real backstop, not prompt marking.**
+`security/trust.py` + the router: when a tool that ingests untrusted external
+content (search_documents / web_fetch / web_search) runs, the turn is TAINTED and
+its output is WRAPPED (`mark_untrusted`) so the model treats it as quoted data
+(the system prompt now says so). But the load-bearing control is: a later
+HIGH-IMPACT action (write_files/run_command/power/device/install_plugin/
+modify_self) is re-judged by the policy engine with `Provenance.UNTRUSTED` — so
+an injected "delete everything" is CONFIRMED or DENIED (per untrusted_action_
+policy), never silently executed. The model proposing an action ≠ executing it.
+
+**Decision: taint only HIGH-IMPACT caps, not every side effect.** "Search YouTube
+and play it" (network) stays smooth; "read this doc and delete my files"
+(write_files) is gated — injected instructions target the dangerous verbs. Taint
+persists across the turn's tool rounds. WebFetch's user-given-URL guard and
+"imported files are never executed" already covered their cases; this generalizes
+provenance to every content source. Tested end-to-end in test_trust_boundary.py.
