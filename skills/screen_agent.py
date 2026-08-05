@@ -56,6 +56,28 @@ def scale_point(x_norm: float, y_norm: float, w: int, h: int) -> tuple[int, int]
     return max(0, min(w - 1, x)), max(0, min(h - 1, y))
 
 
+#: A "done" whose `say` reads like a give-up. Small models often omit the
+#: success flag entirely while plainly saying they failed — defaulting those to
+#: success would announce a completion that never happened.
+_GAVE_UP_RE = re.compile(
+    r"\b(?:can'?t|cannot|couldn'?t|could not|unable|impossible|not (?:able|possible)|"
+    r"fail(?:ed|ure)?|gave up|no way|didn'?t work|unsuccessful)\b", re.IGNORECASE)
+
+
+def done_succeeded(action: dict) -> bool:
+    """Whether a model's ``done`` action really means COMPLETED.
+
+    Honours an explicit ``success`` flag; when it's absent, a give-up phrasing in
+    ``say`` counts as failure (pure, so both directions are unit-tested).
+    """
+    flag = action.get("success")
+    if isinstance(flag, bool):
+        return flag
+    if isinstance(flag, str) and flag.strip().lower() in ("true", "false"):
+        return flag.strip().lower() == "true"
+    return not _GAVE_UP_RE.search(str(action.get("say") or ""))
+
+
 def parse_action(raw: str) -> dict | None:
     """Extract the action JSON from a model reply (tolerates surrounding text)."""
     if not raw:
@@ -158,9 +180,10 @@ class ScreenAgentSkill(Skill):
                     "I couldn't work out the next step, so I stopped.", success=False)
             kind = str(action.get("action", "")).lower()
             if kind == "done":
-                # 'done' means finished OR impossible — honour the success flag so
-                # a gave-up run isn't reported as a completed one.
-                ok = bool(action.get("success", True))
+                # 'done' means finished OR impossible — honour the success flag
+                # (and a give-up `say` when the flag is missing) so a gave-up run
+                # isn't reported as a completed one.
+                ok = done_succeeded(action)
                 say = action.get("say") or (
                     "Done." if ok else "I couldn't finish that on screen.")
                 return SkillResult(say, success=ok, data={"steps": step})

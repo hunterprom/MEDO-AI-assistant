@@ -254,5 +254,138 @@ def test_studio_projects_skill_lists_and_handles_empty(tmp_path):
     assert r2.success and r2.data.get("count") == 1
 
 
+# -- fixlist regressions ------------------------------------------------------
+
+def _studio_settings(tmp_path=None):
+    from core.config import load_settings
+    s = load_settings()
+    s.studio.enabled = True
+    if tmp_path is not None:
+        s.studio.projects_dir = str(tmp_path)
+    return s
+
+
+class _AskThenBuildEngine:
+    """Asks a clarifying question first, then builds — records the brief it got."""
+
+    def __init__(self, question="What should I model?"):
+        self._question = question
+        self.briefs = []
+
+    async def create(self, domain, desc):
+        from studio.engine import StudioResult
+        self.briefs.append(desc)
+        if self._question:
+            q, self._question = self._question, ""
+            return StudioResult(ok=False, question=q)
+        return StudioResult(ok=True, project=None, version=1, artifacts=["model.stl"])
+
+
+def test_clarifying_question_captures_the_reply(tmp_path):
+    """The answer to 'What should I model?' must reach the engine, not vanish."""
+    from skills.maker_studio import Model3DSkill
+    eng = _AskThenBuildEngine()
+    skill = Model3DSkill(_studio_settings(), engine=eng)
+    first = _run(skill.execute(SkillRequest(text="model a", args={"description": "a"})))
+    assert first.await_reply is True and "model" in first.speech.lower()
+    second = _run(skill.execute(
+        SkillRequest(text="a gear", context={"captured_reply": True})))
+    assert second.success                       # it built, instead of dead-ending
+    assert any("gear" in b for b in eng.briefs)  # the answer reached the engine
+
+
+def test_clarifying_reply_can_be_cancelled():
+    from skills.maker_studio import Model3DSkill
+    skill = Model3DSkill(_studio_settings(), engine=_AskThenBuildEngine())
+    _run(skill.execute(SkillRequest(text="model a", args={"description": "a"})))
+    r = _run(skill.execute(
+        SkillRequest(text="never mind", context={"captured_reply": True})))
+    assert "never mind" in r.speech.lower() and r.await_reply is False
+
+
+def test_missing_description_asks_and_captures():
+    from skills.maker_studio import Model3DSkill
+    r = _run(Model3DSkill(_studio_settings()).execute(SkillRequest(text="")))
+    assert r.await_reply is True                # was a dead end before
+
+
+@pytest.mark.parametrize("text", [
+    "make a case for hiring more engineers",
+    "make a stand against corruption",
+    "let me make a case for it",
+])
+def test_3d_fast_path_ignores_idioms(text):
+    from skills.maker_studio import Model3DSkill
+    assert Model3DSkill(_studio_settings()).match(text) is None, text
+
+
+@pytest.mark.parametrize("text", [
+    "make a phone case",
+    "print a case for my ESP32",
+    "model a box",
+    "design a bracket for a motor",
+    "3d print a stand",
+    "make me a gear",
+])
+def test_3d_fast_path_still_matches_real_parts(text):
+    from skills.maker_studio import Model3DSkill
+    assert Model3DSkill(_studio_settings()).match(text) is not None, text
+
+
+def test_projects_listing_is_not_pc_control(tmp_path):
+    """Listing changes nothing, so the PC-control switch must not block it."""
+    from skills.maker_studio import StudioProjectsSkill
+    from studio.projects import StudioProject
+    s = _studio_settings(tmp_path)
+    s.safety.pc_control_enabled = False
+    StudioProject.create(tmp_path, "model3d", "a gear")
+    skill = StudioProjectsSkill(s)
+    assert skill.controls_pc is False
+    r = _run(skill.execute(SkillRequest(text="show my studio projects",
+                                        match=skill.match("show my studio projects"))))
+    assert r.success and r.data.get("count") == 1
+
+
+def test_projects_open_respects_pc_control_and_llm_arg(tmp_path, monkeypatch):
+    from skills.maker_studio import StudioProjectsSkill
+    from studio.projects import StudioProject
+    opened = []
+    monkeypatch.setattr("core.platform.open_path", lambda p: opened.append(str(p)))
+    s = _studio_settings(tmp_path)
+    StudioProject.create(tmp_path, "model3d", "a gear")
+    skill = StudioProjectsSkill(s)
+    # PC control OFF -> says where it is, opens nothing
+    s.safety.pc_control_enabled = False
+    r = _run(skill.execute(SkillRequest(text="", args={"open": True})))
+    assert opened == [] and r.data.get("opened") is False
+    # PC control ON, LLM tool path (no regex match) -> actually opens
+    s.safety.pc_control_enabled = True
+    r2 = _run(skill.execute(SkillRequest(text="", args={"open": True})))
+    assert opened and r2.data.get("opened") is True
+
+
+def test_orphan_version_dirs_are_swept(tmp_path):
+    """A crash between begin_version and finalize leaves a vN dir behind."""
+    import os
+    import time as _t
+    from studio.projects import StudioProject
+    p = StudioProject.create(tmp_path, "model3d", "a gear")
+    n, vdir = p.begin_version()                 # reserved, never finalized
+    (vdir / "model.py").write_text("x", encoding="utf-8")
+    old = _t.time() - 7200                      # pretend it's two hours stale
+    os.utime(vdir, (old, old))
+    reopened = StudioProject.open(p.root)
+    assert not vdir.exists()                    # orphan removed
+    assert reopened.versions() == []
+
+
+def test_a_live_version_dir_is_never_swept(tmp_path):
+    from studio.projects import StudioProject
+    p = StudioProject.create(tmp_path, "model3d", "a gear")
+    n, vdir = p.begin_version()                 # fresh — a build in flight
+    StudioProject.open(p.root)
+    assert vdir.exists()                        # too young to sweep
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

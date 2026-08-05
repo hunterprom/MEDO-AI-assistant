@@ -684,9 +684,12 @@ class BrowserAgentSkill(Skill):
                         success=False)
                 kind = str(action.get("action", "")).lower()
                 if kind == "done":
-                    # 'done' means finished OR impossible — honour success so a
-                    # gave-up run isn't announced as a completed one.
-                    ok = bool(action.get("success", True))
+                    # 'done' means finished OR impossible — honour success (and a
+                    # give-up `say` when the flag is missing) so a gave-up run
+                    # isn't announced as a completed one.
+                    from skills.screen_agent import done_succeeded
+
+                    ok = done_succeeded(action)
                     say = action.get("say") or (
                         ("Готово." if speak_mk else "Done.") if ok else
                         ("Не можев да го завршам тоа." if speak_mk

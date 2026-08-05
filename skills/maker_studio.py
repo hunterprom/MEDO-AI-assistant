@@ -22,6 +22,12 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip()).strip(" .?!,")
 
 
+#: "never mind" — drops a pending clarifying question instead of building.
+_CANCEL = re.compile(
+    r"^\s*(?:never\s*mind|nevermind|cancel|forget\s+it|stop|nothing|no)\s*[.!]*$",
+    re.IGNORECASE)
+
+
 class _StudioSkill(Skill):
     """Shared drive-the-engine flow for a domain."""
 
@@ -35,6 +41,9 @@ class _StudioSkill(Skill):
         self._settings = settings
         self._domain = domain
         self._engine = engine
+        # What we were asked to make when we posed a clarifying question, so the
+        # captured reply extends the brief instead of replacing it.
+        self._pending_desc = ""
 
     def _get_engine(self):
         if self._engine is None:
@@ -53,9 +62,20 @@ class _StudioSkill(Skill):
             return SkillResult(
                 "Maker Studio is off — enable studio.enabled in config so I can "
                 "build that.", success=False, data={"reason": "disabled"})
-        desc = self._description(request)
+        # The answer to our OWN clarifying question arrives as free text — without
+        # this the reply was parsed as a fresh request, found no description, and
+        # the exchange dead-ended.
+        if (request.context or {}).get("captured_reply"):
+            answer = _clean(request.text)
+            pending, self._pending_desc = self._pending_desc, ""
+            if not answer or _CANCEL.match(answer):
+                return SkillResult("Okay, never mind.")
+            desc = f"{pending} — {answer}" if pending else answer
+        else:
+            desc = self._description(request)
         if not desc:
-            return SkillResult(self._ask, success=False)
+            self._pending_desc = ""
+            return SkillResult(self._ask, await_reply=True)
         try:
             result = await self._get_engine().create(self._domain, desc)
         except Exception as exc:                # never crash the turn
@@ -63,6 +83,7 @@ class _StudioSkill(Skill):
             return SkillResult(f"I couldn't {self._verb} that: {exc}",
                                success=False)
         if result.question:
+            self._pending_desc = desc          # keep the brief for the reply
             return SkillResult(result.question, await_reply=True)
         return self._report(result)
 
@@ -100,6 +121,17 @@ class _StudioSkill(Skill):
                 "required": ["description"]}}}
 
 
+#: Nouns that essentially only ever name a physical part — safe with any making
+#: verb ("design a bracket", "make me a gear").
+_PART_NOUNS = (r"bracket|enclosure|mount|holder|clip|adapter|spacer|gear|knob|"
+               r"tray|grommet|screw|bolt|nut|washer")
+#: Idiom-prone words — "make a CASE for hiring", "make a STAND against X", "get a
+#: HANDLE on it", "box him in". These need a fabrication verb (print/model) or a
+#: physical modifier ("phone case", "project box") before the fast path claims
+#: them; the LLM tool path still covers every other phrasing.
+_AMBIG_NOUNS = r"case|stand|box|hook|handle"
+
+
 class Model3DSkill(_StudioSkill):
     name = "model_3d"
     description = ("Create a real, printable 3D model (STL + STEP) of a part from "
@@ -114,7 +146,14 @@ class Model3DSkill(_StudioSkill):
     patterns = [
         re.compile(r"\b(?:3-?d|three-?d)\s*(?:model|print)\s+(?:of|for|me)?\s*(?:a\s+|an\s+)?(?P<desc>.+)", re.IGNORECASE),
         re.compile(r"\bmodel\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>.+?)\s+in\s+3-?d\b", re.IGNORECASE),
-        re.compile(r"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:bracket|enclosure|mount|case|holder|clip|adapter|stand|spacer|gear|knob|box|tray|hook|handle|grommet|screw|bolt|nut|washer)\b.*)", re.IGNORECASE),
+        # unambiguous physical parts — any making verb
+        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_PART_NOUNS})\b.*)", re.IGNORECASE),
+        # idiom-prone nouns: only with a fabrication verb…
+        re.compile(rf"\b(?:print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_AMBIG_NOUNS})\b.*)", re.IGNORECASE),
+        # …or with a physical modifier in front ("a phone case", "a project box");
+        # the lookahead keeps a bare article out of the modifier slot, so
+        # "make a case for hiring" is left to the LLM.
+        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?!(?:a|an|the)\s)\w+\s+(?:{_AMBIG_NOUNS})\b.*)", re.IGNORECASE),
     ]
 
     def __init__(self, settings, *, engine=None) -> None:
@@ -175,7 +214,9 @@ class StudioProjectsSkill(Skill):
     """S5 — 'show my studio projects' / 'open my last model/schematic'."""
 
     name = "studio_projects"
-    controls_pc = True                     # opening a folder acts on the PC
+    # Listing is pure sensing, so the skill itself isn't PC control; the ONE
+    # actuating branch (opening the folder) checks the switch itself below.
+    controls_pc = False
     description = ("List your Maker Studio projects, or open the most recent one "
                    "(schematic / 3D model / script).")
     routing_phrases = ["show my studio projects", "open my last 3d model",
@@ -203,16 +244,31 @@ class StudioProjectsSkill(Skill):
         if not projects:
             return SkillResult("You don't have any Maker Studio projects yet.",
                                success=False, data={"count": 0})
+        # The LLM tool path has no regex match, so it needs its own way to ask
+        # for "open" — otherwise the model could only ever list.
+        wants_open = bool((request.args or {}).get("open"))
         if request.match is not None and "open" in request.text.lower():
+            wants_open = True
+        if wants_open:
             newest = projects[0]
+            label = newest.get("description") or newest["path"]
+            if not self._settings.safety.pc_control_enabled:
+                return SkillResult(
+                    f"Your last one is {label}, at {newest['path']} — turn PC "
+                    f"control on and I'll open it.",
+                    data={"path": newest["path"], "opened": False})
             from core.platform import open_path
             try:
                 open_path(newest["path"])
             except Exception:
-                pass
-            return SkillResult(
-                f"Opening your last one — {newest.get('description') or newest['path']}.",
-                data={"path": newest["path"]})
+                logger.warning("could not open studio project %s",
+                               newest["path"], exc_info=True)
+                return SkillResult(
+                    f"Your last one is at {newest['path']}, but I couldn't open "
+                    f"the folder.", success=False,
+                    data={"path": newest["path"], "opened": False})
+            return SkillResult(f"Opening your last one — {label}.",
+                               data={"path": newest["path"], "opened": True})
         names = ", ".join(p.get("description") or p["domain"] for p in projects[:6])
         return SkillResult(
             f"You have {len(projects)} Studio project"
@@ -222,4 +278,8 @@ class StudioProjectsSkill(Skill):
     def tool_schema(self) -> dict:
         return {"type": "function", "function": {
             "name": self.name, "description": self.description,
-            "parameters": {"type": "object", "properties": {}, "required": []}}}
+            "parameters": {"type": "object", "properties": {
+                "open": {"type": "boolean",
+                         "description": "true to OPEN the most recent project's "
+                                        "folder; omit/false to just list them"}},
+                "required": []}}}

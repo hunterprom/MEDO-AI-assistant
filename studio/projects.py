@@ -47,6 +47,37 @@ class StudioProject:
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
         self._meta = self._load_meta()
+        self._sweep_orphans()
+
+    #: Don't sweep a reserved-but-unfinalized dir younger than this — it may be a
+    #: build running RIGHT NOW in another StudioProject handle on the same root.
+    ORPHAN_MIN_AGE_S = 3600.0
+
+    def _sweep_orphans(self, min_age_s: float | None = None) -> int:
+        """Remove ``vN`` dirs that were reserved but never finalized — a run that
+        crashed mid-build leaves one behind, invisible to ``versions()`` and
+        never pruned. Only touches dirs older than ``ORPHAN_MIN_AGE_S`` so a
+        live build is never deleted. Returns how many were removed."""
+        import shutil
+
+        age = self.ORPHAN_MIN_AGE_S if min_age_s is None else min_age_s
+        known = {int(v.get("n", 0)) for v in self._meta.get("versions", [])}
+        next_n = int(self._meta.get("next_n", 1))
+        cutoff = time.time() - age
+        removed = 0
+        try:
+            for d in self.root.glob("v*"):
+                if not (d.is_dir() and d.name[1:].isdigit()):
+                    continue
+                if int(d.name[1:]) >= next_n or int(d.name[1:]) in known:
+                    continue
+                if d.stat().st_mtime > cutoff:      # too fresh — may be in flight
+                    continue
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+        except Exception:
+            logger.debug("orphan sweep failed in %s", self.root, exc_info=True)
+        return removed
 
     # -- lifecycle ------------------------------------------------------------
 

@@ -130,5 +130,24 @@ def test_filename_ending_in_an_app_name_is_not_treated_as_open_with(monkeypatch,
     assert opened and opened[0].endswith("screenshot in chrome.png")  # the real file
 
 
+def test_versioned_app_name_is_not_mistaken_for_a_file_extension(monkeypatch):
+    # "open a file in Python 3.12" — ".12" is a VERSION, not an extension, so the
+    # app must still resolve (the old generic \.\w{1,6}$ guard broke this).
+    opened, tried = [], []
+    monkeypatch.setattr(appfinder, "find_app",
+                        lambda n: tried.append(n) or FakeApp("Python 3.12"))
+    monkeypatch.setattr(files, "open_path", lambda p: opened.append(str(p)))
+    r = _run(FilesSkill(FakeWL()), "open file in Python 3.12")
+    assert tried and "python" in tried[0].lower()
+    assert r.success and opened                 # opened the app
+
+
+def test_real_extension_still_blocks_open_with():
+    from skills.files import _FILE_EXT
+    assert _FILE_EXT.search("chrome.png") and _FILE_EXT.search("notes.stl")
+    assert not _FILE_EXT.search("Python 3.12")
+    assert not _FILE_EXT.search("Arduino IDE 2.3.2")
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

@@ -1,5 +1,12 @@
 # Opus Fixlist — verified findings from the Fable review loop (2026-07-31)
 
+> **STATUS 2026-07-31 — bugs 1–7 are FIXED** (Opus pass, full suite **2221
+> passed**, +20 regression tests, ruff clean). #8 is a documented known-limit, no
+> action. The "verify on a real machine", feature proposal and improvement
+> sections below are still OPEN. Details of each fix are in the commit that
+> follows this file's update; the original findings are kept verbatim as the
+> record of what was wrong and why.
+
 Context for a fresh session: repo `MEDO-main`, branch `medo-main-work` @ `fbd0227`
 (full suite **2201 passed, 1 skipped**; ruff `--select F` clean). These findings
 were verified by reading the code — each has a file:line, a concrete failure

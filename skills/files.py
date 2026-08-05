@@ -59,6 +59,16 @@ _OPEN_WITH = re.compile(
     r"^(?P<file>.*?)\s*\b(?:in|with|using|inside)\b\s+(?P<app>[\w .+-]{2,40})\s*$",
     re.IGNORECASE)
 
+#: Real file extensions. A tail that ends in one of THESE is part of a filename
+#: ("screenshot in chrome.png"), not an app — but a generic `\.\w{1,6}$` test
+#: also swallowed version numbers ("open a file in Python 3.12" → ".12"), which
+#: sent a legitimate open-with off to a doomed filename search.
+_FILE_EXT = re.compile(
+    r"\.(?:png|jpe?g|gif|bmp|webp|svg|ico|txt|md|rtf|pdf|docx?|xlsx?|pptx?|csv|"
+    r"tsv|json|xml|ya?ml|toml|ini|log|py|ino|c|cpp|cc|h|hpp|cs|java|js|jsx|ts|"
+    r"tsx|html?|css|sh|bat|ps1|sql|zip|rar|7z|tar|gz|mp3|wav|flac|ogg|mp4|mkv|"
+    r"mov|avi|stl|step|stp|obj|3mf|gcode|dxf|kicad_pcb|sch)$", re.IGNORECASE)
+
 #: Filler that means "no specific file was named" — just open the app.
 _GENERIC_FILE = frozenset({
     "", "file", "a file", "the file", "some file", "any file", "my file",
@@ -175,10 +185,11 @@ class FilesSkill(Skill):
         # file literally called "in Arduino IDE". Open that app (plus the named
         # file, if one was given and found) instead of a doomed name search.
         ow = _OPEN_WITH.match(query)
-        # If the "app" part ends in a file extension it's really part of a
-        # filename ("open the file screenshot in chrome.png"), not an app —
-        # skip open-with so the whole phrase is searched as one filename.
-        if ow and not re.search(r"\.[a-z0-9]{1,6}$", ow.group("app").strip(), re.I):
+        # If the "app" part ends in a real file extension it's part of a filename
+        # ("open the file screenshot in chrome.png"), not an app — skip open-with
+        # so the whole phrase is searched as one filename. A version suffix
+        # ("Python 3.12") is NOT an extension and must still resolve the app.
+        if ow and not _FILE_EXT.search(ow.group("app").strip()):
             from skills.appfinder import find_app
 
             app = await asyncio.to_thread(find_app, ow.group("app"))
