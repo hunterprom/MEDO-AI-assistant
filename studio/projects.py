@@ -13,6 +13,7 @@ Pure filesystem + JSON — no model, no execution — so it's unit-tested direct
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -46,8 +47,13 @@ class StudioProject:
 
     def __init__(self, root: Path) -> None:
         self.root = Path(root)
+        self._recovered = False        # set by _load_meta when metadata was lost
         self._meta = self._load_meta()
-        self._sweep_orphans()
+        if not self._recovered:
+            # NEVER sweep against recovered metadata: it lists no versions, so
+            # every real vN would look like an orphan and the whole history
+            # would be deleted — the exact clobber _load_meta exists to prevent.
+            self._sweep_orphans()
 
     #: Don't sweep a reserved-but-unfinalized dir younger than this — it may be a
     #: build running RIGHT NOW in another StudioProject handle on the same root.
@@ -108,14 +114,25 @@ class StudioProject:
                 # history isn't overwritten.
                 logger.warning("studio: project.json unreadable at %s — "
                                "recovering version number from disk", self.root)
+        self._recovered = True
         existing = [int(d.name[1:]) for d in self.root.glob("v*")
                     if d.name[1:].isdigit()]
         return {"domain": "", "description": "", "created_at": time.time(),
                 "next_n": (max(existing) + 1 if existing else 1), "versions": []}
 
     def _save_meta(self) -> None:
-        (self.root / "project.json").write_text(
-            json.dumps(self._meta, indent=2), encoding="utf-8")
+        # Atomic: a crash mid-write used to truncate project.json, losing the
+        # whole version list. Write beside it, then replace in one step.
+        target = self.root / "project.json"
+        tmp = target.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(self._meta, indent=2), encoding="utf-8")
+            tmp.replace(target)
+        except Exception:
+            logger.warning("studio: could not save project.json in %s", self.root,
+                           exc_info=True)
+            with contextlib.suppress(Exception):
+                tmp.unlink()
 
     # -- versions -------------------------------------------------------------
 

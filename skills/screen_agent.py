@@ -56,25 +56,32 @@ def scale_point(x_norm: float, y_norm: float, w: int, h: int) -> tuple[int, int]
     return max(0, min(w - 1, x)), max(0, min(h - 1, y))
 
 
-#: A "done" whose `say` reads like a give-up. Small models often omit the
-#: success flag entirely while plainly saying they failed — defaulting those to
-#: success would announce a completion that never happened.
+#: A "done" whose `say` reads like the AGENT giving up. Deliberately narrow —
+#: it must not fire on a successful report that merely mentions a failure
+#: ("Removed the failed login row"), so it keys on first-person inability and
+#: fixed give-up phrases, not on the bare word "failed".
 _GAVE_UP_RE = re.compile(
-    r"\b(?:can'?t|cannot|couldn'?t|could not|unable|impossible|not (?:able|possible)|"
-    r"fail(?:ed|ure)?|gave up|no way|didn'?t work|unsuccessful)\b", re.IGNORECASE)
+    r"\b(?:i\s+(?:can'?t|cannot|couldn'?t|could not|was\s+unable|am\s+unable|"
+    r"failed|gave\s+up)"
+    r"|unable\s+to|failed\s+to|gave\s+up|didn'?t\s+work|doesn'?t\s+work|"
+    r"not\s+possible|impossible|no\s+way\s+to)\b", re.IGNORECASE)
 
 
 def done_succeeded(action: dict) -> bool:
     """Whether a model's ``done`` action really means COMPLETED.
 
-    Honours an explicit ``success`` flag; when it's absent, a give-up phrasing in
-    ``say`` counts as failure (pure, so both directions are unit-tested).
+    An explicit ``success`` flag always wins — including a falsy non-bool
+    (``0``, ``null``, ``""``), which is the model saying "no". Only when the key
+    is ABSENT does a give-up phrasing in ``say`` decide. Pure, so both
+    directions are unit-tested.
     """
-    flag = action.get("success")
-    if isinstance(flag, bool):
-        return flag
-    if isinstance(flag, str) and flag.strip().lower() in ("true", "false"):
-        return flag.strip().lower() == "true"
+    if "success" in action:
+        flag = action["success"]
+        if isinstance(flag, bool):
+            return flag
+        if isinstance(flag, str):
+            return flag.strip().lower() in ("true", "yes", "y", "1", "ok")
+        return bool(flag)              # 0 / None -> failure, as the model meant
     return not _GAVE_UP_RE.search(str(action.get("say") or ""))
 
 

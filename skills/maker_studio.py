@@ -22,6 +22,14 @@ def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip()).strip(" .?!,")
 
 
+def _truthy(value) -> bool:
+    """A JSON-ish flag from a model. ``bool("false")`` is True, and small models
+    routinely send booleans as strings — so decide on the TEXT."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "y", "1", "on")
+    return bool(value)
+
+
 #: "never mind" — drops a pending clarifying question instead of building.
 _CANCEL = re.compile(
     r"^\s*(?:never\s*mind|nevermind|cancel|forget\s+it|stop|nothing|no)\s*[.!]*$",
@@ -70,7 +78,11 @@ class _StudioSkill(Skill):
             pending, self._pending_desc = self._pending_desc, ""
             if not answer or _CANCEL.match(answer):
                 return SkillResult("Okay, never mind.")
-            desc = f"{pending} — {answer}" if pending else answer
+            # Only carry a SUBSTANTIAL brief forward. A domain asks its question
+            # when the description was a fragment ("it", "a"), and prepending
+            # that produced briefs like "it — a phone stand", which then became
+            # the project name.
+            desc = f"{pending} — {answer}" if len(pending) > 3 else answer
         else:
             # A fresh request supersedes any question the user walked away from,
             # so an abandoned brief can never attach itself to a later reply.
@@ -129,15 +141,16 @@ class _StudioSkill(Skill):
 _PART_NOUNS = (r"bracket|enclosure|mount|holder|clip|adapter|spacer|gear|knob|"
                r"tray|grommet|screw|bolt|nut|washer")
 #: Idiom-prone words — "make a CASE for hiring", "make a STAND against X", "get a
-#: HANDLE on it", "box him in". These need a fabrication verb (print/model) or a
-#: physical modifier ("phone case", "project box") before the fast path claims
-#: them; the LLM tool path still covers every other phrasing.
+#: HANDLE on it", "make a git HOOK", "a text BOX". No blocklist of modifiers can
+#: separate "a case for my phone" from "a case for my promotion", so these reach
+#: the FAST path only after a fabrication verb (print/model); with the softer
+#: verbs they go to the LLM, which has the tool and can judge from meaning.
 _AMBIG_NOUNS = r"case|stand|box|hook|handle"
-#: Words that never modify a PHYSICAL part — "a business case", "a test case",
-#: "the worst case". Excluded from the modifier slot so the compound form can't
-#: readmit the idioms the bare form just excluded.
-_NOT_MODIFIER = (r"a|an|the|business|test|use|edge|corner|court|legal|special|"
-                 r"worst|best|any|such|strong|good|sales|police|murder|study")
+#: Compounds whose head noun is a part word but which are never a physical part.
+_NOT_A_PART = re.compile(
+    r"\b(?:case\s+stud(?:y|ies)|use\s+case|test\s+case|edge\s+case|corner\s+case|"
+    r"stand[-\s]?alone|stand[-\s]?in|stand[-\s]?up|box\s+office|"
+    r"git\s+hook|web\s*hook)\b", re.IGNORECASE)
 
 
 class Model3DSkill(_StudioSkill):
@@ -154,16 +167,25 @@ class Model3DSkill(_StudioSkill):
     patterns = [
         re.compile(r"\b(?:3-?d|three-?d)\s*(?:model|print)\s+(?:of|for|me)?\s*(?:a\s+|an\s+)?(?P<desc>.+)", re.IGNORECASE),
         re.compile(r"\bmodel\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>.+?)\s+in\s+3-?d\b", re.IGNORECASE),
-        # unambiguous physical parts — any making verb, with an optional modifier
-        # so compounds ("a wall mount", "a battery holder") match too.
-        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:(?!(?:a|an|the)\s)\w+\s+)?(?:{_PART_NOUNS})\b.*)", re.IGNORECASE),
-        # idiom-prone nouns: only with a fabrication verb…
-        re.compile(rf"\b(?:print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_AMBIG_NOUNS})\b.*)", re.IGNORECASE),
-        # …or with a PHYSICAL modifier in front ("a phone case", "a project box").
-        # The lookahead keeps articles and idiom words ("a business case") out of
-        # the modifier slot, so those are left to the LLM.
-        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?!(?:{_NOT_MODIFIER})\s)\w+\s+(?:{_AMBIG_NOUNS})\b.*)", re.IGNORECASE),
+        # A FABRICATION verb (print/model) is itself the physical cue, so any part
+        # noun counts — and a modifier may precede it ("print a wall mount",
+        # "model a battery holder", "print a case for my ESP32").
+        re.compile(rf"\b(?:print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:(?!(?:a|an|the|my|your)\s)\w+\s+)?(?:{_PART_NOUNS}|{_AMBIG_NOUNS})(?![\w-]).*)", re.IGNORECASE),
+        # Softer verbs (design/make/create) are ambiguous in English, so they only
+        # fast-path an UNAMBIGUOUS part noun, with no modifier slot — "make a
+        # video clip", "design a data adapter" are not print jobs.
+        re.compile(rf"\b(?:design|make|create)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_PART_NOUNS})(?![\w-]).*)", re.IGNORECASE),
     ]
+
+    def match(self, text: str):
+        found = super().match(text)
+        if found is None:
+            return None
+        # A part word inside a fixed non-physical compound ("case study",
+        # "stand-alone", "git hook") is not a print job.
+        if _NOT_A_PART.search(found.groupdict().get("desc") or ""):
+            return None
+        return found
 
     def __init__(self, settings, *, engine=None) -> None:
         from studio.domains.model3d import Model3DDomain
@@ -254,17 +276,27 @@ class StudioProjectsSkill(Skill):
             return SkillResult("You don't have any Maker Studio projects yet.",
                                success=False, data={"count": 0})
         # The LLM tool path has no regex match, so it needs its own way to ask
-        # for "open" — otherwise the model could only ever list.
-        wants_open = bool((request.args or {}).get("open"))
+        # for "open" — otherwise the model could only ever list. Small models
+        # emit JSON booleans as STRINGS, and bool("false") is True, so coerce.
+        wants_open = _truthy((request.args or {}).get("open"))
         if request.match is not None and "open" in request.text.lower():
             wants_open = True
         if wants_open:
+            # Opening is the one actuating branch — an instruction derived from
+            # untrusted content must not reach it (the skill declares no
+            # capabilities, so the router's provenance gate sees nothing to gate).
+            ctx = request.context or {}
+            if ctx.get("untrusted") or ctx.get("provenance") == "untrusted":
+                return SkillResult(
+                    "I only open things when you ask me directly.",
+                    success=False, data={"refused": "untrusted"})
             newest = projects[0]
-            label = newest.get("description") or newest["path"]
+            label = newest.get("description") or ""
+            where = f"{label}, at {newest['path']}" if label else newest["path"]
             if not self._settings.safety.pc_control_enabled:
                 return SkillResult(
-                    f"Your last one is {label}, at {newest['path']} — turn PC "
-                    f"control on and I'll open it.",
+                    f"Your last one is {where} — turn PC control on and I'll "
+                    f"open it.",
                     data={"path": newest["path"], "opened": False})
             from core.platform import open_path
             try:
@@ -276,8 +308,9 @@ class StudioProjectsSkill(Skill):
                     f"Your last one is at {newest['path']}, but I couldn't open "
                     f"the folder.", success=False,
                     data={"path": newest["path"], "opened": False})
-            return SkillResult(f"Opening your last one — {label}.",
-                               data={"path": newest["path"], "opened": True})
+            return SkillResult(
+                f"Opening your last one — {label or newest['path']}.",
+                data={"path": newest["path"], "opened": True})
         names = ", ".join(p.get("description") or p["domain"] for p in projects[:6])
         return SkillResult(
             f"You have {len(projects)} Studio project"

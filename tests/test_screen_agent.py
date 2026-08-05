@@ -156,14 +156,23 @@ def test_done_succeeded_honours_an_explicit_flag():
     assert done_succeeded({"success": True, "say": "I couldn't do it"}) is True
     assert done_succeeded({"success": False, "say": "all finished"}) is False
     assert done_succeeded({"success": "false"}) is False       # stringly-typed
+    # a PRESENT but falsy non-bool is the model saying no — it must not fall
+    # through to the text heuristic and be announced as a completion.
+    for falsy in (0, None, ""):
+        assert done_succeeded({"success": falsy, "say": "All set."}) is False
 
 
 def test_done_without_a_flag_reads_the_say_text():
     from skills.screen_agent import done_succeeded
     # a give-up phrasing with NO success flag -> failure, not a false "Done"
     for say in ("I can't find the button", "unable to locate the form",
-                "that didn't work", "I couldn't finish it", "login failed"):
+                "that didn't work", "I couldn't finish it",
+                "I was unable to log in", "failed to open the page"):
         assert done_succeeded({"say": say}) is False, say
-    # a happy/neutral report with no flag stays success (back-compat)
-    for say in ("Opened your email and read the newest one.", "Done.", ""):
+    # a happy report stays success — including one that MENTIONS a failure, which
+    # a bare \bfailed\b heuristic wrongly flipped.
+    for say in ("Opened your email and read the newest one.", "Done.", "",
+                "Removed the failed login row.",
+                "Deleted the failed build from the CI list.",
+                "Archived the unsuccessful runs."):
         assert done_succeeded({"say": say}) is True, say

@@ -59,15 +59,20 @@ _OPEN_WITH = re.compile(
     r"^(?P<file>.*?)\s*\b(?:in|with|using|inside)\b\s+(?P<app>[\w .+-]{2,40})\s*$",
     re.IGNORECASE)
 
-#: Real file extensions. A tail that ends in one of THESE is part of a filename
-#: ("screenshot in chrome.png"), not an app — but a generic `\.\w{1,6}$` test
-#: also swallowed version numbers ("open a file in Python 3.12" → ".12"), which
-#: sent a legitimate open-with off to a doomed filename search.
-_FILE_EXT = re.compile(
-    r"\.(?:png|jpe?g|gif|bmp|webp|svg|ico|txt|md|rtf|pdf|docx?|xlsx?|pptx?|csv|"
-    r"tsv|json|xml|ya?ml|toml|ini|log|py|ino|c|cpp|cc|h|hpp|cs|java|js|jsx|ts|"
-    r"tsx|html?|css|sh|bat|ps1|sql|zip|rar|7z|tar|gz|mp3|wav|flac|ogg|mp4|mkv|"
-    r"mov|avi|stl|step|stp|obj|3mf|gcode|dxf|kicad_pcb|sch)$", re.IGNORECASE)
+#: A dotted suffix on the "app" tail. Anything of this shape is a FILENAME
+#: ("screenshot in chrome.png", "design in fusion.f3d") rather than an app —
+#: an allowlist of known extensions can never be complete, so this is the
+#: inverse: treat every dotted suffix as an extension…
+_DOTTED_SUFFIX = re.compile(r"\.[A-Za-z0-9_]{1,8}$")
+#: …EXCEPT a version number, which is part of a real app name and must still
+#: resolve ("open a file in Python 3.12", "Arduino IDE 2.3.2").
+_VERSION_SUFFIX = re.compile(r"\.\d[\d.]*$")
+
+
+def _looks_like_filename(tail: str) -> bool:
+    """Whether an ``in <tail>`` really ends a filename rather than naming an app."""
+    tail = (tail or "").strip()
+    return bool(_DOTTED_SUFFIX.search(tail)) and not _VERSION_SUFFIX.search(tail)
 
 #: Filler that means "no specific file was named" — just open the app.
 _GENERIC_FILE = frozenset({
@@ -189,7 +194,7 @@ class FilesSkill(Skill):
         # ("open the file screenshot in chrome.png"), not an app — skip open-with
         # so the whole phrase is searched as one filename. A version suffix
         # ("Python 3.12") is NOT an extension and must still resolve the app.
-        if ow and not _FILE_EXT.search(ow.group("app").strip()):
+        if ow and not _looks_like_filename(ow.group("app")):
             from skills.appfinder import find_app
 
             app = await asyncio.to_thread(find_app, ow.group("app"))

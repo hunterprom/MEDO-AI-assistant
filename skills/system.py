@@ -9,7 +9,8 @@ degrade with a clear message where an OS isn't wired up yet.
 from __future__ import annotations
 
 import asyncio
-
+import contextlib
+import logging
 import re
 import subprocess
 import sys
@@ -22,6 +23,8 @@ import psutil
 from core.platform import IS_MACOS, IS_WINDOWS, current_os
 from security.capabilities import Capability
 from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
@@ -166,8 +169,13 @@ class VolumeSkill(Skill):
             return f"Volume set to {level} percent."
         if IS_WINDOWS and _win_set_volume(level):
             return f"Volume set to {level} percent."
-        # No absolute control here — nudge toward the target as best we can.
-        return _nudge_media_key(level >= (_current_volume() or 0))
+        # No absolute control here. We reach this ONLY when the endpoint is
+        # unavailable — the same endpoint _current_volume() needs — so the
+        # current level is unknowable and any "nudge" is a coin flip. (It used to
+        # compare against `or 0`, which made every request turn the volume UP,
+        # including "set volume to 10".) Say so instead of guessing wrong.
+        return ("I can't set an exact volume level on this system — tell me "
+                "'louder' or 'quieter' and I'll nudge it.")
 
     def _set_muted(self, muted: bool) -> str:
         if IS_MACOS:
@@ -479,8 +487,34 @@ class PowerSkill(Skill):
         cmd = cmds[action].get(os_name)
         if cmd is None:
             return f"I can't {action} on this system."
-        subprocess.Popen(cmd)
-        verbs = {"lock": "Locking", "sleep": "Sleeping", "shutdown": "Shutting down", "restart": "Restarting"}
+        verbs = {"lock": "Locking", "sleep": "Sleeping", "shutdown": "Shutting down",
+                 "restart": "Restarting"}
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
+        except Exception as exc:
+            logger.warning("power command failed to start: %s", cmd, exc_info=True)
+            return f"I couldn't {action} this computer: {exc}"
+        # Popen only raises when the binary can't be SPAWNED. A refused command
+        # ("Access is denied", no systemd session) exits non-zero immediately —
+        # catch that instead of announcing a shutdown that never happens. A
+        # still-running process (TimeoutExpired) means the request was accepted.
+        rc = None
+        try:
+            if hasattr(proc, "wait"):
+                rc = proc.wait(timeout=1.5)
+        except subprocess.TimeoutExpired:
+            rc = None
+        except Exception:                       # a test double / odd platform
+            rc = None
+        if rc not in (None, 0):
+            detail = ""
+            with contextlib.suppress(Exception):
+                err = (proc.stderr.read() or b"").decode(errors="replace")
+                if err.strip():
+                    detail = f" — {err.strip().splitlines()[-1][:120]}"
+            return (f"I couldn't {action} this computer{detail}. It may need "
+                    f"permission I don't have.")
         return f"{verbs[action]} now."
 
     async def execute(self, request: SkillRequest) -> SkillResult:

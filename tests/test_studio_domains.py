@@ -310,17 +310,31 @@ def test_missing_description_asks_and_captures():
 
 
 @pytest.mark.parametrize("text", [
+    # idiom-prone nouns after a SOFT verb — English can't be regexed apart here
+    # ("a case for my phone" vs "a case for my promotion"), so these go to the
+    # LLM, which has the tool and can judge from meaning.
     "make a case for hiring more engineers",
     "make a stand against corruption",
     "let me make a case for it",
-    "design a business case",          # idiom modifier, not a physical one
+    "design a business case",
+    "make a compelling case for the merger",
+    "make my case for a raise",
     "make a test case",
-    "make a case study",
-    "create a box office report",
-    "design a stand-up meeting",
+    "make a git hook that runs tests",
+    "make a text box in the form",
     "make a handle on the situation",
     "build a use case diagram",
-    "make a strong case for it",
+    # part words whose head noun isn't physical here
+    "make a video clip of that",
+    "create a short clip for instagram",
+    "design a data adapter for the API",
+    "create a mock adapter",
+    # fixed non-physical compounds, even after a fabrication verb
+    "print a case study for the client",
+    "model a stand-alone system",
+    "model a stand-in for the actor",
+    "create a box office report",
+    "design a stand-up meeting",
     "print a report",
 ])
 def test_3d_fast_path_ignores_idioms(text):
@@ -329,18 +343,22 @@ def test_3d_fast_path_ignores_idioms(text):
 
 
 @pytest.mark.parametrize("text", [
-    "make a phone case",
+    # a fabrication verb IS the physical cue — any part noun, modifier allowed
     "print a case for my ESP32",
     "model a box",
-    "design a bracket for a motor",
-    "3d print a stand",
-    "make me a gear",
-    "print a wall mount",              # compound part names must still route
+    "print a knob",
+    "print a wall mount",
     "model a battery holder",
-    "design a camera mount",
-    "make a project box",
-    "design a cable clip",
-    "make a phone stand",
+    "print a strong hook for my wall",
+    "model a phone stand",
+    "print a camera mount",
+    # soft verbs still fast-path an unambiguous part noun
+    "design a bracket for a motor",
+    "make me a gear",
+    "create an enclosure for an esp32",
+    # an explicit 3D cue always wins
+    "3d print a stand",
+    "3d model of a screw",
 ])
 def test_3d_fast_path_still_matches_real_parts(text):
     from skills.maker_studio import Model3DSkill
@@ -409,6 +427,80 @@ def test_a_live_version_dir_is_never_swept(tmp_path):
     n, vdir = p.begin_version()                 # fresh — a build in flight
     StudioProject.open(p.root)
     assert vdir.exists()                        # too young to sweep
+
+
+def test_corrupt_metadata_never_wipes_the_version_history(tmp_path):
+    """The sweep must not run against RECOVERED metadata: it lists no versions,
+    so every real vN looks like an orphan and the whole project gets deleted."""
+    import os
+    import time as _t
+    from studio.projects import StudioProject
+    p = StudioProject.create(tmp_path, "model3d", "a gear")
+    for _ in range(3):
+        n, vdir = p.begin_version()
+        (vdir / "model.py").write_text("x", encoding="utf-8")
+        p.finalize_version(n, vdir, filename="model.py", artifacts=["model.stl"],
+                           advisories=[], ok=True)
+        old = _t.time() - 7200
+        os.utime(vdir, (old, old))
+    (p.root / "project.json").write_text("{ truncated", encoding="utf-8")
+    StudioProject.open(p.root)                  # recovery path
+    assert [d.name for d in sorted(p.root.glob("v*"))] == ["v1", "v2", "v3"]
+
+
+def test_project_metadata_is_written_atomically(tmp_path):
+    """A truncated project.json is how history got lost in the first place."""
+    from studio.projects import StudioProject
+    p = StudioProject.create(tmp_path, "model3d", "a gear")
+    n, vdir = p.begin_version()
+    p.finalize_version(n, vdir, filename="model.py", artifacts=[], advisories=[],
+                       ok=True)
+    assert not list(p.root.glob("*.tmp"))       # no temp file left behind
+    assert StudioProject.open(p.root).versions()[0].n == 1
+
+
+def test_open_flag_from_the_llm_is_coerced_from_a_string(tmp_path, monkeypatch):
+    """Small models emit JSON booleans as strings, and bool("false") is True —
+    which opened Explorer against an explicit no."""
+    from skills.maker_studio import StudioProjectsSkill
+    from studio.projects import StudioProject
+    opened = []
+    monkeypatch.setattr("core.platform.open_path", lambda p: opened.append(str(p)))
+    s = _studio_settings(tmp_path)
+    s.safety.pc_control_enabled = True
+    StudioProject.create(tmp_path, "model3d", "a gear")
+    skill = StudioProjectsSkill(s)
+    for falsy in ("false", "no", "0", ""):
+        _run(skill.execute(SkillRequest(text="", args={"open": falsy})))
+    assert opened == []                         # listed, never opened
+    _run(skill.execute(SkillRequest(text="", args={"open": "true"})))
+    assert len(opened) == 1
+
+
+def test_projects_open_refuses_untrusted_provenance(tmp_path, monkeypatch):
+    from skills.maker_studio import StudioProjectsSkill
+    from studio.projects import StudioProject
+    opened = []
+    monkeypatch.setattr("core.platform.open_path", lambda p: opened.append(str(p)))
+    s = _studio_settings(tmp_path)
+    s.safety.pc_control_enabled = True
+    StudioProject.create(tmp_path, "model3d", "a gear")
+    r = _run(StudioProjectsSkill(s).execute(
+        SkillRequest(text="", args={"open": True},
+                     context={"provenance": "untrusted"})))
+    assert r.success is False and opened == []
+
+
+def test_clarifying_reply_is_not_polluted_by_a_fragment_brief():
+    """The pending brief is a <3-char fragment by construction, so prepending it
+    produced project names like 'it — a phone stand for my desk'."""
+    from skills.maker_studio import Model3DSkill
+    eng = _AskThenBuildEngine()
+    skill = Model3DSkill(_studio_settings(), engine=eng)
+    _run(skill.execute(SkillRequest(text="3D print it", args={"description": "it"})))
+    _run(skill.execute(SkillRequest(text="a phone stand for my desk",
+                                    context={"captured_reply": True})))
+    assert eng.briefs[-1] == "a phone stand for my desk"
 
 
 if __name__ == "__main__":  # pragma: no cover

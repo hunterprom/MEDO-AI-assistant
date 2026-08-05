@@ -118,3 +118,53 @@ async def test_media_still_acts_on_a_real_request(monkeypatch, text, expected):
     monkeypatch.setattr(MediaSkill, "_run", lambda self, action: ran.append(action) or "x")
     await skill.execute(SkillRequest(text=text, args={}, context={}))
     assert ran == [expected]
+
+
+# -- honesty: never announce a power action the OS refused -------------------
+
+def test_power_reports_a_refused_command_instead_of_claiming_it(monkeypatch):
+    """`shutdown /s` without the privilege exits 1 immediately ("Access is
+    denied"). Popen doesn't raise, so MEDO used to say "Shutting down now." and
+    the machine stayed on — right after the user confirmed and walked away."""
+    import io
+
+    import skills.system as sysmod
+
+    class _Refused:
+        returncode = 1
+        stderr = io.BytesIO(b"Access is denied.(5)")
+        def wait(self, timeout=None):
+            return 1
+
+    monkeypatch.setattr(sysmod.subprocess, "Popen", lambda *a, **k: _Refused())
+    speech = sysmod.PowerSkill()._run("shutdown")
+    assert "couldn't" in speech.lower() and "shutting down now" not in speech.lower()
+
+
+def test_power_still_announces_when_the_command_is_accepted(monkeypatch):
+    import skills.system as sysmod
+
+    class _Accepted:
+        returncode = None
+        stderr = None
+        def wait(self, timeout=None):
+            raise sysmod.subprocess.TimeoutExpired("cmd", timeout)
+
+    monkeypatch.setattr(sysmod.subprocess, "Popen", lambda *a, **k: _Accepted())
+    assert "shutting down" in sysmod.PowerSkill()._run("shutdown").lower()
+
+
+def test_absolute_volume_never_guesses_a_direction(monkeypatch):
+    """Without an audio endpoint the current level is unknowable, so the old
+    `level >= (_current_volume() or 0)` made EVERY request turn the volume UP —
+    including "set volume to 10"."""
+    import skills.system as sysmod
+
+    nudges = []
+    monkeypatch.setattr(sysmod, "IS_MACOS", False)
+    monkeypatch.setattr(sysmod, "IS_WINDOWS", True)
+    monkeypatch.setattr(sysmod, "_win_set_volume", lambda level: False)
+    monkeypatch.setattr(sysmod, "_nudge_media_key", lambda up: nudges.append(up))
+    speech = sysmod.VolumeSkill()._set_absolute(10)
+    assert nudges == []                       # nothing nudged the wrong way
+    assert "exact" in speech.lower() or "can't" in speech.lower()

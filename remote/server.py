@@ -1183,16 +1183,12 @@ class RemoteServer:
             return _error(400, "'provider' must be one of: " + ", ".join(VALID_PROVIDERS))
 
         llm_cfg = self._settings.llm
-        llm_cfg.provider = provider
-        # The key/base URL land in the field belonging to the chosen provider,
-        # so GPT and Claude credentials are remembered independently.
         api_key = payload.get("api_key")
-        if api_key is not None:
-            if provider == "anthropic":
-                llm_cfg.anthropic_api_key = str(api_key)
-            else:
-                llm_cfg.api_key = str(api_key)
         base_url = str(payload.get("base_url") or "").strip()
+        # VALIDATE BEFORE MUTATING. This check can reject the request, and the
+        # provider used to be switched first — so a rejected call still left the
+        # brain pointing at the new provider with the OLD provider's model name,
+        # breaking every later question with no sign of why.
         if base_url:
             current = {"openai": llm_cfg.openai_base_url,
                        "anthropic": llm_cfg.anthropic_base_url,
@@ -1204,6 +1200,16 @@ class RemoteServer:
             if (base_url != current and api_key is None
                     and provider in ("openai", "anthropic")):
                 return _error(400, "changing base_url requires api_key to be re-supplied")
+
+        llm_cfg.provider = provider
+        # The key/base URL land in the field belonging to the chosen provider,
+        # so GPT and Claude credentials are remembered independently.
+        if api_key is not None:
+            if provider == "anthropic":
+                llm_cfg.anthropic_api_key = str(api_key)
+            else:
+                llm_cfg.api_key = str(api_key)
+        if base_url:
             if provider == "openai":
                 llm_cfg.openai_base_url = base_url
             elif provider == "anthropic":

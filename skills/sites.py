@@ -695,7 +695,15 @@ class PlaySkill(Skill):
             # results in the system browser and say what actually happened.
             logger.warning("play: controlled browser failed (%s) — system browser",
                            exc)
-            await open_with(self._opener, url)
+            # The fallback opener is the SAME session that just failed, so it can
+            # fail too (a blocked domain returns False). Check it — otherwise we
+            # claim to have opened results that never appeared.
+            ok = await open_with(self._opener, url)
+            if ok is False:
+                return SkillResult(
+                    f"Не можев да го отворам {site.label} за {query}." if speak_mk
+                    else f"I couldn't open {site.label} for {query}.",
+                    success=False, data={"url": url, "played": False})
             return SkillResult(
                 f"Не можев да го управувам мојот прелистувач, па ги отворив "
                 f"резултатите за {query} — избери еден." if speak_mk else

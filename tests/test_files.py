@@ -142,11 +142,16 @@ def test_versioned_app_name_is_not_mistaken_for_a_file_extension(monkeypatch):
     assert r.success and opened                 # opened the app
 
 
-def test_real_extension_still_blocks_open_with():
-    from skills.files import _FILE_EXT
-    assert _FILE_EXT.search("chrome.png") and _FILE_EXT.search("notes.stl")
-    assert not _FILE_EXT.search("Python 3.12")
-    assert not _FILE_EXT.search("Arduino IDE 2.3.2")
+def test_filename_tail_vs_app_name():
+    """Any dotted suffix means the tail is a filename — EXCEPT a version number.
+    An allowlist of extensions can never be complete (it missed .f3d/.ods/.odt,
+    which then launched Fusion/Excel/Word by mistake)."""
+    from skills.files import _looks_like_filename as looks
+    for tail in ("chrome.png", "notes.stl", "fusion.f3d", "budget.ods",
+                 "notes.odt", "sheet.psd"):
+        assert looks(tail) is True, tail
+    for tail in ("Python 3.12", "Arduino IDE 2.3.2", "Obsidian", "VS Code"):
+        assert looks(tail) is False, tail
 
 
 if __name__ == "__main__":  # pragma: no cover
