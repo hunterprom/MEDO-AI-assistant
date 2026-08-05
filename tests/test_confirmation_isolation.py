@@ -149,3 +149,42 @@ async def test_ambiguous_reply_that_is_a_command_is_recorded():
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
+
+
+def test_confirm_destructive_off_runs_the_action_instead_of_dead_ending():
+    """`confirm_destructive: false` means "don't ask" — the action must RUN.
+    The router never armed the pending state with the flag off, while skills
+    kept self-gating on context['confirmed'], so the prompt was spoken, the
+    "yes" routed nowhere, and every destructive skill became unusable."""
+    import asyncio
+
+    from core.config import load_settings
+    from core.events import EventBus, StateMachine
+    from core.router import Router
+    from skills.base import Skill, SkillRegistry, SkillResult
+
+    class Gated(Skill):
+        name = "gated"
+        description = "needs confirmation"
+        patterns = [__import__("re").compile(r"\bdo the thing\b", __import__("re").I)]
+        requires_confirmation = True
+
+        def __init__(self):
+            self.ran = False
+
+        async def execute(self, request):
+            if not request.context.get("confirmed"):
+                return SkillResult("Are you sure?", needs_confirmation=True)
+            self.ran = True
+            return SkillResult("Did it.")
+
+    settings = load_settings()
+    settings.safety.confirm_destructive = False
+    settings.safety.pc_control_enabled = True
+    registry = SkillRegistry()
+    skill = Gated()
+    registry.register(skill)
+    router = Router(settings, registry, None, EventBus())  # type: ignore[arg-type]
+    result = asyncio.run(router.route("do the thing"))
+    assert skill.ran is True                      # it actually ran
+    assert "are you sure" not in result.speech.lower()

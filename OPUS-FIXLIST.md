@@ -22,6 +22,10 @@
 >
 > ## STILL OPEN — verified, not yet fixed (for the next pass)
 >
+> **Round 3 (2026-07-31) cleared #2, #4 and #5 below** — only the
+> streaming-preamble (#1) and the mid-batch confirmation (#3) remain.
+> Full suite 2263 passed.
+>
 > 1. **MED-HIGH — a streamed model preamble is spoken before the tool that
 >    contradicts it.** `core/router.py:1214` passes `on_delta` on *every* tool
 >    round; the ollama/openai streaming paths emit content deltas before

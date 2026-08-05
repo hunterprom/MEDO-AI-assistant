@@ -250,8 +250,20 @@ class LinkRegistry:
         self._manifests[device_id] = manifest
         self._state.setdefault(device_id, _DeviceState())
         for cap in manifest["capabilities"]:
-            self._skills.register(
-                DeviceCapabilitySkill(self, device_id, manifest["name"], cap))
+            skill = DeviceCapabilitySkill(self, device_id, manifest["name"], cap)
+            try:
+                self._skills.register(skill)
+            except ValueError:
+                # Two devices can build the SAME skill name across the id/cap
+                # boundary ("robo"+"dog_sit" and "robo_dog"+"sit" both give
+                # robo_dog_sit). Registering raised mid-loop, which surfaced as
+                # an HTTP 500 and left the device half-installed but "known".
+                # Skip the clashing capability loudly instead — the rest of the
+                # device still works, and the name keeps routing to its owner.
+                logger.warning(
+                    "link device %r capability %r skipped: the skill name %r is "
+                    "already taken by another device — rename one of them",
+                    device_id, cap.get("name"), skill.name)
 
     # -- liveness + transport -------------------------------------------------
 

@@ -659,6 +659,15 @@ class Router:
         # The policy engine already allows every action in this mode.
         if getattr(self._settings.security, "yolo", False):
             context = {**context, "confirmed": True}
+        elif not self._settings.safety.confirm_destructive:
+            # "Don't ask me to confirm" has to mean the action RUNS. Skills
+            # self-gate on context["confirmed"], and with the flag off the
+            # router never armed the pending state — so the prompt was spoken,
+            # the "yes" routed nowhere, and every destructive skill became a
+            # dead end. Auto-accept instead, exactly like dev mode.
+            # (The PC-control switch and the policy engine still gate the
+            # action itself; this flag only governs the extra "are you sure?".)
+            context = {**context, "confirmed": True}
         # --- CHOICE GATE ---
         # A near-tie asked a one-word either/or; this reply answers it. Same-
         # source scoped like the confirmation gate below and kept independent of

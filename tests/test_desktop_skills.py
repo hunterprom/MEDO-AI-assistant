@@ -140,3 +140,27 @@ async def test_brightness_not_windows_is_graceful(monkeypatch):
         SkillRequest(text="set brightness to 40")
     )
     assert r.success is False and "OS" in r.speech
+
+
+# -- press_keys: don't silently swallow the rest of the sentence -------------
+
+def test_press_reports_words_it_ignored():
+    """"press control s and close the window" saved the file and dropped the
+    rest with no signal — it looked like the whole request had run."""
+    from skills.desktop import parse_key_request
+    keys, ignored, sequential = parse_key_request("control s and close the window")
+    assert keys == ["ctrl", "s"] and sequential is False
+    assert "close" in ignored and "window" in ignored
+
+
+def test_then_means_a_sequence_not_a_chord():
+    from skills.desktop import parse_key_request
+    keys, ignored, sequential = parse_key_request("a and then b")
+    assert keys == ["a", "b"] and sequential is True and ignored == []
+
+
+def test_plain_chord_is_unchanged():
+    from skills.desktop import parse_key_request, resolve_keys
+    keys, ignored, sequential = parse_key_request("ctrl shift a")
+    assert keys == ["ctrl", "shift", "a"] and not ignored and sequential is False
+    assert resolve_keys("page down") == ["pagedown"]      # old API still works

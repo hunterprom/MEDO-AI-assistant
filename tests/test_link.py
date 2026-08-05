@@ -246,3 +246,24 @@ async def test_poll_result_and_device_list_contract(lan: TestClient):
     assert devices[0]["name"] == "the desk lamp"
     assert devices[0]["online"] is True             # it polled a moment ago
     assert devices[0]["capabilities"] == 2
+
+
+def test_two_devices_colliding_on_a_skill_name_do_not_500(tmp_path):
+    """"robo"+"dog_sit" and "robo_dog"+"sit" both build the skill name
+    robo_dog_sit. register() raised mid-loop, which surfaced as an HTTP 500 and
+    left the second device half-installed but "known"."""
+    from skills.base import SkillRegistry
+
+    reg = SkillRegistry()
+    link = LinkRegistry(reg, tmp_path / "link.db")
+    a = {"device_id": "robo", "name": "Robo", "capabilities": [
+        {"name": "dog_sit", "description": "sit"}]}
+    b = {"device_id": "robo_dog", "name": "Robo Dog", "capabilities": [
+        {"name": "sit", "description": "sit"},
+        {"name": "stand", "description": "stand"}]}
+    link._install(a)
+    link._install(b)                       # must not raise
+    names = {s.name for s in reg.all()}
+    assert "robo_dog_sit" in names         # kept by its first owner
+    assert "robo_dog_stand" in names       # the rest of device B still installed
+    assert link.known("robo_dog")

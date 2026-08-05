@@ -773,6 +773,10 @@ class ModeConfig(BaseModel):
 
 
 class SafetyConfig(BaseModel):
+    #: Ask "are you sure?" before a destructive/irreversible action (power,
+    #: closing an app, file edits, an agent taking the screen). Turning this OFF
+    #: means those actions run IMMEDIATELY, without asking — it does not block
+    #: them. The PC-control master switch and the policy engine still apply.
     confirm_destructive: bool = True
     whitelist_dirs: list[str] = Field(default_factory=list)
     # Master switch: may MEDO ACT on this computer (type, click, launch apps,
