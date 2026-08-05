@@ -1,11 +1,59 @@
 # Opus Fixlist — verified findings from the Fable review loop (2026-07-31)
 
-> **STATUS 2026-07-31 — bugs 1–7 are FIXED** (Opus pass, full suite **2221
-> passed**, +20 regression tests, ruff clean). #8 is a documented known-limit, no
-> action. The "verify on a real machine", feature proposal and improvement
-> sections below are still OPEN. Details of each fix are in the commit that
-> follows this file's update; the original findings are kept verbatim as the
-> record of what was wrong and why.
+> **STATUS 2026-07-31 — round 1 (bugs 1–7) FIXED, round 2 FIXED** (Opus pass,
+> full suite **2258 passed**, ruff clean). #8 is a documented known-limit.
+> Commits: `c2129e9`, `30e85f5`, `d127883`, `27c4572`. The original findings are
+> kept verbatim below as the record of what was wrong and why.
+>
+> **Round 2** re-reviewed the fixes themselves plus the untouched core and found
+> more, all now fixed: a **data-loss bug the round-1 orphan sweep introduced**
+> (a corrupt `project.json` made the sweep delete the entire version history —
+> now skipped on the recovery path, plus atomic metadata writes); **dev mode
+> turning "discard my change" into "merge it"** (`self_dev` used `confirmed` to
+> pick a branch, and `security.yolo` injects it on every utterance); **"set
+> volume to 10" turning the volume UP** on any machine without an audio
+> endpoint; **PowerSkill announcing "Shutting down now." when the OS refused**;
+> `/provider` switching the brain even when it returns 400; `PlaySkill` claiming
+> it opened results when the fallback also failed; `done_succeeded` wrong in
+> both directions; and a full rework of the 3D fast path (24 verified false
+> positives killed — no modifier blocklist can separate "a case for my phone"
+> from "a case for my promotion", so idiom-prone nouns now need a *fabrication*
+> verb).
+>
+> ## STILL OPEN — verified, not yet fixed (for the next pass)
+>
+> 1. **MED-HIGH — a streamed model preamble is spoken before the tool that
+>    contradicts it.** `core/router.py:1214` passes `on_delta` on *every* tool
+>    round; the ollama/openai streaming paths emit content deltas before
+>    `tool_calls` are known (the Anthropic path guards correctly at
+>    `llm/client.py:309`). Scenario: "open youtube" → the model streams *"Sure,
+>    opening YouTube"* → `webbrowser.open` returns False → MEDO then says *"I
+>    couldn't find a browser."* It already claimed the action. Fix: suppress
+>    deltas on rounds where tools are offered, or buffer until the round resolves.
+>    Note `tests/test_bugfix_deep_debug4.py:246` locks in that the preamble DOES
+>    stream (it guards the opposite bug), so that test needs rethinking together.
+> 2. **MED — `safety.confirm_destructive: false` makes every destructive skill a
+>    permanent dead end.** `core/router.py:813` and `:1325` only arm the pending
+>    confirmation when the flag is on, but the skills still self-gate on
+>    `context["confirmed"]` — so they keep returning the prompt and the "yes"
+>    never routes back. Turning confirmations OFF disables the actions instead of
+>    auto-running them. Fix: when the flag is off, inject `confirmed=True` (like
+>    dev mode does) rather than skipping the pending state.
+> 3. **LOW-MED — a confirmation mid-batch silently discards the rest of a
+>    multi-tool turn.** `core/router.py:1325-1331` returns from inside the
+>    `for call in tool_calls` loop, throwing away already-collected speech and
+>    never running (or mentioning) later calls. "Take a screenshot and then shut
+>    down" → after "yes" the user believes both ran.
+> 4. **LOW-MED — two MEDO Link devices can collide on a skill name.**
+>    `link/registry.py:159` builds `f"{device_id}_{cap}"`, so `robo`+`dog_sit`
+>    and `robo_dog`+`sit` both yield `robo_dog_sit`; `SkillRegistry.register`
+>    raises → HTTP 500, the device is half-registered, and the shared capability
+>    dispatches to the FIRST device. `load_persisted` swallows the same error at
+>    startup, so the fleet silently loses capabilities after a reboot.
+> 5. **LOW — `press_keys` drops trailing words and turns sequences into chords.**
+>    `skills/desktop.py:43-65` — "press control s and close the window" saves and
+>    silently ignores the rest; "press a and then b" presses them
+>    *simultaneously* and reports "Pressed a b."
 
 Context for a fresh session: repo `MEDO-main`, branch `medo-main-work` @ `fbd0227`
 (full suite **2201 passed, 1 skipped**; ruff `--select F` clean). These findings
