@@ -313,6 +313,15 @@ def test_missing_description_asks_and_captures():
     "make a case for hiring more engineers",
     "make a stand against corruption",
     "let me make a case for it",
+    "design a business case",          # idiom modifier, not a physical one
+    "make a test case",
+    "make a case study",
+    "create a box office report",
+    "design a stand-up meeting",
+    "make a handle on the situation",
+    "build a use case diagram",
+    "make a strong case for it",
+    "print a report",
 ])
 def test_3d_fast_path_ignores_idioms(text):
     from skills.maker_studio import Model3DSkill
@@ -326,10 +335,25 @@ def test_3d_fast_path_ignores_idioms(text):
     "design a bracket for a motor",
     "3d print a stand",
     "make me a gear",
+    "print a wall mount",              # compound part names must still route
+    "model a battery holder",
+    "design a camera mount",
+    "make a project box",
+    "design a cable clip",
+    "make a phone stand",
 ])
 def test_3d_fast_path_still_matches_real_parts(text):
     from skills.maker_studio import Model3DSkill
     assert Model3DSkill(_studio_settings()).match(text) is not None, text
+
+
+def test_3d_fast_path_has_no_catastrophic_backtracking():
+    import time as _t
+    from skills.maker_studio import Model3DSkill
+    skill = Model3DSkill(_studio_settings())
+    t0 = _t.time()
+    skill.match("make a " + "word " * 300 + "case for something")
+    assert _t.time() - t0 < 1.0
 
 
 def test_projects_listing_is_not_pc_control(tmp_path):

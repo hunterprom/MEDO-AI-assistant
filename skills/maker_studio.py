@@ -130,6 +130,11 @@ _PART_NOUNS = (r"bracket|enclosure|mount|holder|clip|adapter|spacer|gear|knob|"
 #: physical modifier ("phone case", "project box") before the fast path claims
 #: them; the LLM tool path still covers every other phrasing.
 _AMBIG_NOUNS = r"case|stand|box|hook|handle"
+#: Words that never modify a PHYSICAL part — "a business case", "a test case",
+#: "the worst case". Excluded from the modifier slot so the compound form can't
+#: readmit the idioms the bare form just excluded.
+_NOT_MODIFIER = (r"a|an|the|business|test|use|edge|corner|court|legal|special|"
+                 r"worst|best|any|such|strong|good|sales|police|murder|study")
 
 
 class Model3DSkill(_StudioSkill):
@@ -146,14 +151,15 @@ class Model3DSkill(_StudioSkill):
     patterns = [
         re.compile(r"\b(?:3-?d|three-?d)\s*(?:model|print)\s+(?:of|for|me)?\s*(?:a\s+|an\s+)?(?P<desc>.+)", re.IGNORECASE),
         re.compile(r"\bmodel\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>.+?)\s+in\s+3-?d\b", re.IGNORECASE),
-        # unambiguous physical parts — any making verb
-        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_PART_NOUNS})\b.*)", re.IGNORECASE),
+        # unambiguous physical parts — any making verb, with an optional modifier
+        # so compounds ("a wall mount", "a battery holder") match too.
+        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:(?!(?:a|an|the)\s)\w+\s+)?(?:{_PART_NOUNS})\b.*)", re.IGNORECASE),
         # idiom-prone nouns: only with a fabrication verb…
         re.compile(rf"\b(?:print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_AMBIG_NOUNS})\b.*)", re.IGNORECASE),
-        # …or with a physical modifier in front ("a phone case", "a project box");
-        # the lookahead keeps a bare article out of the modifier slot, so
-        # "make a case for hiring" is left to the LLM.
-        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?!(?:a|an|the)\s)\w+\s+(?:{_AMBIG_NOUNS})\b.*)", re.IGNORECASE),
+        # …or with a PHYSICAL modifier in front ("a phone case", "a project box").
+        # The lookahead keeps articles and idiom words ("a business case") out of
+        # the modifier slot, so those are left to the LLM.
+        re.compile(rf"\b(?:design|make|create|print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?!(?:{_NOT_MODIFIER})\s)\w+\s+(?:{_AMBIG_NOUNS})\b.*)", re.IGNORECASE),
     ]
 
     def __init__(self, settings, *, engine=None) -> None:
