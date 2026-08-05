@@ -72,6 +72,9 @@ class _StudioSkill(Skill):
                 return SkillResult("Okay, never mind.")
             desc = f"{pending} — {answer}" if pending else answer
         else:
+            # A fresh request supersedes any question the user walked away from,
+            # so an abandoned brief can never attach itself to a later reply.
+            self._pending_desc = ""
             desc = self._description(request)
         if not desc:
             self._pending_desc = ""
