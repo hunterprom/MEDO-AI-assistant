@@ -418,6 +418,13 @@ class LLMClient:
                                 emit_ok = False  # inline reasoning: stop speaking it
                             if emit_ok:
                                 on_delta(delta)
+                        if msg.get("tool_calls"):
+                            # This round is a TOOL call, so anything the model
+                            # still writes is a preamble about an action that
+                            # hasn't happened ("Sure, opening YouTube…") — and
+                            # the tool may yet fail. Stop speaking it; the tool's
+                            # real result is what the user should hear.
+                            emit_ok = False
                         tool_calls.extend(msg.get("tool_calls") or [])
                         if data.get("done"):
                             break
@@ -487,6 +494,11 @@ class LLMClient:
                                 emit_ok = False
                             if emit_ok:
                                 on_delta(piece)
+                        if delta.get("tool_calls"):
+                            # A tool round: stop speaking the model's preamble —
+                            # it describes an action that hasn't run yet (see the
+                            # ollama path for the full reasoning).
+                            emit_ok = False
                         for tc in delta.get("tool_calls") or []:
                             slot = calls.setdefault(
                                 int(tc.get("index") or 0),

@@ -1283,7 +1283,7 @@ class Router:
             for c in tool_calls)
         tainted = self._turn_untrusted_context or batch_has_content
 
-        for call in tool_calls:
+        for _call_index, call in enumerate(tool_calls):
             fn = call.get("function", {})
             name = fn.get("name", "")
             args = fn.get("arguments") or {}
@@ -1337,7 +1337,19 @@ class Router:
                 if skill is not None:
                     request = SkillRequest(text=text, args=args, context=context)
                     self._pending = (skill, request)
-                return RouteResult(path=RoutePath.LLM, speech=result.speech, skill_name=name)
+                # Tools EARLIER in this batch already ran. Returning only the
+                # question threw their speech away, so "take a screenshot and
+                # then shut down" sounded like nothing had happened — and after
+                # "yes" the user believed both had run. Say what ran, and name
+                # what is still waiting (only the confirmed skill re-runs).
+                skipped = [str((c.get("function") or {}).get("name") or "")
+                           for c in tool_calls[_call_index + 1:]]
+                skipped = [s.replace("_", " ") for s in skipped if s]
+                tail = (f" I haven't done {', '.join(skipped)} — ask me again "
+                        f"after this." if skipped else "")
+                speech = " ".join([*direct, result.speech]) + tail
+                return RouteResult(path=RoutePath.LLM, speech=speech,
+                                   skill_name=name)
 
             if name in LIVE_INFO_SKILLS:
                 # web_search answers via synthesis (no skill_name on the final

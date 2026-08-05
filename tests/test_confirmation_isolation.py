@@ -188,3 +188,59 @@ def test_confirm_destructive_off_runs_the_action_instead_of_dead_ending():
     result = asyncio.run(router.route("do the thing"))
     assert skill.ran is True                      # it actually ran
     assert "are you sure" not in result.speech.lower()
+
+
+def test_confirmation_mid_batch_reports_what_already_ran():
+    """"Take a screenshot and then shut down" — the screenshot runs, then power
+    asks. Returning only the question threw the screenshot's speech away, so it
+    sounded like nothing happened, and after "yes" the user believed both ran."""
+    import asyncio
+    import re as _re
+
+    from core.config import load_settings
+    from core.events import EventBus
+    from core.router import Router
+    from skills.base import Skill, SkillRegistry, SkillResult
+
+    class Shot(Skill):
+        name = "screenshot"
+        description = "take a screenshot"
+        async def execute(self, request):
+            return SkillResult("Screenshot saved to shot.png.")
+
+    class Power(Skill):
+        name = "power"
+        description = "power the machine"
+        requires_confirmation = True
+        async def execute(self, request):
+            return SkillResult("Are you sure you want to shut down?",
+                               needs_confirmation=True)
+
+    class Extra(Skill):
+        name = "play_music"
+        description = "play music"
+        async def execute(self, request):
+            return SkillResult("Playing.")
+
+    class FakeLLM:
+        model = "m"
+        async def chat(self, model, messages, tools=None, **kw):
+            if any(m.get("role") == "tool" for m in messages):
+                return {"content": "done"}
+            return {"content": "", "tool_calls": [
+                {"function": {"name": "screenshot", "arguments": {}}},
+                {"function": {"name": "power", "arguments": {}}},
+                {"function": {"name": "play_music", "arguments": {}}}]}
+
+    settings = load_settings()
+    settings.safety.confirm_destructive = True
+    settings.safety.pc_control_enabled = True
+    registry = SkillRegistry()
+    for s in (Shot(), Power(), Extra()):
+        registry.register(s)
+    router = Router(settings, registry, FakeLLM(), EventBus())  # type: ignore[arg-type]
+    result = asyncio.run(router.route("take a screenshot and then shut down"))
+    speech = result.speech.lower()
+    assert "shot.png" in speech                  # what already ran is reported
+    assert "are you sure" in speech              # the confirmation still asked
+    assert "play music" in speech                # the un-run tool is named

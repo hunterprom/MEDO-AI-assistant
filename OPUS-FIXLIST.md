@@ -22,9 +22,18 @@
 >
 > ## STILL OPEN — verified, not yet fixed (for the next pass)
 >
-> **Round 3 (2026-07-31) cleared #2, #4 and #5 below** — only the
-> streaming-preamble (#1) and the mid-batch confirmation (#3) remain.
-> Full suite 2263 passed.
+> **Round 3 cleared #2/#4/#5; round 4 addressed #1 and #3 — this list is
+> now CLEAR.** Full suite 2264 passed.
+>
+> Residual on #1 (documented, not a regression): the streaming paths now
+> stop speaking the moment a tool call appears in the stream, so a
+> preamble can no longer keep narrating an action that hasn't run. Text
+> the model emitted BEFORE the tool call arrives in the same chunk
+> sequence is still spoken — eliminating that entirely would mean
+> buffering every round to its end, which would undo the
+> speak-as-it-generates latency win. The anti-narration system-prompt
+> rule is the other half of this mitigation. Revisit only if a real
+> transcript still shows a false claim.
 >
 > 1. **MED-HIGH — a streamed model preamble is spoken before the tool that
 >    contradicts it.** `core/router.py:1214` passes `on_delta` on *every* tool
