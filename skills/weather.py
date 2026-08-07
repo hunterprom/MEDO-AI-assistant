@@ -166,6 +166,25 @@ class WeatherSkill(Skill):
         re.compile(r"\bќе\s+врне\b|\bдали\s+ќе\s+врне\b", re.IGNORECASE),
     ]
 
+    #: "направи апликација за прогноза" asks MEDO to BUILD something; the bare
+    #: "прогноза" pattern above claimed it and read out today's temperature
+    #: instead — a live transcript showed exactly that, three times running.
+    #: Weather words name the SUBJECT of the build here, not the question.
+    _BUILD_REQUEST = re.compile(
+        rf"\b(?:{mk.MAKE}){mk.CLITICS}\s+(?:ед[нeaо]\w*\s+)?"
+        r"(?:апликациј\w*|аплкациј\w*|програм\w*|алатк\w*|скрипт\w*|сајт\w*|"
+        r"веб\s*стран\w*|игр[аи]\w*|модел\w*)"
+        r"|\b(?:make|build|create|write|code|scaffold|design)\s+(?:me\s+)?"
+        r"(?:a|an)\s+(?:\w+\s+){0,2}?"
+        r"(?:app|application|program|tool|script|website|web\s*app|widget|"
+        r"dashboard|game)\b",
+        re.IGNORECASE)
+
+    def match(self, text: str):
+        if self._BUILD_REQUEST.search(text or ""):
+            return None
+        return super().match(text)
+
     def __init__(self, config: WeatherConfig) -> None:
         self._config = config
 
@@ -224,8 +243,16 @@ class WeatherSkill(Skill):
                             else f"I couldn't find a place called {city}.",
                             success=False)
                     lat, lon, place = geo
+                    # The geocoder only speaks Latin, so it hands back "Skopje"
+                    # for a city the user pronounced "Скопје". Say back what
+                    # they said rather than dropping a Latin island into a
+                    # Cyrillic sentence.
+                    if speak_mk and mk.is_cyrillic(city):
+                        place = city
                 else:
                     lat, lon, place = self._config.latitude, self._config.longitude, self._config.default_city
+                if speak_mk and not mk.is_cyrillic(place):
+                    place = mk.to_cyrillic(place) or place
 
                 resp = await client.get(_FORECAST_URL, params={
                     "latitude": lat, "longitude": lon,

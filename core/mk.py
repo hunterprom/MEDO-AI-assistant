@@ -51,6 +51,14 @@ GO_TO = r"оди\s+на|оди\s+до|појди\s+на|појди\s+до|вра
 #: show me — "покажи ми …".
 SHOW = r"покажи|прикажи"
 
+#: make / build / create — "направи ми апликација", "изгради скрипта",
+#: "дизајнирај шема". The fast path was deaf to every one of these: a spoken
+#: "направи апликација за прогноза" fell through to the weather skill (which
+#: claims a bare "прогноза") and answered with the temperature instead of
+#: building anything.
+MAKE = (r"изработи|изгради|направи|креирај|состави|дизајнирај|моделирај|"
+        r"скицирај|нацртај|испечати|напиши|направете|изградете")
+
 #: Unstressed pronoun clitics that pile up after a Macedonian imperative
 #: ("отвори ми го хром"). Optional and repeatable, so patterns can just append
 #: this after the verb and forget about them.
@@ -61,6 +69,39 @@ ON = r"на|во|од|кај|преку"
 
 #: browser, spoken several ways — used by the "search … in the browser" patterns.
 BROWSER = r"прелистувачот|прелистувач|пребарувачот|пребарувач|браузерот|браузер|интернет"
+
+#: The definite article and oblique endings Macedonian glues onto a borrowed
+#: name. Steam is heard as "стим", but "отвори стимА" and "стимОТ" are just as
+#: natural — and a pattern anchored with ``\b`` after the name matches neither.
+#: Interpolate as an optional suffix *outside* the capturing group::
+#:
+#:     rf"(?P<app>{alternation})(?:{mk.NOUN_ENDING})?\b"
+#:
+#: Longest first, so "стимот" loses "от" rather than stranding an "о".
+NOUN_ENDING = r"ните|тите|ната|иот|ото|ата|от|ов|он|та|те|ти|а|о"
+
+_ENDINGS: tuple[str, ...] = tuple(NOUN_ENDING.split("|"))
+
+
+def undeclined(word: str) -> list[str]:
+    """A spoken noun and the stems it could be, longest ending stripped first.
+
+    ``"стима" -> ["стима", "стим"]``. Callers try each in order and keep the
+    first that resolves to something real, so a wrong guess costs nothing —
+    only an exact hit on a stripped form is ever used.
+    """
+    word = (word or "").strip().lower()
+    if not word:
+        return []
+    out = [word]
+    for ending in _ENDINGS:
+        # Keep at least 3 characters: stripping "та" off "та" leaves nothing,
+        # and a 2-letter stem matches far too much.
+        if word.endswith(ending) and len(word) - len(ending) >= 3:
+            stem = word[: -len(ending)]
+            if stem not in out:
+                out.append(stem)
+    return out
 
 
 #: Macedonian Cyrillic -> Latin, the standard romanisation. Digraphs first so
@@ -88,6 +129,46 @@ def to_latin(text: str) -> str:
         else:
             out.append(mapped.capitalize())
     return "".join(out)
+
+
+#: Latin -> Cyrillic, longest first so "sh" becomes "ш" and not "сх".
+_CYRILLIC = sorted(
+    ((latin, cyr) for cyr, latin in _LATIN.items()),
+    key=lambda pair: len(pair[0]), reverse=True,
+)
+
+
+def to_cyrillic(text: str) -> str:
+    """The inverse of :func:`to_latin`, or ``""`` when it can't be done cleanly.
+
+    Open-Meteo answers in Latin ("Skopje") and the configured default city is
+    written that way too, so a Macedonian weather reply came out as "Во Skopje
+    е 34 степени" — a Latin island in a Cyrillic sentence.
+
+    Romanisation is lossy, so this refuses rather than guesses: the result is
+    returned ONLY when it is wholly Cyrillic (no letter went unmapped) and
+    romanising it again reproduces the input. "Skopje" -> "Скопје"; anything
+    with a w, q, x or y in it comes back empty and the caller keeps the Latin.
+    """
+    text = (text or "").strip()
+    if not text or CYRILLIC_RE.search(text):
+        return ""
+    out: list[str] = []
+    i = 0
+    lowered = text.lower()
+    while i < len(text):
+        for latin, cyr in _CYRILLIC:
+            if lowered.startswith(latin, i):
+                out.append(cyr.upper() if text[i].isupper() else cyr)
+                i += len(latin)
+                break
+        else:
+            if text[i].isalpha():
+                return ""            # a letter with no Macedonian equivalent
+            out.append(text[i])
+            i += 1
+    result = "".join(out)
+    return result if to_latin(result).lower() == text.lower() else ""
 
 
 def is_cyrillic(text: str) -> bool:

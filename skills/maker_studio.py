@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 
+from core import mk
 from security.capabilities import Capability
 from skills.base import Skill, SkillRequest, SkillResult
 
@@ -151,6 +152,11 @@ _NOT_A_PART = re.compile(
     r"\b(?:case\s+stud(?:y|ies)|use\s+case|test\s+case|edge\s+case|corner\s+case|"
     r"stand[-\s]?alone|stand[-\s]?in|stand[-\s]?up|box\s+office|"
     r"git\s+hook|web\s*hook)\b", re.IGNORECASE)
+#: The Macedonian part nouns. Stems end in \w* so the definite article and
+#: plural ("држачОТ", "заврткИ") come along without listing every form.
+_PART_NOUNS_MK = (r"држач\w*|носач\w*|куќишт\w*|завртк\w*|навртк\w*|подлошк\w*|"
+                  r"запч[еа]ник\w*|адаптер\w*|капак\w*|капач\w*|штипк\w*|"
+                  r"лежишт\w*|распорник\w*|копч\w*")
 
 
 class Model3DSkill(_StudioSkill):
@@ -175,6 +181,16 @@ class Model3DSkill(_StudioSkill):
         # fast-path an UNAMBIGUOUS part noun, with no modifier slot — "make a
         # video clip", "design a data adapter" are not print jobs.
         re.compile(rf"\b(?:design|make|create)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_PART_NOUNS})(?![\w-]).*)", re.IGNORECASE),
+        # MK. "3д модел" is the physical cue by itself, so no verb is required —
+        # which matters because Macedonian conjugates the verb ("може да ми
+        # НАПРАВИШ 3D модел"), and a verb list can't anticipate every person.
+        # Without this the request reached the LLM, which flatly denied being
+        # able to make 3D models while the Studio sat right there behind it.
+        re.compile(r"\b(?:3-?[dд]|три-?д|тродимензионал\w*)\s*модел\w*\s*"
+                   r"(?:на|од|за|ми)?\s*(?P<desc>.+)", re.IGNORECASE),
+        re.compile(rf"\b(?:испечат[иe]|печат[иe]|моделирај|изработи|направи|"
+                   rf"дизајнирај){mk.CLITICS}\s+(?:едн?[аoо]\w*\s+)?"
+                   rf"(?P<desc>(?:{_PART_NOUNS_MK})(?![\w-]).*)", re.IGNORECASE),
     ]
 
     def match(self, text: str):
@@ -209,6 +225,13 @@ class DesignCircuitSkill(_StudioSkill):
         re.compile(r"\b(?:design|draw|make|create|build|sketch)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:circuit|schematic|wiring(?:\s+diagram)?)\s+(?:for\s+|of\s+|to\s+|that\s+)?(?P<desc>.+)", re.IGNORECASE),
         re.compile(r"\b(?:schematic|circuit|wiring)\s+(?:for|of)\s+(?P<desc>.+)", re.IGNORECASE),
         re.compile(r"\bwire\s+up\s+(?P<desc>.+)", re.IGNORECASE),
+        # MK — "нацртај ми шема за …", "струјно коло за …".
+        re.compile(rf"\b(?:{mk.MAKE}){mk.CLITICS}\s+(?:едн?[аoо]\w*\s+)?"
+                   r"(?:електричн\w*\s+|струјн\w*\s+)?"
+                   r"(?:шем[аи]\w*|кол[оа]\w*|дијаграм\w*)\s*"
+                   r"(?:за|на|со|што|да)?\s*(?P<desc>.+)", re.IGNORECASE),
+        re.compile(r"\b(?:електрична\s+шема|струјно\s+коло|шема|коло)\s+"
+                   r"(?:за|на)\s+(?P<desc>.+)", re.IGNORECASE),
     ]
 
     def __init__(self, settings, *, engine=None) -> None:
@@ -233,6 +256,13 @@ class CodeBuildSkill(_StudioSkill):
     # app/website/game); both are off by default and are alternative approaches.
     patterns = [
         re.compile(r"\b(?:build|write|make|create|code|scaffold|generate)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:python\s+)?(?:script|tool|utility|cli|function|parser|converter)\b(?:\s+(?:that|to|which|for)\s+)?(?P<desc>.+)", re.IGNORECASE),
+        # MK — the same nouns as the English pattern above, so the two languages
+        # claim exactly the same ground (no new overlap with make_app).
+        re.compile(rf"\b(?:{mk.MAKE}){mk.CLITICS}\s+(?:едн?[аoо]\w*\s+)?"
+                   r"(?:пајтон\s+|python\s+)?"
+                   r"(?:скрипт\w*|алатк\w*|функциј\w*|парсер\w*|конвертор\w*)\b"
+                   r"(?:\s+(?:за|што|шо|да|кој[аао]?))?\s*(?P<desc>.+)",
+                   re.IGNORECASE),
     ]
 
     def __init__(self, settings, *, engine=None) -> None:

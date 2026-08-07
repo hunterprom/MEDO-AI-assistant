@@ -131,9 +131,55 @@ _ALIASES = {
     "premiere": "adobe premiere",
     "photoshop": "adobe photoshop",
     "acrobat": "adobe acrobat",
+    # --- Macedonian ------------------------------------------------------
+    # Whisper writes app names phonetically in Cyrillic when you speak
+    # Macedonian, and no substring or transliteration match bridges "стим" to
+    # "Steam". Without these the fast path is deaf to every spoken launch and
+    # the request falls through to the LLM, which narrates ("да, можам да го
+    # инсталирам") instead of opening anything. Declined forms ("стимот",
+    # "стима") are handled by mk.undeclined(), not listed here.
     "хром": "google chrome",
+    "гугл хром": "google chrome",
     "ворд": "microsoft word",
+    "ексел": "microsoft excel",
+    "тимс": "microsoft teams",
+    "стим": "steam",
+    "спотифај": "spotify",
+    "спотифи": "spotify",
+    "дискорд": "discord",
+    "телеграм": "telegram",
+    "фајрфокс": "firefox",
+    "еџ": "microsoft edge",
+    "нотепад": "notepad",
+    "бележник": "notepad",
+    "калкулатор": "calculator",
+    "терминал": "terminal",
+    "експлорер": "explorer",
+    "обсидијан": "obsidian",
+    "опсидијан": "obsidian",
+    "фотошоп": "adobe photoshop",
+    "премиер": "adobe premiere",
+    "блендер": "blender",
+    "капкат": "capcut",
+    "визуал студио код": "visual studio code",
 }
+
+
+def resolve_alias(name: str) -> str:
+    """Expand a spoken abbreviation to the name apps are actually listed under.
+
+    Falls back to the Macedonian stem when the spoken form carries a definite
+    article or case ending ("стимот" -> "стим" -> "steam"). Unknown names pass
+    through untouched, so this is always safe to call.
+    """
+    name = (name or "").strip()
+    if not name:
+        return name
+    for form in mk.undeclined(name):
+        alias = _ALIASES.get(form)
+        if alias:
+            return alias
+    return name
 
 
 def score_name(candidate: str, wanted: str) -> float:
@@ -167,7 +213,7 @@ def find_app(name: str, apps: list[FoundApp] | None = None) -> FoundApp | None:
     name = name.strip().strip(" .,?!\"'")
     if not name:
         return None
-    name = _ALIASES.get(name.lower(), name)
+    name = resolve_alias(name)
     best, best_score = None, 0.0
     for app in (installed_apps() if apps is None else apps):
         score = score_name(app.name, name)

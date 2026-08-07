@@ -45,7 +45,24 @@ _ALIASES = {
     "калкулатор": "calculator",
     "експлорер": "explorer",
     "фајл менаџер": "explorer",
+    "нотепад": "notepad",
+    "бележник": "notepad",
+    "тимс": "teams",
+    "ворд": "word",
+    "ексел": "excel",
+    "телеграм": "telegram",
+    "фајрфокс": "firefox",
+    "еџ": "edge",
+    "обсидијан": "obsidian",
+    "опсидијан": "obsidian",
+    "фотошоп": "photoshop",
+    "капкат": "capcut",
+    "блендер": "blender",
 }
+# Declined forms ("стимот", "стима") are folded back to these stems by
+# mk.undeclined() in _resolve_key — don't list them here. An alias whose target
+# is missing from the user's config table is filtered out there too, so naming
+# an app most people won't have costs nothing.
 
 
 class AppsSkill(Skill):
@@ -70,14 +87,18 @@ class AppsSkill(Skill):
             # MK "отвори ми го хром" / "стартувај спотифај". The clitics
             # ("ми го") pile up between the verb and the app; the verb itself
             # tells us whether this is an open or a close.
+            # The optional NOUN_ENDING sits OUTSIDE the capture: Macedonian
+            # declines borrowed names ("отвори стимА", "затвори хромОТ"), and a
+            # bare \b after the alternation matched neither — the launch fell
+            # through to the LLM, which then narrated instead of opening.
             re.compile(
                 rf"\b(?P<mk_open>{mk.OPEN}){mk.CLITICS}\s+"
-                rf"(?P<app>{alternation})\b",
+                rf"(?P<app>{alternation})(?:{mk.NOUN_ENDING})?\b",
                 re.IGNORECASE,
             ),
             re.compile(
                 rf"\b(?P<mk_close>{mk.CLOSE}){mk.CLITICS}\s+"
-                rf"(?P<app>{alternation})\b",
+                rf"(?P<app>{alternation})(?:{mk.NOUN_ENDING})?\b",
                 re.IGNORECASE,
             ),
         ]
@@ -109,14 +130,19 @@ class AppsSkill(Skill):
 
     def _resolve_key(self, app: str) -> str | None:
         app = app.lower().strip()
-        if app in self._apps:
-            return app
-        # An alias only counts when its target is actually in the table: the
-        # match patterns are built from *every* alias, so on a machine whose
-        # config has no "steam" entry, "отвори стим" would otherwise resolve to
-        # a key that isn't there and blow up on the lookup in execute().
-        key = _ALIASES.get(app)
-        return key if key in self._apps else None
+        # Try the spoken form first, then its Macedonian stems ("стимот" ->
+        # "стим"), so a declined name still finds the table entry.
+        for form in mk.undeclined(app) or [app]:
+            if form in self._apps:
+                return form
+            # An alias only counts when its target is actually in the table: the
+            # match patterns are built from *every* alias, so on a machine whose
+            # config has no "steam" entry, "отвори стим" would otherwise resolve
+            # to a key that isn't there and blow up on the lookup in execute().
+            key = _ALIASES.get(form)
+            if key in self._apps:
+                return key
+        return None
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         speak_mk = mk.is_cyrillic(request.text)

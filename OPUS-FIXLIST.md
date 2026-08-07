@@ -20,6 +20,53 @@
 > from "a case for my promotion", so idiom-prone nouns now need a *fabrication*
 > verb).
 >
+> ## Round 5 (2026-08-07) — the Macedonian transcript. FIXED.
+>
+> A live session held almost entirely in Macedonian was almost entirely wrong,
+> and the review rounds above had missed all of it because **every round was
+> conducted in English**. Five defects, one root cause per layer:
+>
+> * **The fast path was English-only.** Making verbs, part nouns and app-name
+>   patterns existed in English and nowhere else, so "Направи апликација",
+>   "може да ми направиш 3D модел", and "отвори стима" reached no skill at all
+>   and fell through to the LLM — which narrated, denied, or invented. MEDO
+>   told the user it was "not capable" of 3D models with the whole Maker Studio
+>   sitting behind it. Fixed with `mk.MAKE`, `_MAKE_APP_MK`, MK patterns on all
+>   three Studio domains, and a Macedonian alias set for apps.
+> * **Declension broke every spoken launch.** Macedonian glues the definite
+>   article onto a borrowed name ("стим" → "стимот" / "стима"), and the `\b`
+>   after the alternation matched neither. `mk.NOUN_ENDING` + `mk.undeclined()`
+>   now fold the forms back to the stem.
+> * **A too-greedy weather pattern** claimed a bare "прогноза", so a request to
+>   *build a forecast app* was answered with the current temperature — three
+>   times in one transcript. `WeatherSkill.match` now declines build requests.
+> * **Nothing ever checked the reply.** "Reply in Macedonian" is a suggestion to
+>   a small local model: it answered in English, or welded Latin stems into
+>   Cyrillic words ("извежdam", "да го instaliram"). New `core/reply_language.py`
+>   scores a reply by script and `Router._repair_language` re-asks once, keeping
+>   whichever attempt scores better — so a false positive costs one round and
+>   never a worse answer.
+> * **A Latin city in a Cyrillic sentence** ("Во Skopje е 34 степени") — the
+>   geocoder and the configured default city are both Latin. `mk.to_cyrillic()`
+>   reverses the romanisation, and *refuses* when it can't be done cleanly
+>   (a "w" or "y" has no Macedonian letter), so a half-converted name is never
+>   spoken.
+>
+> Also: the system prompt now forbids inventing a product to fit misheard
+> speech — "О-пен-с-теам" (spoken "open Steam") had produced a confident
+> description of "Open Pen Team, a popular accessibility tool", a product that
+> does not exist.
+>
+> Full suite **2322 passed**, ruff clean. Regression tests:
+> `tests/test_macedonian_routing.py` (58).
+>
+> **Known limit, not fixed:** garbled STT that transcribes *confidently* still
+> reaches the model, which may act on it ("Opening Obsidian." for an
+> unintelligible line). Whisper's own filter drops a segment only when
+> `no_speech_prob` is high AND `avg_logprob` low; a confident mis-transcription
+> passes both. The prompt rule mitigates it; a real gibberish gate would risk
+> rejecting valid Macedonian speech, which is the very thing being fixed here.
+>
 > ## STILL OPEN — verified, not yet fixed (for the next pass)
 >
 > **Round 3 cleared #2/#4/#5; round 4 addressed #1 and #3 — this list is

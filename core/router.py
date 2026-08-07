@@ -1205,9 +1205,17 @@ class Router:
 
             name = languages.english_name(spoken, "")
             if name:
+                # Spelled out rather than left as "reply in X": a small local
+                # model reads the short form as a preference and answers half
+                # in English, or welds a Latin stem into a Cyrillic word
+                # ("извежdam"). Naming both failures cuts the repair retry rate.
                 prompt += (
-                    f"\n\nThe user is speaking {name}. Reply in {name}, "
-                    f"in plain spoken prose."
+                    f"\n\nThe user is speaking {name}. Write your ENTIRE reply "
+                    f"in {name}, in plain spoken prose. Every word must be "
+                    f"{name} — do not fall back to English for a word you find "
+                    f"hard, and never put letters from two alphabets inside one "
+                    f"word. Only a product or brand name may keep its own "
+                    f"spelling."
                 )
         messages: list[dict[str, Any]] = [
             {
@@ -1234,6 +1242,14 @@ class Router:
                         retry = await llm.chat(model, messages)
                         reply = (retry.get("content") or "").strip()
                         retried = True
+                    if reply and not retried:
+                        # …and a small model asked for Macedonian will happily
+                        # answer half in English ("да, можам да го instaliram").
+                        # Telling it once isn't enough — check, then re-ask.
+                        fixed = await self._repair_language(
+                            llm, model, messages, reply, spoken)
+                        if fixed is not None:
+                            reply, retried = fixed, True
                     # This reply IS what streamed through on_delta (unless we
                     # had to retry off-stream) — flag it so the loop doesn't
                     # re-speak it. A retried reply never streamed, so leave it
@@ -1257,6 +1273,59 @@ class Router:
         except LLMUnavailableError as exc:
             logger.warning("LLM path unavailable: %s", exc)
             return RouteResult(path=RoutePath.LLM, speech=self._failure_reply(exc))
+
+    async def _repair_language(
+        self,
+        llm: Any,
+        model: str,
+        messages: list[dict[str, Any]],
+        reply: str,
+        spoken: str | None,
+    ) -> str | None:
+        """Re-ask once when the model answered in the wrong language.
+
+        Returns the better reply, or None to keep the one we have. A small
+        local model treats "reply in Macedonian" as a suggestion — it comes
+        back with English sentences, or Latin stems welded into Cyrillic words.
+        Naming the failure and asking again fixes most of it; scoring both
+        attempts means a pointless retry can never make the answer worse.
+        """
+        if not spoken or not reply:
+            return None
+        from core import languages, reply_language
+
+        if not reply_language.off_language(reply, spoken):
+            return None
+        name = languages.english_name(spoken, "")
+        if not name:
+            return None
+        logger.info("reply came back off-language (wanted %s): %r", name, reply[:80])
+        demand = (
+            f"That reply was not in {name}. Answer the same question again, "
+            f"writing EVERY word in {name}. Do not use English words, and never "
+            f"mix two alphabets inside one word. Keep it to one or two sentences."
+        )
+        try:
+            second = await llm.chat(model, [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {"role": "user", "content": demand},
+            ])
+        except Exception:
+            # We already have an answer; a failed retry must not lose it — and
+            # must not take down a turn that had otherwise succeeded.
+            logger.exception("language repair retry failed")
+            return None
+        fixed = (second.get("content") or "").strip()
+        if not fixed or _looks_like_tool_json(fixed):
+            return None
+        before = reply_language.violation_score(reply, spoken)
+        after = reply_language.violation_score(fixed, spoken)
+        if after >= before:
+            logger.info("language repair did not improve (%d -> %d); keeping original",
+                        before, after)
+            return None
+        return fixed
 
     async def _run_tool_calls(
         self,
