@@ -91,7 +91,7 @@ class _StudioSkill(Skill):
             desc = self._description(request)
         if not desc:
             self._pending_desc = ""
-            return SkillResult(self._ask, await_reply=True)
+            return SkillResult(self._ask, await_reply=True, reply_is_open=True)
         try:
             result = await self._get_engine().create(self._domain, desc)
         except Exception as exc:                # never crash the turn
@@ -100,7 +100,8 @@ class _StudioSkill(Skill):
                                success=False)
         if result.question:
             self._pending_desc = desc          # keep the brief for the reply
-            return SkillResult(result.question, await_reply=True)
+            return SkillResult(result.question, await_reply=True,
+                               reply_is_open=True)
         return self._report(result)
 
     def _report(self, result) -> SkillResult:

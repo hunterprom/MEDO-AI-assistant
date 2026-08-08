@@ -49,6 +49,11 @@ class _Facts:
     def relevant(self, query: str, limit: int):
         return self._hits[:limit]
 
+    # The briefing asks for facts that MATCH — search(), not relevant(), which
+    # pads its answer with recent facts and so can never return nothing.
+    def search(self, query: str, limit: int = 5, min_score: float = 0.55):
+        return self._hits[:limit]
+
 
 def _skill(**overrides) -> BriefingSkill:
     kw = dict(

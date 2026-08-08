@@ -8,11 +8,32 @@ Supports "today" and "tomorrow" so M4 follow-ups ("and tomorrow?") work.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 from core import mk
 from core.config import WeatherConfig
 from skills.base import Skill, SkillRequest, SkillResult
+
+def _fold(text: str) -> str:
+    """Casefold and strip accents, so "Macedônia" and "Macedonia" compare equal."""
+    stripped = "".join(c for c in unicodedata.normalize("NFD", text or "")
+                       if not unicodedata.combining(c))
+    return stripped.casefold().strip()
+
+
+#: Spoken place names the geocoder doesn't index under the form people say.
+#: "Macedonia" is the name locals use for the country the gazetteer files only
+#: as "North Macedonia" (renamed 2019), so the query otherwise lands on one of
+#: the several US villages of that name.
+_PLACE_ALIASES = {
+    "macedonia": "North Macedonia",
+    "македонија": "North Macedonia",
+    "makedonija": "North Macedonia",
+    "holland": "Netherlands",
+    "britain": "United Kingdom",
+    "great britain": "United Kingdom",
+}
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -189,13 +210,33 @@ class WeatherSkill(Skill):
         self._config = config
 
     async def _lookup(self, client: Any, name: str) -> tuple[float, float, str] | None:
-        resp = await client.get(_GEOCODE_URL, params={"name": name, "count": 1})
+        """Geocode ``name``, choosing the place a person would have meant.
+
+        Open-Meteo's first result is NOT the best one: it fuzzy-matches
+        alternate names, so "Macedonia" led with Jonesboro, Louisiana (pop.
+        4587) and MEDO cheerfully reported Louisiana weather for the user's own
+        country. Ask for several and rank them ourselves — an exact name match
+        first, then a capital, then population.
+        """
+        resp = await client.get(_GEOCODE_URL, params={"name": name, "count": 8})
         resp.raise_for_status()
         results = resp.json().get("results") or []
         if not results:
             return None
-        r = results[0]
+        r = max(results, key=lambda x: self._geo_rank(x, name))
         return r["latitude"], r["longitude"], r["name"]
+
+    @staticmethod
+    def _geo_rank(result: dict, query: str) -> tuple[int, int, int]:
+        """Sort key for a geocoder hit: (exact name, is a capital, population)."""
+        name = str(result.get("name") or "")
+        exact = int(_fold(name) == _fold(query))
+        capital = int(str(result.get("feature_code") or "") == "PPLC")
+        try:
+            population = int(result.get("population") or 0)
+        except (TypeError, ValueError):
+            population = 0
+        return exact, capital, population
 
     async def _geocode(self, client: Any, city: str) -> tuple[float, float, str] | None:
         """Find a city, retrying romanised when it was spoken in Cyrillic.
@@ -204,6 +245,7 @@ class WeatherSkill(Skill):
         while "Skopje" resolves, so a Macedonian weather question would fail on
         its own capital without this fallback.
         """
+        city = _PLACE_ALIASES.get(_fold(city), city)
         found = await self._lookup(client, city)
         if found is None and mk.is_cyrillic(city):
             found = await self._lookup(client, mk.to_latin(city))

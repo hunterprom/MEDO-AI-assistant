@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from core import speech_text
 from core.config import Settings
 from core.events import Event, EventBus, EventType, RoutePath
 from core.facts import FactsStore
@@ -140,6 +141,31 @@ PC_CONTROL_OFF_REPLY = (
 EMPTY_REPLY = "Sorry — I lost my train of thought. Ask me that again?"
 
 
+#: Questions ABOUT MEDO — its features, opinions, preferences, or design —
+#: rather than requests for it to DO something. These reach the semantic tier
+#: looking exactly like a skill request (they share every noun: system, app,
+#: feature, update) and get answered by whichever skill embeds closest, which is
+#: always wrong: the user asked a question, not for an action.
+_ABOUT_MEDO = re.compile(
+    r"\b(?:"
+    r"(?:what|which|how)\s+(?:\w+\s+){0,3}?(?:can|could|do|does|would|should)\s+"
+    r"you\b"
+    r"|(?:would|do|did)\s+you\s+(?:like|want|prefer|think|feel|wish)\b"
+    r"|your\s+(?:system|code|design|features?|capabilit\w+|opinion|"
+    r"architecture|prompt|skills?|tools?)\b"
+    r"|(?:who|what)\s+are\s+you\b"
+    r"|about\s+yourself\b"
+    r"|(?:што|шо)\s+(?:можеш|умееш|знаеш)\b"
+    r"|тво(?:јот|јата|ите)\s+(?:систем|код|можност\w*|мислењ\w*)\b"
+    r")",
+    re.IGNORECASE)
+
+
+def _is_about_medo(text: str) -> bool:
+    """Is this a question about MEDO itself rather than a command to act?"""
+    return bool(_ABOUT_MEDO.search(text or ""))
+
+
 def _looks_like_tool_json(text: str) -> bool:
     """Detect a small model leaking a function-call blob into its text reply."""
     stripped = text.lstrip()
@@ -240,6 +266,10 @@ class Router:
         #: so a reply that is neither yes nor no is a fresh command and re-routes
         #: instead of being swallowed into the offer. Set with `_pending_reply`.
         self._reply_is_offer = False
+        #: True when that pending reply answers an OPEN question ("what should
+        #: the app do?"), where any utterance is the answer — so the capture is
+        #: NOT abandoned just because the answer also matches some skill.
+        self._reply_is_open = False
         #: Rolling context so follow-ups ("and tomorrow?") resolve.
         self.conversation = ConversationMemory(settings.memory.max_turns)
         #: Long-term user facts, injected into the system prompt each LLM turn.
@@ -410,6 +440,15 @@ class Router:
         learned route memory, embedding the utterance once for both. Never raises
         into routing; byte-identical to the curated-only path when memory is off.
         """
+        if _is_about_medo(text):
+            # A question ABOUT MEDO is not a command to run one of its skills.
+            # Asked "what features would you like added to your system?", the
+            # tier matched the security-updates skill on the shared words
+            # (system, applications, add) and answered "Lion mode is off" —
+            # nonsense as a reply, and it never touched what was asked. The LLM
+            # is the one that can actually talk about MEDO.
+            logger.debug("semantic tier skipped: %r is about MEDO itself", text)
+            return None
         idx = await self._ensure_route_index()
         mem = await self._ensure_route_memory()
         # Preserve today's short-circuit: with nothing to consult, don't embed.
@@ -698,9 +737,15 @@ class Router:
                 == context.get("source")):
             reply_skill = self._pending_reply[0]
             is_offer = self._reply_is_offer
+            is_open = self._reply_is_open
             self._pending_reply = None
             self._reply_is_offer = False
-            other = self._registry.find_match(text)
+            self._reply_is_open = False
+            # An OPEN question ("what should the app do?") takes its answer
+            # whole. Consulting the registry here is what let "I want the app to
+            # track the weather in Macedonia" be claimed by the weather skill
+            # mid-build; the asking skill decides what counts as a cancel.
+            other = None if is_open else self._registry.find_match(text)
             # A yes/no OFFER ("want the breakdown?") only wants a yes or a no. A
             # reply that is neither is a fresh command ("actually, use the
             # electrical engineer to check that") — fall through and re-route it
@@ -819,6 +864,7 @@ class Router:
             # The skill asked a question; capture the NEXT utterance as its answer.
             self._pending_reply = (skill, request)
             self._reply_is_offer = outcome.reply_is_offer
+            self._reply_is_open = outcome.reply_is_open
         if (outcome.needs_confirmation and self._settings.safety.confirm_destructive):
             # Stash the request; the next utterance is treated as the yes/no.
             self._pending = (skill, request)
@@ -1243,6 +1289,13 @@ class Router:
                         reply = (retry.get("content") or "").strip()
                         retried = True
                     if reply and not retried:
+                        # …and it will answer a spoken question in WRITING —
+                        # markdown, a code fence, a function schema read out
+                        # brace by brace. Re-ask for something sayable.
+                        plain = await self._repair_markup(llm, model, messages, reply)
+                        if plain is not None:
+                            reply, retried = plain, True
+                    if reply and not retried:
                         # …and a small model asked for Macedonian will happily
                         # answer half in English ("да, можам да го instaliram").
                         # Telling it once isn't enough — check, then re-ask.
@@ -1250,6 +1303,8 @@ class Router:
                             llm, model, messages, reply, spoken)
                         if fixed is not None:
                             reply, retried = fixed, True
+                    # Whatever survives, strip the markers before anyone says it.
+                    reply = speech_text.strip_markup(reply)
                     # This reply IS what streamed through on_delta (unless we
                     # had to retry off-stream) — flag it so the loop doesn't
                     # re-speak it. A retried reply never streamed, so leave it
@@ -1268,11 +1323,60 @@ class Router:
             message = await llm.chat(model, messages)
             return RouteResult(
                 path=RoutePath.LLM,
-                speech=(message.get("content") or "").strip() or EMPTY_REPLY,
+                speech=speech_text.strip_markup(
+                    (message.get("content") or "").strip()) or EMPTY_REPLY,
             )
         except LLMUnavailableError as exc:
             logger.warning("LLM path unavailable: %s", exc)
             return RouteResult(path=RoutePath.LLM, speech=self._failure_reply(exc))
+
+    async def _repair_markup(
+        self,
+        llm: Any,
+        model: str,
+        messages: list[dict[str, Any]],
+        reply: str,
+    ) -> str | None:
+        """Re-ask once when the model answered in writing instead of in speech.
+
+        Returns the spoken rewrite, or None to keep what we have. Asked what
+        feature it would like, MEDO replied with a fenced ``"install_app"``
+        function schema and the voice read it out, braces included. Stripping
+        the fence would leave the prose around a hole ("Here's an example of how
+        the function could be defined:" … nothing), so ask for the answer again
+        instead — and only keep the retry when it is genuinely cleaner.
+        """
+        if not reply:
+            return None
+        tools = speech_text.leaked_tool_names(reply, self._registry.names())
+        if not speech_text.looks_like_markup(reply) and not tools:
+            return None
+        logger.info("reply came back as written markup%s: %r",
+                    f" (tool names: {', '.join(tools)})" if tools else "",
+                    reply[:80])
+        demand = (
+            "That answer was written, not spoken. Say it again out loud in one "
+            "or two plain sentences: no markdown, no code blocks, no JSON, no "
+            "braces or quotes around keys, and no internal function names like "
+            "'open_website' — describe what you can DO in ordinary words."
+        )
+        try:
+            second = await llm.chat(model, [
+                *messages,
+                {"role": "assistant", "content": reply},
+                {"role": "user", "content": demand},
+            ])
+        except Exception:
+            logger.exception("markup repair retry failed")
+            return None
+        fixed = (second.get("content") or "").strip()
+        if not fixed or _looks_like_tool_json(fixed):
+            return None
+        if (speech_text.looks_like_markup(fixed)
+                or speech_text.leaked_tool_names(fixed, self._registry.names())):
+            logger.info("markup repair still written; falling back to stripping")
+            return None
+        return fixed
 
     async def _repair_language(
         self,

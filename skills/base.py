@@ -51,6 +51,16 @@ class SkillResult:
     # negative back to this skill; any OTHER utterance is treated as a fresh
     # command and re-routed, never swallowed into the offer as a bland "okay".
     reply_is_offer: bool = False
+    # Set ALONGSIDE await_reply when the question is OPEN — the skill asked for a
+    # free-text description and ANY answer is a valid one ("What should the app
+    # do?"). The router's default is to abandon a capture whose reply happens to
+    # match another skill, which is right for a narrow question but wrong here:
+    # a spec naturally mentions weather, timers, or files, and the matching skill
+    # would swallow the answer ("I want the app to track the weather in
+    # Macedonia" -> the weather skill reads out a temperature and the build is
+    # silently lost). An open capture keeps its reply; the skill handles "never
+    # mind" itself.
+    reply_is_open: bool = False
 
 
 class Skill(ABC):
@@ -157,6 +167,10 @@ class SkillRegistry:
 
     def all(self) -> list[Skill]:
         return list(self._skills)
+
+    def names(self) -> list[str]:
+        """Every registered tool name — what a reply must never say out loud."""
+        return [s.name for s in self._skills]
 
     def unregister(self, name: str) -> bool:
         """Remove a skill by name (device re-registration). False if absent."""

@@ -16,6 +16,7 @@ fails entirely.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -98,8 +99,14 @@ class BriefingSkill(Skill):
     def _upcoming_text(self, mk: bool) -> str:
         if self._facts is None:
             return ""
-        hits = self._facts.relevant(
-            "appointment, plan, or schedule for today or tomorrow", 3)
+        # search(), not relevant(): this section must be allowed to find nothing.
+        # relevant() pads its answer with recent facts for the LLM prompt, so a
+        # small fact store returned everything it had and the briefing read out
+        # "Worth remembering: I don't drink coffee" as the day's plans.
+        finder = getattr(self._facts, "search", None)
+        if finder is None:                     # older/stubbed store
+            return ""
+        hits = finder("appointment, plan, or schedule for today or tomorrow", 3)
         if not hits:
             return ""
         joined = "; ".join(hits)
@@ -121,10 +128,25 @@ class BriefingSkill(Skill):
             "news": lambda: self._from_skill(
                 self._news, "кои се вестите" if mk else "what's the news"),
         }
+        # The network sections go out together — they're independent, and asking
+        # for weather only after the news feed has finished added its latency to
+        # an already slow briefing for no reason. Order is still the configured
+        # one: gather() preserves it, and the local sections fill in around them.
+        wanted = [s for s in self._sections if s in gather]
+        fetched: dict[str, str] = {}
+        if wanted:
+            done = await asyncio.gather(
+                *(gather[s]() for s in wanted), return_exceptions=True)
+            for section, outcome in zip(wanted, done):
+                if isinstance(outcome, BaseException):
+                    logger.warning("briefing section %r failed: %s", section, outcome)
+                else:
+                    fetched[section] = outcome
+
         for section in self._sections:
             try:
                 if section in gather:
-                    text = await gather[section]()
+                    text = fetched.get(section, "")
                 elif section == "reminders":
                     text = self._reminders_text(mk)
                 elif section == "upcoming":

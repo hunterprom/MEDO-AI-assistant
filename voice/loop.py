@@ -55,6 +55,7 @@ from voice.audio import (
     resolve_input_device,
 )
 from voice.stt import Transcriber
+from core.speech_text import FenceFilter, strip_markup
 from voice.tts import EdgeTTS, TextToSpeech, contains_cyrillic, drain_sentences
 from voice.wakeword import WakeWord
 from voice.wakeword import display_phrase as _wake_display
@@ -689,13 +690,20 @@ class VoiceLoop:
         stream_buf = {"text": ""}
         streamed = {"count": 0}
         stream_q: asyncio.Queue = asyncio.Queue()
+        # A code fence spans many chunks, so it can only be caught with state:
+        # without this the speaker voices the inside of the block long before
+        # the closing ``` arrives (MEDO once read out a whole JSON tool schema).
+        fence = FenceFilter()
 
         def on_delta(chunk: str) -> None:
-            stream_buf["text"] += chunk
+            stream_buf["text"] += fence.feed(chunk)
             sentences, stream_buf["text"] = drain_sentences(stream_buf["text"])
             for s in sentences:
+                spoken = strip_markup(s)
+                if not spoken:
+                    continue          # the sentence was pure markup
                 streamed["count"] += 1
-                stream_q.put_nowait(s)
+                stream_q.put_nowait(spoken)
 
         async def stream_speaker() -> None:
             while True:
@@ -771,7 +779,7 @@ class VoiceLoop:
         finally:
             route_done.set()      # tell the filler to stop BEFORE its next line
             await filler          # let any in-progress filler audio finish first
-            tail = stream_buf["text"].strip()
+            tail = strip_markup(stream_buf["text"] + fence.flush())
             if streamed["count"] and tail:
                 streamed["count"] += 1
                 stream_q.put_nowait(tail)  # the last, unterminated sentence

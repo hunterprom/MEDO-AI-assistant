@@ -67,6 +67,66 @@
 > passes both. The prompt rule mitigates it; a real gibberish gate would risk
 > rejecting valid Macedonian speech, which is the very thing being fixed here.
 >
+> ## Round 6 (2026-08-08) — the English transcript. FIXED.
+>
+> An English session, so none of the round-5 Macedonian work applied. Seven
+> defects, each reproduced before it was touched:
+>
+> * **The app builder lost its spec to whichever skill the answer resembled.**
+>   "make me an app" → "What should the app do?" → "I want the app to track the
+>   weather in Macedonia…" → *"It's 22 degrees and clear in Jonesboro."* The
+>   build was silently dropped. `Router._route_inner` abandoned a reply capture
+>   whenever the answer also matched a fast-path skill — right for a narrow
+>   question, fatal for an open one, because an app spec names the very things
+>   MEDO has skills for. `SkillResult.reply_is_open` now marks a question whose
+>   answer is free text; make_app and Maker Studio set it, and the capture wins.
+>   (Self-dev's "what should I fix?" is deliberately left narrow: it edits
+>   MEDO's own code, so letting a real command escape is the safer default.)
+> * **The geocoder answered a country with a village in Louisiana.**
+>   `_lookup` asked Open-Meteo for `count=1` and trusted it, but the API leads
+>   with fuzzy alternate-name hits: "Macedonia" returned Jonesboro, LA (pop.
+>   4587) ahead of two exact matches. It now fetches several and ranks them —
+>   exact name, then capital, then population — and a small alias table maps the
+>   names people say to the ones the gazetteer files ("Macedonia" → "North
+>   Macedonia", renamed 2019).
+> * **"Give me a morning brief" took 115 seconds.** Measured: weather 0.9 s,
+>   news 8.4 s, **rewrite on qwen3:30b 72.5 s** — a thinking model reformatting
+>   sentences that were already final. The rewrite runs on the light tier now
+>   (llama3.2:3b, ~9 s) and the two network sections are fetched concurrently
+>   instead of one after the other. Measured after: **12.2 s**.
+> * **An unrelated fact was announced as the day's schedule.** "Worth
+>   remembering: I don't drink coffee." `FactsStore.relevant()` returns its
+>   whole store when the store is smaller than the limit — correct for padding
+>   an LLM prompt, wrong as a query. With exactly one fact stored it matched
+>   everything. New `FactsStore.search()` filters by cosine score and is allowed
+>   to return nothing; the briefing uses it.
+> * **MEDO read a JSON function schema out loud**, braces, quotes and
+>   `"type": "function"` included — the system prompt has forbidden that since
+>   round 1, and nothing enforced it. New `core/speech_text.py`:
+>   `strip_markup()` runs on every reply before anyone says it, and
+>   `looks_like_markup()` triggers one re-ask for a spoken answer (stripping
+>   alone leaves the prose around a hole). `FenceFilter` carries fence state
+>   across streamed chunks, because sentence-streaming TTS otherwise voices the
+>   inside of a code block long before the closing ``` arrives.
+> * **An internal tool name was spoken**: "I can locate_in_app weather app…".
+>   `leaked_tool_names()` checks a reply against the live registry, so ordinary
+>   snake_case in a filename isn't a false positive.
+> * **The semantic tier answered a question about MEDO with a security skill.**
+>   "What features would you like added to your system?" → *"Lion mode is off."*
+>   The tier matched `security_updates` on the shared vocabulary (system, apps,
+>   add). Questions ABOUT MEDO now skip the semantic tier entirely and go to the
+>   LLM, which is the only thing that can actually answer them.
+>
+> Full suite **2378 passed**, 1 skipped, ruff clean. Regression tests:
+> `tests/test_transcript_round6.py` (56).
+>
+> **Known limit, not fixed:** the streamed markup guard is best-effort for
+> *non-fenced* markup. A bullet or a bare `{` that arrives mid-stream is
+> stripped per sentence, but a JSON blob written without a fence can still have
+> its first sentence spoken before the reply is whole. Catching that would mean
+> buffering the entire reply and giving up sentence-streaming — the latency win
+> that makes the LLM path bearable.
+>
 > ## STILL OPEN — verified, not yet fixed (for the next pass)
 >
 > **Round 3 cleared #2/#4/#5; round 4 addressed #1 and #3 — this list is

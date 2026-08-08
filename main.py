@@ -36,7 +36,7 @@ from core.router import Router
 from core.safety import PathWhitelist
 from ui.console import ConsoleUI
 from ui.hud import HudServer
-from llm.client import LLMUnavailableError, OllamaClient
+from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from remote.server import RemoteServer
 from voice.loop import VoiceLoop
 from skills.apps import AppsSkill
@@ -873,11 +873,20 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
                 f"Rewrite the user's briefing sections into ONE flowing spoken "
                 f"morning briefing in {language}, 30 to 60 seconds when read "
                 f"aloud. Plain text only — no markdown, no lists, no headings. "
-                f"Keep every fact; invent nothing.")},
+                f"Keep every fact; invent nothing. Start with the briefing "
+                f"itself — do not introduce yourself or announce what you are "
+                f"about to do.")},
             {"role": "user", "content": raw_sections},
         ]
+        # Stitching ready-made sentences together needs no reasoning, so this
+        # runs on the light tier. On the 30B thinking model the SAME rewrite
+        # measured 72 s of the ~115 s a "morning brief" was taking; llama3.2:3b
+        # does it in ~9 s, and the facts it is given are already final.
+        model = settings.llm.fast_model or router.model
+        if settings.llm.provider in CLI_PROVIDERS:
+            model = router.model      # CLI agents have no swappable model tier
         try:
-            message = await llm.chat(router.model, prompt)
+            message = await llm.chat(model, prompt)
         except LLMUnavailableError:
             return ""
         return (message.get("content") or "").strip()

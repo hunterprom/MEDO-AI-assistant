@@ -105,7 +105,8 @@ class MakeAppSkill(Skill):
             self._pending_mk = speak_mk
             return SkillResult(
                 "Што треба да прави апликацијата?" if speak_mk
-                else "What should the app do?", await_reply=True)
+                else "What should the app do?",
+                await_reply=True, reply_is_open=True)
         return self._begin(name, spec, speak_mk)
 
     def _begin(self, name: str, spec: str, speak_mk: bool = False) -> SkillResult:
@@ -119,7 +120,8 @@ class MakeAppSkill(Skill):
                 "Кажи ми што треба да прави апликацијата — на пример, „направи "
                 "апликација што ми го следи внесот на вода“." if speak_mk else
                 "Tell me what the app should do — for example, 'make an app that "
-                "tracks my daily water intake'.", await_reply=True)
+                "tracks my daily water intake'.",
+                await_reply=True, reply_is_open=True)
         if self._busy:
             return SkillResult(
                 "Веќе градам една — да ја завршам прво неа." if speak_mk else
