@@ -417,6 +417,17 @@ def test_questions_about_medo_skip_the_semantic_tier(question):
     assert _is_about_medo(question)
 
 
+def test_the_prompt_forbids_offering_capabilities_medo_lacks():
+    """Asked for "a nap", MEDO offered guided meditation, a calming story and a
+    soothing playlist — none of which it has any tool for."""
+    from core.config import PersonalityConfig
+    from llm.prompts import system_prompt
+
+    prompt = system_prompt(PersonalityConfig()).lower()
+    assert "never offer something you have no tool for" in prompt
+    assert "your tools are the complete list" in prompt
+
+
 @pytest.mark.parametrize("command", [
     "do any of my apps need updating",
     "which programs have updates waiting",

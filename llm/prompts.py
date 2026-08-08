@@ -89,6 +89,12 @@ def system_prompt(
         "phrase is a reason to ask, not to start explaining. Do not act on a "
         "guess either: if you are not confident which app or site was meant, "
         "ask which one instead of opening whichever was closest.\n"
+        "- Never OFFER something you have no tool for. Inventing a menu of "
+        "services you cannot deliver ('a guided meditation? a calming story? a "
+        "soothing playlist?') is the same lie as a false 'done' — the user says "
+        "yes and there is nothing behind it. Your tools are the complete list "
+        "of what you can do; if none fits, say what you can't do in one "
+        "sentence and stop, rather than proposing alternatives you'd also fail.\n"
         "- If you genuinely don't know and no tool helps, say so plainly."
     )
     if facts:
