@@ -127,6 +127,59 @@
 > buffering the entire reply and giving up sentence-streaming — the latency win
 > that makes the LLM path bearable.
 >
+> ## Round 7 (2026-08-14) — a search COMMAND now opens the browser. DONE.
+>
+> Not a hallucination — a category error, and an expensive one:
+>
+> ```
+> YOU   Search up for Mazda RX-7
+> MEDO  FAST · 19879 MS
+>       "The Mazda RX-7 is a Japanese sports car built around Mazda's rotary
+>        Wankel engine, and the third-generation FD from 1992 to 2002 is the
+>        one people tend to obsess over, …"
+> ```
+>
+> Three faults, in order of cost:
+>
+> 1. **It answered a command.** "Search up X" is an instruction to go and look.
+>    The right answer is the results page, clickable, in the browser MEDO is
+>    already driving — not a paragraph that silently drops everything the user
+>    would have scrolled to.
+> 2. **19.9 s** to produce that paragraph (five DDG snippets, then the 30B model
+>    narrating them). Measured after the fix: **2174 ms** cold (Chrome launching)
+>    and **~700 ms** warm, on the same real `BrowserSession`.
+> 3. **The query was wrong.** The pattern captures everything after the verb, so
+>    it searched for *"up for Mazda RX-7"* — the phrasal particle included.
+>    `clean_query()` (the cleaner `site_search` already used) now runs on both
+>    paths.
+>
+> `web_search` and the browser openers are one skill's worth of behaviour now:
+> it takes the same `site_opener` as `open_website`/`site_search`, so a search
+> lands in the SAME window a following "click the first result" acts on.
+>
+> A **question** is a different utterance and keeps the old behaviour — "what's
+> the latest on X", anything reaching the skill by MEANING, and the model's own
+> `web_search` tool calls all still come back as text. Opening a window on the
+> tool path would hand the model nothing to reason over, and a model with
+> nothing invents; that is the round-1 lesson, so `browser_scope: always` still
+> returns the snippets alongside the window.
+>
+> Everything is config (`web_search:` in config.yaml): `open_in_browser`,
+> `browser_scope` (commands | always), `engine` (any site-table name incl. your
+> own `skills.sites`, one of eight shorthands, or a `{q}` URL template), and
+> `max_results`. The browser itself is the existing `browser:` section — no new
+> setting for it.
+>
+> Deliberately **not** `controls_pc`: that flag would bar the skill from the
+> semantic tier (`Router._semantic_safe`), and the semantic tier is exactly the
+> path that must keep ANSWERING. The PC-control master switch is honoured inside
+> `execute` instead — with it off, a command falls back to the spoken summary
+> rather than opening a window. An opener returning False (no browser, blocked
+> host) falls back the same way and never claims a page it didn't open.
+>
+> Full suite **2411 passed**, 1 skipped, ruff clean. Regression tests:
+> `tests/test_search_opens_browser.py` (32).
+>
 > ## STILL OPEN — verified, not yet fixed (for the next pass)
 >
 > **Round 3 cleared #2/#4/#5; round 4 addressed #1 and #3 — this list is

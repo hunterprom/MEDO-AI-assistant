@@ -693,6 +693,37 @@ web_fetch:                          # skills/webfetch.py — READ a page, not ju
   # is a lie that also breaks the moment their fingerprinting tightens.
   user_agent: "Mozilla/5.0 (compatible; MEDO/2.0; local voice assistant)"
 
+web_search:                         # skills/websearch.py — where a search ENDS UP
+  # Two utterances wear the same verb. "Search up the Mazda RX-7" is a COMMAND:
+  # the answer is the results page, in front of you, clickable. "What's the
+  # latest on X", a bare factual question, and the model's own web_search tool
+  # call are QUESTIONS: they want text. This section is the dial between them.
+  #
+  # It opens in the browser configured under `browser:` above — the SAME window
+  # "open youtube" uses — so a following "click the first result" still works.
+  open_in_browser: true             # false = summarize everything aloud, as MEDO
+                                    # did before (~20 s per search on the 30B model,
+                                    # and the paragraph isn't clickable).
+  browser_scope: "commands"         # commands = only an explicit search verb
+                                    #   ("search up X", "google X", "look up X",
+                                    #   "барај X") opens the browser; questions and
+                                    #   the model's tool calls still get spoken text.
+                                    # always  = every web lookup opens the browser.
+                                    #   Tool calls ALSO still return the snippets, so
+                                    #   the model can never answer from nothing.
+  engine: "google"                  # any name from the site table below/built-in
+                                    #   (google, wikipedia, youtube, github, amazon,
+                                    #   your own skills.sites entries — Cyrillic
+                                    #   aliases included), one of duckduckgo, bing,
+                                    #   brave, startpage, ecosia, yandex, perplexity,
+                                    #   or your own URL template containing "{q}",
+                                    #   e.g. "https://searx.example/?q={q}".
+                                    # An unknown name falls back to Google rather
+                                    # than costing you the ability to search.
+  max_results: 5                    # snippets fetched on the SUMMARIZE path only.
+                                    # More costs latency on a path whose whole job
+                                    # is to be read aloud in two sentences.
+
 vision_llm:                         # "what do you see" / "read my screen" / bench
   # qwen2.5vl:3b replaced moondream (2026-07-20): the re-published moondream
   # decodes to 2-token garbage on every runtime/endpoint (fresh pull, GPU and

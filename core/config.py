@@ -951,6 +951,40 @@ class WebFetchConfig(BaseModel):
     user_agent: str = "Mozilla/5.0 (compatible; MEDO/2.0; local voice assistant)"
 
 
+class WebSearchConfig(BaseModel):
+    """Where a web search ENDS UP — skills/websearch.py.
+
+    Two different things wear the name "search". Telling MEDO to *go look
+    something up* is a command, and the answer to a command is the results
+    page in front of you — fetching five snippets and having a 30B model
+    narrate them takes ~20 s to produce a paragraph you then can't click.
+    Asking a *question* ("who won last night") is not that: it wants an
+    answer out loud, and the model's own ``web_search`` tool wants text it
+    can reason over, not a window.
+
+    ``browser_scope`` is the dial between those two readings.
+    """
+
+    #: "search up the Mazda RX-7" opens the results in MEDO's browser (the one
+    #: configured under ``browser:``) instead of summarizing them aloud.
+    #: False restores the old summarize-everything behaviour.
+    open_in_browser: bool = True
+    #: Which utterances that covers. "commands" — an explicit search verb
+    #: ("search up X", "google X", "look up X", "барај X"); questions with no
+    #: verb, and the model's own tool calls, still get text. "always" — every
+    #: web lookup opens the browser, tool calls included (those still return
+    #: the results text as well, so the model can't invent an answer).
+    browser_scope: Literal["commands", "always"] = "commands"
+    #: Where a browser search lands. Any key or spoken alias from the site
+    #: table — google, wikipedia, youtube, github, amazon, your own
+    #: ``skills.sites`` entries — one of the engine shorthands in
+    #: :data:`skills.websearch.ENGINES`, or a full URL template with "{q}".
+    engine: str = "google"
+    #: Snippets fetched on the summarize path. More costs latency on a path
+    #: whose whole job is to be read aloud in two sentences.
+    max_results: int = 5
+
+
 class VisionLLMConfig(BaseModel):
     """Local vision model for 'what do you see' / 'read my screen'."""
 
@@ -1186,6 +1220,7 @@ class Settings(BaseSettings):
     weather: WeatherConfig = Field(default_factory=WeatherConfig)
     news: NewsConfig = Field(default_factory=NewsConfig)
     web_fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
+    web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)

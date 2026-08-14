@@ -499,7 +499,12 @@ def build_registry(
     # "summarize <url>" must not be read as a search for the word "summarize".
     if settings.web_fetch.enabled:
         registry.register(WebFetchSkill(settings.web_fetch, summarize))
-    registry.register(WebSearchSkill(summarize))
+    # Same opener as the site/website skills, so "search up the Mazda RX-7"
+    # lands in the SAME window a following "click the first result" acts on —
+    # that shared session is what makes the merged skill worth having.
+    registry.register(WebSearchSkill(summarize, config=settings.web_search,
+                                     opener=site_opener, safety=settings.safety,
+                                     extra_sites=settings.skills.get("sites")))
 
     # Greetings + pleasantries answer instantly here instead of on the 15s LLM
     # path. Registered LATE so a real skill (a morning briefing on "good morning")

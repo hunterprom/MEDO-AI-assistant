@@ -776,3 +776,44 @@ and the latency changes; each finding verified against the code before fixing.
 catch trailing truncation (needs an external anchor; a rewritable local file
 implies a compromised host = out of scope); plugin runtime gates each skill to ITS
 OWN declared caps (not auto-reconciled with the reviewed module CAPABILITIES).
+
+## A search COMMAND opens the browser; a QUESTION is answered (2026-08-14)
+
+Two utterances wear the verb "search", and they want opposite things.
+
+**"Search up the Mazda RX-7" is a command.** It asks MEDO to go and look. The
+answer is the results page — in front of you, clickable, in the browser MEDO is
+already driving. What it did instead was fetch five DuckDuckGo snippets and have
+qwen3:30b narrate them: **19.9 s** for a paragraph you can't click, which
+silently drops everything you'd have scrolled to. `web_search` now opens the
+configured engine through the SAME `site_opener` that `open_website` and
+`site_search` use, so a following "click the first result" acts on that window.
+Measured: 2.2 s cold (Chrome launching), ~0.7 s warm.
+
+**"What's the latest on X" is a question**, and so is anything that reaches this
+skill by MEANING, and so is the model's own `web_search` tool call. Those still
+come back as text. Opening a window on the tool path would hand the model
+nothing to reason over, and a model with nothing invents — the same failure the
+whole fixlist is about. Even under `browser_scope: always` the tool path returns
+its snippets alongside the window.
+
+`web_search:` in config.yaml carries all of it: `open_in_browser`,
+`browser_scope` (commands | always), `engine`, `max_results`. The browser is the
+existing `browser:` section; there is no second browser setting. `engine` accepts
+a site-table name (including your own `skills.sites` entries and their Cyrillic
+aliases, so Wikipedia still switches to its mk mirror for a Cyrillic query), one
+of the shorthands in `ENGINES`, or a `{q}` URL template. An unknown name falls
+back to Google: a typo in config should cost you your preferred engine, not the
+ability to search.
+
+The skill is deliberately **not** `controls_pc`, even though this path opens a
+window. That flag would exclude it from the semantic tier (`_semantic_safe`),
+and the semantic tier is precisely the path that must keep answering. The
+PC-control master switch is checked inside `execute` instead: with it off, a
+command falls back to the spoken summary. An opener that returns False (no
+browser, blocked host) falls back the same way — MEDO never claims a page it
+didn't open.
+
+Also fixed here: the fast pattern captures everything after the verb, so
+"search up for X" was searching for *"up for X"*. Both paths now run the same
+`clean_query()` the site searches already used.
