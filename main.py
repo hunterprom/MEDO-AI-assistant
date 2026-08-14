@@ -30,6 +30,7 @@ from collections.abc import Awaitable
 from core.config import PROJECT_ROOT, Settings, apply_local_secrets, load_settings
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
 from core.facts import FactsStore
+from core.grounding import ground_summary
 from core.memory import NoteStore, ReminderStore
 from core.metrics import LatencyLog, TurnTimings
 from core.router import Router
@@ -753,20 +754,48 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     llm = OllamaClient(settings.llm)
 
     async def summarize(query: str, results_text: str) -> str:
-        """Summarize web results into a couple of spoken sentences (fast path)."""
+        """Summarize web results into a couple of spoken sentences (fast path).
+
+        The summary is checked against the results before it is spoken. Asked
+        for "Mazda RX-7", this path returned "Over 800,000 units were produced
+        during its lifetime" — a figure in none of the five snippets, from the
+        model's weights rather than the page, wrapped in three otherwise
+        accurate sentences. The instruction below did not stop it on its own
+        (tested), so core/grounding.py checks the figures mechanically.
+        """
         if not router.model:
             return "I found some results, but I can't summarize them offline."
         prompt = [
             {"role": "system", "content": (
                 "Summarize these web search results into two or three spoken "
-                "sentences. Plain text, no markdown, no lists.")},
+                "sentences. Plain text, no markdown, no lists.\n"
+                "Use ONLY what the results say. Never add a figure, date or "
+                "name you know from elsewhere, and never attach a number from "
+                "one result to a subject or timespan from another. One "
+                "for-sale listing is not a general fact. If the results don't "
+                "answer the query, say so in one sentence instead of "
+                "assembling an answer out of what happens to be there.")},
             {"role": "user", "content": f"Query: {query}\n\nResults:\n{results_text}"},
         ]
         try:
             message = await llm.chat(router.model, prompt)
         except LLMUnavailableError:
             return "I found results, but my summarizer is offline."
-        return (message.get("content") or "").strip() or "I couldn't summarize that."
+        summary = (message.get("content") or "").strip()
+
+        async def _reask(demand: str) -> str:
+            try:
+                second = await llm.chat(router.model, [
+                    *prompt,
+                    {"role": "assistant", "content": summary},
+                    {"role": "user", "content": demand},
+                ])
+            except LLMUnavailableError:
+                return ""
+            return (second.get("content") or "").strip()
+
+        summary = await ground_summary(summary, results_text, _reask)
+        return summary or "I couldn't summarize that."
 
     async def compose(instruction: str) -> str:
         """Write document/presentation content as Markdown (for MakeDocumentSkill).

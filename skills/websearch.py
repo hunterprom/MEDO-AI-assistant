@@ -131,11 +131,24 @@ class WebSearchSkill(Skill):
         "find out what's going on with the new graphics cards",
     ]
 
+    #: Scope words that sit between the verb and the query and are NOT part of
+    #: it. "search the internet for X" was searching for "internet for X", and
+    #: "search up some info on X" for "info on X" — junk that was invisible
+    #: while the answer was a spoken paragraph and is now in the address bar.
+    #: They live here rather than in ``clean_query`` because "on"/"about" are
+    #: not safe to strip generically: "search youtube for info ON cats" must
+    #: keep its query.
+    _SCOPE = (r"(?:up\s+)?"
+              r"(?:(?:on\s+)?(?:the\s+)?(?:web|internet)\s+)?"
+              r"(?:online\s+)?"
+              r"(?:(?:some\s+|more\s+|any\s+)?(?:info(?:rmation)?|details?|stuff)\s+)?"
+              r"(?:(?:for|about|on)\s+)?")
+
     patterns = [
         # The lookahead keeps the phrasal "look up TO (your heroes)", "look up
         # WHEN/AT", "google IS a great company", and "search your feelings/heart"
         # idioms off the fast path — search/google/look-up are otherwise verbs.
-        re.compile(r"\b(?:search|google|look\s+up)\s+(?:the\s+web\s+for\s+|for\s+)?"
+        re.compile(rf"\b(?:search|google|look\s+up)\s+{_SCOPE}"
                    r"(?!(?:to|when|at|is|are|was|were)\b|your\s+(?:feelings?|heart|soul)\b)"
                    r"(?P<q>.+)", re.IGNORECASE),
         re.compile(r"\bwhat\s+is\s+the\s+latest\s+(?:on|about)\s+(?P<q2>.+)", re.IGNORECASE),
@@ -145,14 +158,35 @@ class WebSearchSkill(Skill):
         re.compile(rf"\b(?:{mk.SEARCH}){mk.CLITICS}\s+(?:на\s+интернет\s+(?:за\s+)?)?(?P<q3>.+)",
                    re.IGNORECASE),
         re.compile(r"\bшто\s+(?:е\s+)?ново\s+(?:за|околу|со)\s+(?P<q4>.+)", re.IGNORECASE),
+        # The same instruction to go and look, in words the verb list above
+        # doesn't own. These reached the LLM and came back as a spoken
+        # paragraph while "search up X" opened the browser — the same ask
+        # answered two different ways, which reads as MEDO being arbitrary.
+        # Narrow on purpose: "look into it/my inbox" is not a web search, and
+        # "check the internet CONNECTION" is why "for" is mandatory below.
+        re.compile(r"\blook\s+into\s+(?!my\b|our\b|it\b|this\b|that\b)(?P<q5>.+)",
+                   re.IGNORECASE),
+        re.compile(r"\bfind\s+(?:me\s+)?(?:some\s+|more\s+|any\s+)?"
+                   r"(?:info(?:rmation)?|details?)\s+(?:on|about|for)\s+(?P<q6>.+)",
+                   re.IGNORECASE),
+        re.compile(r"\bcheck\s+(?:the\s+)?(?:web|internet|online)\s+for\s+(?P<q7>.+)",
+                   re.IGNORECASE),
+        # MK: "најди ми информации за X"
+        re.compile(r"\b(?:најди|пронајди)(?:\s+(?:ми|ме))?\s+"
+                   r"(?:информации|инфо|детали)\s+(?:за|околу|на)\s+(?P<q8>.+)",
+                   re.IGNORECASE),
+        # MK: "провери на интернет за X", "види на интернет за X"
+        re.compile(r"\b(?:провери|види|погледни)\s+(?:на\s+)?интернет\s+"
+                   r"(?:за\s+)?(?P<q9>.+)", re.IGNORECASE),
     ]
 
     #: Which capture group carried the query says what KIND of utterance it was.
     #: "search up X" / "барај X" are commands — go and look. "what's the latest
     #: on X" / "што е ново за X" are questions, and a question wants an answer,
-    #: not a browser window. A group listed in neither is treated as a question,
-    #: so a pattern added later can only ever be too quiet, never too clicky.
-    _COMMAND_GROUPS = ("q", "q3")
+    #: not a browser window. A group listed in neither is ignored entirely, so
+    #: a pattern added later fails loudly in the tests rather than quietly
+    #: searching for "".
+    _COMMAND_GROUPS = ("q", "q3", "q5", "q6", "q7", "q8", "q9")
     _QUESTION_GROUPS = ("q2", "q4")
 
     def __init__(self, summarize: Summarize | None = None, *,
@@ -209,8 +243,14 @@ class WebSearchSkill(Skill):
         gd = request.match.groupdict() if request.match else {}
         speak_mk = mk.is_cyrillic(request.text)
         kind = self._kind(request, gd)
-        raw = (request.args.get("query") or gd.get("q") or gd.get("q2")
-               or gd.get("q3") or gd.get("q4") or "")
+        raw = request.args.get("query") or ""
+        if not raw:
+            # Iterated rather than or-chained so adding a pattern can't leave
+            # its group unread — the group lists are the single source of truth.
+            for group in (*self._COMMAND_GROUPS, *self._QUESTION_GROUPS):
+                if gd.get(group):
+                    raw = gd[group]
+                    break
         if not raw and not request.match and not request.args:
             # Reached by MEANING (semantic tier): no regex groups and no tool
             # args, so the whole utterance IS the query.

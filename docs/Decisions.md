@@ -817,3 +817,42 @@ didn't open.
 Also fixed here: the fast pattern captures everything after the verb, so
 "search up for X" was searching for *"up for X"*. Both paths now run the same
 `clean_query()` the site searches already used.
+
+## A summary may only state figures its source stated (2026-08-14)
+
+From a live session, summarizing web results for "Mazda RX-7":
+
+> …with nearly half a million RX-7s sold across the model's seven-year run in
+> markets like the US, Australia, and Japan.
+
+The RX-7 ran 1978–2002; the FD alone ran ten years. Checked against the live
+DuckDuckGo results, the word "million" appears in none of them. Everything else
+in the answer was accurate, which is what makes this shape expensive — the
+invented figure rides inside true prose, in the one register a listener cannot
+check.
+
+Prompting was tried first and is not enough. Told in plain words to use only
+the results, llama3.2:3b still produced a production total. `core/grounding.py`
+therefore checks mechanically: every claim-figure in a summary must match a
+figure the source states. One re-ask naming the number, then the sentence
+carrying it is dropped — two accurate sentences surviving beats a retracted
+answer, and it takes co-located prose errors ("seven-year run") with it.
+
+Scope is deliberately narrow, because a summary must stay free to reword:
+
+- checked: magnitudes ≥ 100, anything with a "%", and spoken magnitudes
+  ("half a million", "илјади") — the registers that actually get invented;
+- not checked: years 1900–2100, which legitimately get reworded ("1978 to 2002"
+  → "from the late seventies"), and small counts ("three generations").
+
+Matching is exact against the **set** of numbers the source states. An early
+cut compared against every digit in the source concatenated into one string,
+which grounds figures by accident — a source reading "5 GB, 13 units" spells
+"513" and would vouch for an invented 513. Exact matching does flag a rounding
+("over 800,000" against a source saying 811,634); that trade is taken on
+purpose, since a false flag costs one re-ask and a miss costs a fabricated
+number spoken as fact.
+
+The check runs on `summarize`, so it covers `web_search`'s question path and
+`web_fetch`'s page summaries alike. It catches invented figures, not invented
+prose: a wrong claim carrying no number still passes.

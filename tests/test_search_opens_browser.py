@@ -99,6 +99,74 @@ async def test_every_english_search_verb_is_a_command(text):
     assert result.speech.startswith("Searching Google for "), text
 
 
+@pytest.mark.parametrize("text", [
+    # Every one of these sent junk into the query, invisible while the answer
+    # was a spoken paragraph and plainly wrong once it's in the address bar:
+    # "internet for the Mazda RX-7", "online for the…", "info on the…".
+    "search up for Mazda RX-7",
+    "search for the Mazda RX-7",
+    "search the web for the Mazda RX-7",
+    "search the internet for the Mazda RX-7",
+    "search online for the Mazda RX-7",
+    "search up some info on the Mazda RX-7",
+    "google the Mazda RX-7",
+    "look up the Mazda RX-7",
+    "look into the Mazda RX-7",
+    "find me info on the Mazda RX-7",
+    "find information about the Mazda RX-7",
+    "check the web for the Mazda RX-7",
+])
+@pytest.mark.asyncio
+async def test_every_phrasing_sends_the_same_clean_query(text):
+    opener = _Opener()
+    skill = _skill(opener)
+    match = skill.match(text)
+    assert match is not None, text
+    await skill.execute(SkillRequest(text=text, match=match))
+    assert opener.urls == ["https://www.google.com/search?q=Mazda+RX-7"], text
+
+
+@pytest.mark.parametrize("text", [
+    # A search COMMAND that the verb list didn't own, so it fell to the LLM and
+    # came back as a spoken paragraph — the same ask answered two ways.
+    "look into the Mazda RX-7",
+    "find me info on the Mazda RX-7",
+    "find information about the Mazda RX-7",
+    "check the web for the Mazda RX-7",
+    "check online for the Mazda RX-7",
+    "најди ми информации за мазда рх-7",
+    "провери на интернет за мазда рх-7",
+])
+def test_the_other_ways_of_saying_go_and_look_are_commands(text):
+    skill = WebSearchSkill(config=WebSearchConfig())
+    match = skill.match(text)
+    assert match is not None, text
+    assert any(match.groupdict().get(g)
+               for g in WebSearchSkill._COMMAND_GROUPS), text
+
+
+@pytest.mark.parametrize("text", [
+    "check the internet connection",      # not a search — "for" is mandatory
+    "look into it",
+    "look into this for me",
+    "look into my inbox",
+    "look up to your heroes",
+    "look up when you walk",
+    "google is a great company",
+    "search your feelings",
+])
+def test_the_widened_verbs_do_not_steal_ordinary_speech(text):
+    assert WebSearchSkill(config=WebSearchConfig()).match(text) is None, text
+
+
+def test_every_capture_group_is_classified():
+    # A pattern whose group is in neither list would search for "" — the
+    # extraction loop reads these two tuples and nothing else.
+    known = set(WebSearchSkill._COMMAND_GROUPS) | set(WebSearchSkill._QUESTION_GROUPS)
+    declared = {name for p in WebSearchSkill.patterns for name in p.groupindex}
+    assert declared == known, f"unclassified: {declared ^ known}"
+
+
 @pytest.mark.asyncio
 async def test_macedonian_command_opens_and_answers_in_macedonian():
     opener = _Opener()

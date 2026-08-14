@@ -177,8 +177,59 @@
 > rather than opening a window. An opener returning False (no browser, blocked
 > host) falls back the same way and never claims a page it didn't open.
 >
-> Full suite **2411 passed**, 1 skipped, ruff clean. Regression tests:
-> `tests/test_search_opens_browser.py` (32).
+> ## Round 7b (2026-08-14) — hallucination sweep over round 7. DONE.
+>
+> **The summarizer states figures its results never did.** From the session:
+> *"…with nearly half a million RX-7s sold across the model's seven-year run."*
+> The RX-7 ran 1978–2002; the FD alone ran ten years. Checked against the live
+> DuckDuckGo results for "Mazda RX-7": the word "million" appears in none of
+> them. The summarizer prompt was four lines and said nothing about staying
+> inside the snippets.
+>
+> Tightening the prompt was tried FIRST and is **not sufficient** — told in
+> plain words to use only the results, llama3.2:3b still stated a production
+> total. So `core/grounding.py` checks mechanically: every claim-figure in the
+> summary must match a figure the source states. One re-ask naming the invented
+> number, then the sentence carrying it is dropped. Verified against the
+> transcript sentence: flags `['million']`, and dropping that sentence takes
+> the wrong "seven-year run" with it.
+>
+> Deliberately narrow — it checks magnitudes (≥100, any "%", spoken
+> "million"/"илјади"), never years (1900–2100, which legitimately get reworded)
+> and never small counts ("three generations"). Matching is exact against the
+> SET of source numbers, so a rounding IS flagged; that trade is taken on
+> purpose. An early cut compared against every digit in the source
+> concatenated, which grounds figures by accident ("5 GB" + "13 units" vouches
+> for "513") — fixed, with a test.
+>
+> **Two defects in round 7's own patterns**, found by probing what the browser
+> actually receives rather than by re-reading the regex:
+>
+> * `search the internet for X` → searched for *"internet for the X"*;
+>   `search online for X` → *"online for the X"*; `search up some info on X` →
+>   *"info on the X"*. Same class as the "up for" bug, and now visible in the
+>   address bar. A `_SCOPE` prefix absorbs the scope words; all twelve
+>   phrasings now send an identical clean query.
+> * `look into X`, `find me info on X`, `check the web for X`,
+>   `најди ми информации за X` are the same instruction to go and look, but no
+>   pattern owned them, so they fell to the LLM and came back as a spoken
+>   paragraph while `search up X` opened the browser — the same ask answered
+>   two ways. Added, narrow: "for" is mandatory after check-the-web (so "check
+>   the internet **connection**" is untouched) and "look into it/this/my …" is
+>   excluded. Verified against twelve negatives through the real registry.
+>
+> **Not a code bug, but live on this machine:** `qwen3:30b` is returning 500
+> from Ollama — *"unable to allocate CUDA_Host buffer"* of 8.5 GB. The 3B tier
+> works, so MEDO answers simple turns and fails complex ones. Nothing here
+> fixes that; it needs memory freed or a smaller default model.
+>
+> **Known limit:** the check catches invented *figures*, not invented *prose*.
+> "Seven-year run" is caught only because it shares a sentence with "half a
+> million". A wrong claim carrying no number still passes.
+>
+> Full suite **2462 passed**, 1 skipped. Regression tests:
+> `tests/test_grounding.py` (23) and `tests/test_search_opens_browser.py` (60).
+> (`ruff check tests/` reports 16 pre-existing errors in files untouched here.)
 >
 > ## STILL OPEN — verified, not yet fixed (for the next pass)
 >
