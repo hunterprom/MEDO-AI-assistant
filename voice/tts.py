@@ -31,27 +31,57 @@ def contains_cyrillic(text: str) -> bool:
     return bool(_CYRILLIC.search(text or ""))
 
 
-#: End of a sentence: terminal punctuation, optionally followed by a closing
-#: quote/bracket, then whitespace.
-_SENTENCE_END = re.compile(r"([.!?…]+[\"')\]]?)\s")
+#: End of a sentence. Three families, because "terminal punctuation then a
+#: space" is an alphabetic-script assumption and MEDO speaks sixteen languages:
+#:
+#: * Latin/Cyrillic/Greek — ``.!?`` plus an optional closing quote, and the
+#:   whitespace AFTER it is what proves the sentence ended. Without that
+#:   lookahead "Dr. Smith" and "3.5" split mid-phrase.
+#: * CJK — ``。！？`` are full-width and are themselves the boundary; Chinese
+#:   and Japanese put no space after them. Requiring one meant zh and ja NEVER
+#:   drained a sentence: measured, both waited for the entire reply before a
+#:   single word was spoken.
+#: * Indic — the danda ``।`` ends a Devanagari sentence. Hindi had the same
+#:   total failure for the same reason.
+_SENTENCE_END = re.compile(
+    r"[.!?…]+[\"')\]]?(?=\s)"          # alphabetic scripts: space follows
+    r"|[。．！？]+[」』）】〉]?"           # CJK: the mark itself ends it
+    r"|[।॥]+(?=\s|$)"                  # Devanagari danda / double danda
+)
+
+#: Characters that carry far more speech than a Latin letter does. Measured on
+#: the same sentence: 16 Chinese characters and 44 English ones both produced
+#: ~2.8 s of audio, so one CJK/Devanagari character is worth about three.
+#: Without this weighting a ``min_len`` tuned for English holds three Japanese
+#: sentences back waiting for a chunk "long enough".
+_DENSE = re.compile(r"[぀-ヿ㐀-鿿가-힯ऀ-ॿ]")
+
+
+def speech_weight(text: str) -> int:
+    """Roughly how much SPEECH a string is worth, in Latin-character units."""
+    dense = len(_DENSE.findall(text or ""))
+    return len(text or "") + dense * 2
 
 
 def drain_sentences(buffer: str, min_len: int = 24) -> tuple[list[str], str]:
     """Pull complete sentences off a streaming text buffer.
 
-    Returns ``(sentences, remainder)``. Sentences shorter than ``min_len`` are
-    merged with the following one ("Dr." or "1." must not be spoken alone), so
-    the TTS gets natural chunks. The remainder holds the trailing incomplete
-    sentence — flush it yourself when the stream ends.
+    Returns ``(sentences, remainder)``. Chunks worth less speech than
+    ``min_len`` are merged with the following one ("Dr." or "1." must not be
+    spoken alone). The remainder holds the trailing incomplete sentence —
+    flush it yourself when the stream ends.
+
+    Length is measured in :func:`speech_weight`, not characters, so the
+    threshold means the same amount of talking in every script.
     """
     sentences: list[str] = []
     while True:
         emitted = False
         for m in _SENTENCE_END.finditer(buffer):
-            candidate = buffer[: m.end(1)].strip()
-            if len(candidate) >= min_len:
+            candidate = buffer[: m.end()].strip()
+            if speech_weight(candidate) >= min_len:
                 sentences.append(candidate)
-                buffer = buffer[m.end(1):].lstrip()
+                buffer = buffer[m.end():].lstrip()
                 emitted = True
                 break
         if not emitted:

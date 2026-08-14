@@ -67,6 +67,12 @@ console = Console()
 #: Piper — a hung Microsoft socket must not freeze the turn indefinitely.
 _EDGE_TTS_TIMEOUT_S = 20.0
 
+#: Sentences synthesized ahead of what is currently being spoken. One is
+#: enough to cover the gap (synthesis is far faster than playback for every
+#: voice here), and keeping it small bounds both the RAM a long reply holds
+#: and the work thrown away when the user interrupts.
+_SYNTH_LOOKAHEAD = 1
+
 
 class VoiceLoop:
     """Owns one voice session; see the module docstring for the phase map."""
@@ -465,11 +471,24 @@ class VoiceLoop:
             return await self._synthesize_and_play(text, language)
 
     async def _synthesize_and_play(self, text: str, language: str | None) -> float:
+        t0 = time.perf_counter()
+        audio = await self._synthesize(text, language)
+        tts_ms = (time.perf_counter() - t0) * 1000
+        if audio is not None:
+            await self._play(*audio)
+        return tts_ms
+
+    async def _synthesize(self, text: str,
+                          language: str | None) -> tuple[Any, int] | None:
+        """Text -> (waveform, sample_rate), or None when nothing can speak it.
+
+        Split out from playback so the streaming path can synthesize the NEXT
+        sentence while the current one is still being heard. Doing both in one
+        call meant every sentence boundary cost a full synthesis of silence —
+        150-300 ms for a Piper voice, and 2.8 s for Japanese on Kokoro.
+        """
         from core import languages
 
-        t0 = time.perf_counter()
-        wav = None
-        sr = 0
         spoken_lang = language or self._turn_language
         if spoken_lang is None:
             # Nothing detected this turn (typed input, an announcement, a
@@ -488,7 +507,7 @@ class VoiceLoop:
                 timeout=_EDGE_TTS_TIMEOUT_S)
         except Exception:
             logger.warning("synthesis failed for %r", spoken_lang, exc_info=True)
-            wav, sr = None, 0
+            return None
         if wav is None or getattr(wav, "size", 0) == 0:
             # Nothing could speak this language. SHOW the reply — never hand it
             # to a voice trained on another language, which is the exact
@@ -497,11 +516,13 @@ class VoiceLoop:
                            spoken_lang)
             console.print(f"[dim](no voice available for {spoken_lang} — "
                           f"reply shown, not spoken)[/dim]")
-            return (time.perf_counter() - t0) * 1000
-        tts_ms = (time.perf_counter() - t0) * 1000
+            return None
+        return wav, sr
+
+    async def _play(self, wav, sr: int) -> None:
+        """Play a waveform, watching the mic for a barge-in."""
         if await asyncio.to_thread(self._play_interruptible, wav, sr):
             self._barged_in = True
-        return tts_ms
 
     # --- listen --------------------------------------------------------------
 
@@ -733,14 +754,47 @@ class VoiceLoop:
                 stream_q.put_nowait(spoken)
 
         async def stream_speaker() -> None:
-            while True:
-                sentence = await stream_q.get()
-                if sentence is None:
-                    return
-                if self._barged_in:
-                    continue  # user cut in — drop the remaining sentences
-                await self._sm.transition(AssistantState.SPEAKING)
-                await self._speak(sentence)
+            """Voice queued sentences, synthesizing one AHEAD of playback.
+
+            Two stages, not one. Synthesizing and playing in the same step
+            meant the next sentence only started synthesizing after the
+            current one had finished being heard, so every sentence boundary
+            was a silent gap the length of a full synthesis — 150-300 ms on a
+            Piper voice and ~2.8 s on Japanese. Now the gap is only whatever
+            synthesis takes LONGER than the audio already playing, which for
+            every language but Japanese is nothing at all.
+
+            The queue is bounded: run ahead without limit and a long reply
+            synthesizes itself entirely into RAM, and every buffered sentence
+            is one more that has to be thrown away on a barge-in.
+            """
+            audio_q: asyncio.Queue = asyncio.Queue(maxsize=_SYNTH_LOOKAHEAD)
+
+            async def synthesize() -> None:
+                while True:
+                    sentence = await stream_q.get()
+                    if sentence is None or self._barged_in:
+                        await audio_q.put(None)
+                        return
+                    audio = await self._synthesize(sentence, None)
+                    if audio is not None:
+                        await audio_q.put(audio)
+
+            async def play() -> None:
+                while True:
+                    audio = await audio_q.get()
+                    if audio is None:
+                        return
+                    if self._barged_in:
+                        continue    # user cut in — drop what's still queued
+                    await self._sm.transition(AssistantState.SPEAKING)
+                    # The lock still serializes against the filler and timer
+                    # announcements; it is held per SENTENCE, not for the whole
+                    # reply, so a barge-in doesn't wait for the queue to drain.
+                    async with self._speak_lock:
+                        await self._play(*audio)
+
+            await asyncio.gather(synthesize(), play())
 
         speaker_task = asyncio.create_task(stream_speaker())
 

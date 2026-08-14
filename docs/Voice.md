@@ -1,7 +1,7 @@
 # Voice
 
-How MEDO speaks. S1 of the natural-voice work: **the engine layer**. Streaming
-(S2), barge-in (S3), prosody (S4) and per-language QA (S5) are separate steps.
+How MEDO speaks. S1 (engine layer) and S2 (streaming) are done. Barge-in
+(S3), prosody (S4) and per-language QA (S5) are separate steps.
 
 ## The honest bar
 
@@ -181,6 +181,51 @@ Japanese at 2777 ms is the one language where local is *slower* than the cloud
 was (~1078 ms). Kokoro is an order of magnitude heavier than Piper. It stays
 because the alternative is no Japanese voice at all, and S2's streaming hides
 most of it.
+
+## S2 — streaming synthesis
+
+Speech starts before the reply is finished. Sentence-streaming already existed
+(`voice/loop.py`), so S2 was measuring it and fixing what the measurement
+found. Two defects, both real:
+
+### Three languages never streamed at all
+
+`drain_sentences` looked for `.!?` **followed by whitespace**. Chinese and
+Japanese end sentences with the full-width `。` and put no space after it;
+Hindi uses the danda `।`. So **zh, ja and hi drained zero sentences** and
+waited for the entire reply before a word was spoken.
+
+The pattern now has three branches — alphabetic (space required, so "Dr." and
+"3.5" still don't split), CJK (the mark itself is the boundary), and Devanagari
+— and length is measured in `speech_weight`, not characters, because 16 Chinese
+characters and 44 English ones are both about 2.8 s of speech.
+
+### Every sentence boundary was a silent gap
+
+The speaker synthesized a sentence, played it, and only *then* started
+synthesizing the next — so each boundary cost a full synthesis of dead air.
+It now runs two stages with a bounded queue, synthesizing one sentence ahead
+of playback.
+
+### Measured
+
+Simulated LLM at ~160 chars/s, real segmentation, real synthesis, playback
+slept for the audio's own duration.
+
+| lang | TTFA before | TTFA after | dead air before | after |
+|---|---|---|---|---|
+| en | 445 ms | 459 ms | 252 ms | **7 ms** |
+| de | 465 ms | 466 ms | 200 ms | **9 ms** |
+| ru | 486 ms | 487 ms | 245 ms | **14 ms** |
+| zh | **680 ms** (no streaming) | **274 ms** | 275 ms | **15 ms** |
+| ja | **5508 ms** (no streaming) | **2622 ms** | 3058 ms | **8 ms** |
+| hi | **1173 ms** (no streaming) | **592 ms** | 271 ms | **13 ms** |
+
+Two honest notes. **Pipelining does not improve TTFA** — nothing can
+synthesize the first sentence before it exists; the TTFA gains are entirely
+from the segmentation fix, and en/de/ru (which already streamed) see none.
+And **Japanese is still 2.6 s** because Kokoro is ~10x heavier than Piper;
+streaming hides the gaps but not the first synthesis.
 
 ## Interview note
 
