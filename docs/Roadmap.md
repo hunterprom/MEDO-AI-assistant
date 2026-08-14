@@ -7,9 +7,10 @@ Ordered by value-for-effort.
    each completed sentence while the rest generates — first audio ~0.8 s on
    Groq instead of after the full reply. Barge-in (wake word / loud voice /
    HUD button) drops the remaining queued sentences.
-2. **Custom "hey MEDO" wake word.** Train an openWakeWord model (or switch
-   engine) so the assistant answers to its actual name; today it's the
-   pretrained "hey jarvis".
+2. ~~**Custom "hey MEDO" wake word.**~~ *Shipped 2026-07-24:* `models/wakeword/hey_medo.onnx`, trained on the owner's real captured
+   voice folded into a synthetic set. Fires on both "medo" and "hey
+   medo" (~95% on genuine tries); `stt_confirm` re-transcribes every
+   trigger so the low 0.20 threshold costs an STT pass, not a false wake.
 3. ~~**Macedonian voice.**~~ *Shipped 2026-07-04:* Cyrillic replies are spoken
    with `mk-MK-MarijaNeural` via edge-tts (free, online), Piper stays the
    offline fallback. `tts.multilingual` / `tts.mk_voice` in config.

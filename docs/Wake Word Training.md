@@ -85,7 +85,7 @@ free Colab T4.
 - The main venv runs the **onnx** build (onnxruntime is already a dependency
   of the voice stack). `.tflite` needs `tflite-runtime`, which has no Windows
   wheels — prefer the `.onnx` export on this machine.
-- Keep `"hey_jarvis"` working as the committed default until the custom model
+- ~~Keep `"hey_jarvis"` as the committed default until the custom model~~ *(done — `hey_medo.onnx` is committed and is now the default)*. Originally:
   is verified — the config change is one line either way, and anyone cloning
   the repo has no `models/wakeword/` (it's git-ignored, like the Piper voice).
 - The bundled-name lookup and the path lookup coexist in

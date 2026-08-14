@@ -659,19 +659,68 @@ class LanguagesConfig(BaseModel):
 
 
 class TTSConfig(BaseModel):
+    """MEDO's voice — see voice/providers.py and docs/Voice.md.
+
+    MEDO used to speak fifteen of its sixteen languages through Microsoft's
+    cloud (``edge-tts``), which made its voice the one part of it that wasn't
+    local. Those fifteen now run on-device through sherpa-onnx, on the CPU, at
+    roughly seventeen times real time and no VRAM at all — which matters,
+    because the GPU is already shared with the LLM and the vision sidecar.
+
+    Macedonian is the exception and the only one: no permissively-licensed
+    local neural voice for it exists yet. It stays on the cloud voice until a
+    fine-tuned one does, and ``allow_cloud`` is the switch that admits it.
+    """
+
     engine: str = "piper"
     voice_model: str = ""
     speed: float = 1.0
-    # Cyrillic replies are spoken with a Macedonian neural voice via edge-tts
-    # (free, online); Piper stays the offline voice for everything else.
+    # Kept: the old "Cyrillic => neural cloud voice" switch. False now means
+    # English-only local Piper, which is what it always meant.
     multilingual: bool = True
     mk_voice: str = "mk-MK-MarijaNeural"
+
+    #: Use the local sherpa-onnx voices. Off falls back to the old behaviour
+    #: (local Piper for English, edge-tts for everything else).
+    local_voices: bool = True
+    #: Where downloaded voices live. Relative paths are project-root relative.
+    voices_dir: str = "models/tts"
+    #: Fetch a language's voice the first time it is spoken (~30-70 MB each,
+    #: once). Off means only already-installed voices are available — set it
+    #: for an air-gapped box and pre-fetch with ``python -m voice.tts --pull``.
+    auto_download: bool = True
+    #: Voice models held in RAM at once. Each Piper voice is ~60 MB; Japanese
+    #: and Korean share one Kokoro model, so 3 covers ordinary bilingual use
+    #: without reloading. Raise it if you switch languages constantly.
+    max_loaded_voices: int = 3
+    #: ONNX threads per synthesis. 2 keeps a turn responsive without taking
+    #: the cores Whisper wants for the next utterance.
+    num_threads: int = 2
+    #: Permit the cloud voice for languages that have NO local voice. This is
+    #: the single declared exception to MEDO being local; today it covers
+    #: Macedonian alone. Off => those languages are shown, not spoken.
+    allow_cloud: bool = True
+    #: Let a language with no voice of its own borrow a related language's —
+    #: Macedonian read by the Serbian voice. Understandable and fully offline,
+    #: but audibly Serbian, so it is OFF and must be chosen deliberately. With
+    #: both this and ``allow_cloud`` off, mk replies are shown, not spoken.
+    offline_fallback_voices: bool = False
 
 
 class WakeWordConfig(BaseModel):
     engine: str = "openwakeword"
-    phrase: str = "hey_jarvis"
-    threshold: float = 0.5
+    #: MEDO's wake word is "hey medo" — the custom model trained on the owner's
+    #: real voice (2026-07-24) and COMMITTED to the repo, so a fresh clone wakes
+    #: to the right name. The old "hey_jarvis" default here was left over from
+    #: the jarvis -> medo rename and made an install without config.yaml answer
+    #: to somebody else's assistant. openWakeWord's bundled "hey_jarvis" still
+    #: works if you set it explicitly.
+    phrase: str = "models/wakeword/hey_medo.onnx"
+    #: Paired with the phrase above: 0.20 is the tuned bar for hey_medo (it
+    #: scores ~1.0 on a real "medo" and ~0 on ordinary speech, and stt_confirm
+    #: re-checks every trigger). 0.5 was openWakeWord's default for hey_jarvis
+    #: and is far too high for this model — a quiet "medo" never reaches it.
+    threshold: float = 0.20
     #: Consecutive ~80 ms frames the phrase must stay above ``threshold`` before
     #: MEDO wakes. 1 = the old single-frame trigger, which is twitchy: a clap, a
     #: door, or a stray word spikes the score for one frame and wakes it. A real

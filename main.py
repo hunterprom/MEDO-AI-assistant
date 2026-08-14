@@ -1018,7 +1018,7 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
     # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
     # returns immediately — so you can start a turn from the HUD without saying
-    # the "hey jarvis" phrase (fixes being stuck in STANDING BY). Only handed to
+    # the "hey medo" wake word (fixes being stuck in STANDING BY). Only handed to
     # the server when voice mode will actually consume it, so /wake correctly
     # 409s in text-only sessions instead of pretending to listen.
     wake_event = threading.Event()

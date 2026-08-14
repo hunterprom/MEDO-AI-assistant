@@ -15,7 +15,7 @@ merged 2026-07-03). Open this folder as a vault in Obsidian.
 
 1. Double-click `run.bat` in the project root.
 2. Wait for the HUD at `http://localhost:8730`.
-3. Say **"hey jarvis"** or type a command in COMMS.
+3. Say **"hey MEDO"** (or just **"medo"**) or type a command in COMMS.
 
 ## Vitals
 
@@ -25,5 +25,5 @@ merged 2026-07-03). Open this folder as a vault in Obsidian.
 | Vision LLM | moondream |
 | STT | faster-whisper `small`, auto language (mk + en) |
 | TTS | Piper `en_US-lessac-medium` |
-| Wake word | "hey jarvis" (openWakeWord pretrained) |
+| Wake word | **"hey MEDO"** / "medo" — custom openWakeWord model, trained on the owner's voice (`models/wakeword/hey_medo.onnx`) |
 | Ports | HUD 8730 · API 8710 · camera 8731 · Ollama 11434 |

@@ -190,6 +190,42 @@ class VoiceLoop:
             except Exception as exc:
                 console.print(f"[dim]Macedonian voice unavailable ({exc}); "
                               f"Cyrillic replies will use the English voice.[/dim]")
+        self._voicebox = self._build_voicebox()
+
+    def _build_voicebox(self) -> Any:
+        """The provider chain that speaks a reply — see voice/providers.py.
+
+        Order is the whole design: local voices first for the fifteen languages
+        that have one, the cloud only for a language that has none (Macedonian),
+        and the old direct-Piper call last as a safety net for English.
+        """
+        from pathlib import Path
+
+        from core.config import PROJECT_ROOT
+        from voice.providers import (
+            EdgeProvider,
+            LegacyPiperProvider,
+            SherpaProvider,
+            VoiceBox,
+        )
+
+        cfg = self._settings.tts
+        chain: list[Any] = []
+        if cfg.local_voices:
+            root = Path(cfg.voices_dir).expanduser()
+            if not root.is_absolute():
+                root = PROJECT_ROOT / root
+            chain.append(SherpaProvider(
+                root, max_loaded=cfg.max_loaded_voices,
+                num_threads=cfg.num_threads,
+                auto_download=cfg.auto_download,
+                use_fallback_voices=cfg.offline_fallback_voices))
+        chain.append(EdgeProvider(self._edge, allow_cloud=cfg.allow_cloud))
+        chain.append(LegacyPiperProvider(self._tts))
+        box = VoiceBox(chain)
+        logger.info("voice providers: %s",
+                    ", ".join(p.name for p in box.providers))
+        return box
 
     # --- standby -------------------------------------------------------------
 
@@ -421,7 +457,7 @@ class VoiceLoop:
         detected (an announcement, a typed command), and to local Piper on any
         edge-tts failure, so going offline costs the accent, not the voice.
         """
-        if self._tts is None and self._edge is None:  # no voice — reply shown only
+        if not self._voicebox.providers:      # no voice at all — reply shown only
             return 0.0
         # One speaker at a time: a timer announcement must not drive the global
         # audio stream / wake model concurrently with a turn's reply.
@@ -441,36 +477,27 @@ class VoiceLoop:
             # to say: speaking Japanese text with the English voice makes it
             # read the characters out one by one.
             spoken_lang = languages.detect_script(text)
-        use_edge = self._edge is not None and languages.get(spoken_lang) is not None             and spoken_lang != "en"     # English stays on the local Piper voice
-        if use_edge:
-            try:
-                # Bound the network synth: a Microsoft endpoint that accepts the
-                # socket but never streams audio would otherwise hang the turn
-                # forever (the Piper fallback only fires on an EXCEPTION, and a
-                # silent hang isn't one). wait_for turns the hang into a
-                # TimeoutError, which the except below routes to Piper.
-                wav, sr = await asyncio.wait_for(
-                    self._edge.synthesize(text, spoken_lang),
-                    timeout=_EDGE_TTS_TIMEOUT_S)
-            except Exception:
-                logger.warning("edge-tts failed; falling back to Piper", exc_info=True)
-                wav = None
+        # One call, whatever engine ends up serving it. The chain handles the
+        # local-first ordering, the per-language voice, and falling through a
+        # provider that fails; the timeout still bounds the cloud one, because
+        # a Microsoft socket that accepts and then never streams is a hang, not
+        # an exception, and no fallback fires on a hang.
+        try:
+            wav, sr = await asyncio.wait_for(
+                self._voicebox.synthesize(text, spoken_lang),
+                timeout=_EDGE_TTS_TIMEOUT_S)
+        except Exception:
+            logger.warning("synthesis failed for %r", spoken_lang, exc_info=True)
+            wav, sr = None, 0
         if wav is None or getattr(wav, "size", 0) == 0:
-            if self._tts is None:
-                return 0.0
-            # Piper here is ENGLISH-ONLY: reading Slavic/CJK text with it is the
-            # exact "speaks it in English (gibberish)" bug. If edge-tts was the
-            # right voice but failed, DON'T gibberish it through Piper — show the
-            # reply, skip the audio, and say why. (With the OS trust store in
-            # place edge-tts works, so this path is a rare safety net.)
-            if use_edge:
-                logger.warning("no neural voice for %r right now (edge-tts "
-                               "unreachable; Piper is English-only) — reply shown, "
-                               "not spoken", spoken_lang)
-                console.print(f"[dim](couldn't voice the {spoken_lang} reply — "
-                              f"edge-tts unreachable)[/dim]")
-                return (time.perf_counter() - t0) * 1000
-            wav, sr = await asyncio.to_thread(self._tts.synthesize, text)
+            # Nothing could speak this language. SHOW the reply — never hand it
+            # to a voice trained on another language, which is the exact
+            # "reads Japanese out character by character" bug.
+            logger.warning("no voice could speak %r — reply shown, not spoken",
+                           spoken_lang)
+            console.print(f"[dim](no voice available for {spoken_lang} — "
+                          f"reply shown, not spoken)[/dim]")
+            return (time.perf_counter() - t0) * 1000
         tts_ms = (time.perf_counter() - t0) * 1000
         if await asyncio.to_thread(self._play_interruptible, wav, sr):
             self._barged_in = True

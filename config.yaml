@@ -354,12 +354,43 @@ stt:                                # M1
   # language: "en", restore the example prompt from the README.
   initial_prompt: null
 
-tts:                                # M1
+tts:                                # voice/providers.py — see docs/Voice.md
+  # MEDO used to speak 15 of its 16 languages through Microsoft's cloud, which
+  # made its VOICE the one part of it that wasn't local. Those 15 now run
+  # on-device (sherpa-onnx, Apache-2.0) on the CPU — measured RTF 0.056-0.089,
+  # i.e. ~15x faster than real time, and ZERO VRAM, which matters because the
+  # GPU is already shared with the LLM and the vision sidecar.
+  #
+  # Macedonian is the exception and the only one: no permissively-licensed
+  # local neural mk voice exists yet (not in Piper, Kokoro, Chatterbox, and
+  # Meta's MMS is non-commercial). It stays on the cloud voice until a
+  # fine-tuned one exists — see docs/Voice.md for that plan.
   engine: "piper"
   voice_model: "models/piper/en_US-lessac-medium.onnx"   # relative to project root
   speed: 1.0
-  multilingual: true                # Cyrillic replies -> Macedonian neural voice (edge-tts, online)
+  multilingual: true                # allow the cloud voice at all (mk today)
   mk_voice: "mk-MK-MarijaNeural"    # or mk-MK-AleksandarNeural (male)
+
+  local_voices: true                # use the on-device voices. false = the old
+                                    # behaviour (English Piper + cloud for the rest).
+  voices_dir: "models/tts"          # where voices are cached; project-root relative
+  auto_download: true               # fetch a language's voice the first time it is
+                                    # spoken (~30-70 MB each, once). Set false on an
+                                    # air-gapped box and pre-fetch the ones you need.
+  max_loaded_voices: 3              # voice models held in RAM at once (~60 MB each).
+                                    # 3 covers ordinary bilingual use without reloading.
+  num_threads: 2                    # ONNX threads per synthesis. More is faster but
+                                    # takes cores Whisper wants for the next utterance.
+  allow_cloud: true                 # permit the cloud voice for a language with NO
+                                    # local voice — today that is Macedonian alone.
+                                    # false => those replies are shown, not spoken.
+                                    # This is the single declared exception to MEDO
+                                    # being local; everything else ignores it.
+  offline_fallback_voices: false    # let a language with no voice borrow a related
+                                    # one's — Macedonian read by the Serbian voice.
+                                    # Fully offline and understandable, but audibly
+                                    # Serbian, so you opt in. With this AND
+                                    # allow_cloud off, mk replies are shown, not spoken.
 
 wakeword:                           # M1
   engine: "openwakeword"

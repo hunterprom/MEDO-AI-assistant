@@ -52,7 +52,7 @@ honest list of what still isn't perfect. See [[Roadmap]] for planned work.
   omit the markings line.
 - Macedonian replies are **spoken with an English Piper voice** (no mk voice
   exists for Piper). Text in the HUD is correct. → [[Roadmap]]
-- Wake word is pretrained **"hey jarvis"**, not "MEDO". → [[Roadmap]]
+- ~~Wake word is pretrained "hey jarvis", not "MEDO".~~ *Fixed 2026-07-24:* custom `hey_medo.onnx`, trained on the owner's real voice, fires on both "medo" and "hey medo".
 - Brightness: external monitors don't expose WMI brightness — graceful error.
 - moondream↔qwen3 VRAM contention on 12 GB: one reload after vision calls.
 - Companion API has token auth but **no TLS** — still LAN only, never forward
