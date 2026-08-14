@@ -217,3 +217,120 @@ class TextToSpeech:
         with wave.open(str(path), "wb") as wav:
             self._voice.synthesize_wav(text, wav)
         return path
+
+
+#: One neutral sentence per language, for --demo. Same content everywhere so
+#: voices are compared on delivery, not on what they happen to be saying.
+DEMO_LINES = {
+    "en": "It's twenty-two degrees and clear in Skopje right now. The wind is "
+          "light from the north-west, and it should stay dry until the evening.",
+    "mk": "Дваесет и два степени е и ведро во Скопје. Ветерот е слаб од "
+          "северозапад, и до вечерта ќе биде суво.",
+    "de": "Es sind zweiundzwanzig Grad und klar in Skopje. Der Wind weht "
+          "schwach aus Nordwesten, und bis zum Abend bleibt es trocken.",
+    "fr": "Il fait vingt-deux degrés et le ciel est dégagé à Skopje. Le vent "
+          "est faible et il devrait rester sec jusqu'au soir.",
+    "es": "Hace veintidós grados y está despejado en Skopie. El viento es "
+          "flojo y debería seguir seco hasta la noche.",
+    "it": "Ci sono ventidue gradi e il cielo è sereno a Skopje. Il vento è "
+          "debole e dovrebbe restare asciutto fino a sera.",
+    "pt": "Estão vinte e dois graus e o céu está limpo em Skopje. O vento é "
+          "fraco e deve continuar seco até à noite.",
+    "nl": "Het is tweeëntwintig graden en helder in Skopje. De wind is zwak "
+          "en het blijft droog tot de avond.",
+    "pl": "Jest dwadzieścia dwa stopnie i bezchmurnie w Skopje. Wiatr jest "
+          "słaby i do wieczora powinno być sucho.",
+    "ru": "Сейчас двадцать два градуса, в Скопье ясно. Ветер слабый, до "
+          "вечера будет сухо.",
+    "tr": "Üsküp'te hava yirmi iki derece ve açık. Rüzgâr hafif, akşama kadar "
+          "kuru kalması bekleniyor.",
+    "el": "Είναι είκοσι δύο βαθμοί και αίθριος καιρός στα Σκόπια. Ο άνεμος "
+          "είναι ασθενής και θα παραμείνει στεγνό μέχρι το βράδυ.",
+    "zh": "斯科普里现在二十二度，天气晴朗。风力较弱，傍晚之前都会保持干燥。",
+    "ja": "スコピエは今、気温二十二度で晴れています。風は弱く、夕方までは乾燥した天気が続きます。",
+    "ko": "스코페는 지금 이십이 도이고 맑습니다. 바람은 약하고 저녁까지는 건조하겠습니다.",
+    "hi": "स्कोप्ये में इस समय बाईस डिग्री है और मौसम साफ़ है। हवा हल्की है और शाम तक मौसम सूखा रहेगा।",
+}
+
+
+def _demo(argv: list[str]) -> int:
+    """Speak (or write) the demo line for a language, so voices can be A/B'd.
+
+        python -m voice.tts --demo en
+        python -m voice.tts --demo en --voice kokoro:af_heart
+        python -m voice.tts --demo all --write voice-samples
+    """
+    import argparse
+    import asyncio
+    import wave as _wave
+    from pathlib import Path as _Path
+
+    parser = argparse.ArgumentParser(prog="voice.tts")
+    parser.add_argument("--demo", metavar="LANG", required=True,
+                        help="language code, or 'all'")
+    parser.add_argument("--voice", default="",
+                        help="override, e.g. kokoro:bf_emma or piper:de_DE-thorsten-high")
+    parser.add_argument("--text", default="", help="say this instead")
+    parser.add_argument("--write", metavar="DIR", default="",
+                        help="write .wav files here instead of playing")
+    args = parser.parse_args(argv)
+
+    from core.config import PROJECT_ROOT, load_settings
+    from voice.providers import SherpaProvider
+    from voice import voices as _voices
+
+    settings = load_settings()
+    codes = list(DEMO_LINES) if args.demo == "all" else [args.demo]
+    overrides = dict(settings.tts.voices or {})
+    if args.voice:
+        engine, _, name = args.voice.partition(":")
+        for code in codes:
+            overrides[code] = {"engine": engine, "voice": name}
+    provider = SherpaProvider(
+        PROJECT_ROOT / settings.tts.voices_dir,
+        max_loaded=settings.tts.max_loaded_voices,
+        num_threads=settings.tts.num_threads,
+        speed=settings.tts.speed, overrides=overrides)
+
+    async def run() -> int:
+        table = _voices.load_voices(overrides)
+        failures = 0
+        for code in codes:
+            text = args.text or DEMO_LINES.get(code, "")
+            spec = table.get(code)
+            if not text or spec is None:
+                print(f"  {code:3}  no demo line or no voice")
+                failures += 1
+                continue
+            if spec.engine == "edge":
+                print(f"  {code:3}  {spec.archive} (cloud — not played here)")
+                continue
+            audio, rate = await provider.synthesize(text, code)
+            if not audio.size:
+                print(f"  {code:3}  FAILED  {spec.archive}")
+                failures += 1
+                continue
+            label = (f"{spec.archive} sid={spec.speaker}"
+                     if spec.engine == "sherpa-kokoro" else spec.archive)
+            print(f"  {code:3}  {audio.size / rate:4.1f}s  [{spec.quality}]  {label}")
+            if args.write:
+                out = _Path(args.write)
+                out.mkdir(parents=True, exist_ok=True)
+                with _wave.open(str(out / f"{code}.wav"), "wb") as w:
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(rate)
+                    w.writeframes(audio.tobytes())
+            else:
+                from voice.audio import AudioIO
+
+                AudioIO(settings.audio).play(audio, rate)
+        return failures
+
+    return asyncio.run(run())
+
+
+if __name__ == "__main__":       # pragma: no cover - operator entry point
+    import sys
+
+    raise SystemExit(_demo(sys.argv[1:]))

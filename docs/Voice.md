@@ -62,7 +62,7 @@ and, for multi-speaker models, from the ONNX metadata itself.
 
 | lang | engine | voice | tier |
 |---|---|---|---|
-| en | Piper | `en_US-lessac-medium` | medium |
+| en | **Kokoro** | `bf_emma` (id 21), `lang="en"` | **high** |
 | de | Piper | `de_DE-thorsten-medium` | medium |
 | fr | Piper | `fr_FR-siwis-medium` | medium |
 | es | Piper | `es_ES-miro-high` | **high** |
@@ -102,6 +102,74 @@ it, and each would have shipped as "that language sounds a bit off":
 German is `thorsten-medium`, not `-high`: measured 181 ms against 966 ms for
 identical audio length. Not a rule about tiers — `es`/`pt` at `miro-high` run
 at 179/228 ms and stay high; that one model is simply heavy.
+
+## "It still sounds robotic"
+
+The first cut of this table put English on Piper's `en_US-lessac-medium`, and
+the honest answer to that feedback is that **S1 and S2 optimised the wrong
+axis**. Coverage (cloud → local) and latency (dead air 252 ms → 7 ms) don't
+touch timbre. Piper is a small 2021-era VITS model chosen for being tiny and
+fast; flat delivery is exactly what it trades away. Streaming a robotic voice
+sooner just gets you robotic sooner.
+
+English is now **Kokoro `bf_emma`**. What it costs, measured on the same 6.8 s
+sentence:
+
+| | Piper lessac | Kokoro |
+|---|---|---|
+| synthesis | **410 ms** | 3300 ms |
+| RTF | 0.061 | 0.48 |
+| VRAM | 0 | 0 (still CPU) |
+| disk | 63 MB | 325 MB |
+
+~8× slower, still 2× faster than real time, so streaming stays ahead of
+playback. About a second more before the first sentence starts.
+
+**Kokoro covers 8 of the 16** — en, zh, ja, es, fr, it, pt, hi — and nothing
+for de, nl, pl, ru, tr, el, ko, mk. So the eight will sound better than the
+seven on Piper. That inconsistency is real and is preferable to all sixteen
+sounding flat. Switching another language is one line in `tts.voices`; hear it
+first with `--demo`.
+
+## Choosing voices without touching code
+
+`config.yaml` → `tts.voices`. Anything not listed keeps the built-in choice.
+
+```yaml
+tts:
+  voices:
+    en: {engine: kokoro, voice: bf_emma}
+    de: {engine: piper,  voice: de_DE-thorsten-high}
+    mk: {engine: edge,   voice: mk-MK-AleksandarNeural}
+```
+
+Kokoro speakers are named, not numbered — the prefix is language + gender:
+`af_`/`am_` American, `bf_`/`bm_` British, `ef_`/`em_` Spanish, `ff_` French,
+`hf_`/`hm_` Hindi, `if_`/`im_` Italian, `jf_`/`jm_` Japanese, `pf_`/`pm_`
+Brazilian Portuguese, `zf_`/`zm_` Chinese. The full 53 are in
+`voice/voices.KOKORO_SPEAKERS`.
+
+A malformed entry is skipped with a warning and that language keeps its
+built-in voice — one typo never costs the whole voice stack. `tts.speed` is
+honoured too; the new path was silently ignoring it.
+
+### Hearing them
+
+```
+python -m voice.tts --demo en                              # play it
+python -m voice.tts --demo en --voice kokoro:af_heart      # try another
+python -m voice.tts --demo all --write voice-samples       # write .wav files
+```
+
+One neutral sentence per language, identical content everywhere, so voices are
+compared on delivery rather than on what they happen to be saying.
+
+**A trap worth recording:** `en-gb` is *not* a valid espeak voice in the
+shipped `espeak-ng-data` — espeak's base `en` **is** British. Asking for
+`en-gb` fails the entire synthesis with "Failed to set eSpeak-ng voice", which
+surfaces as an assistant that simply says nothing. Every code in
+`_KOKORO_LANGS` was checked against `lang/*/` on disk, and a test keeps them
+there.
 
 ## Macedonian — the honest part
 

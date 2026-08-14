@@ -386,6 +386,31 @@ tts:                                # voice/providers.py — see docs/Voice.md
                                     # false => those replies are shown, not spoken.
                                     # This is the single declared exception to MEDO
                                     # being local; everything else ignores it.
+  # Per-language voice overrides. Changing how MEDO sounds is an edit HERE,
+  # never a code edit. Anything not listed keeps the built-in choice
+  # (voice/voices.py). A bad entry is skipped with a warning, so one typo
+  # costs that language its override and nothing else.
+  #
+  #   engine: kokoro   voice: a Kokoro speaker NAME. Prefixes are language +
+  #                    gender: af_/am_ American, bf_/bm_ British, ef_/em_
+  #                    Spanish, ff_ French, hf_/hm_ Hindi, if_/im_ Italian,
+  #                    jf_/jm_ Japanese, pf_/pm_ Brazilian Portuguese,
+  #                    zf_/zm_ Chinese. Full list in voice/voices.py.
+  #                    Natural but ~8x the synthesis time of Piper.
+  #   engine: piper    voice: a Piper voice name, e.g. de_DE-thorsten-high.
+  #                    Fast and light; flatter delivery.
+  #   engine: edge     voice: a Microsoft voice. ONLINE — only sensible for a
+  #                    language with no local voice (mk).
+  #
+  # Hear them before choosing:  python -m voice.tts --demo en
+  voices:
+    en: {engine: kokoro, voice: bf_emma}    # British female. The Piper voice
+                                            # that used to be here sounded
+                                            # robotic; this is the fix.
+    # de: {engine: kokoro, voice: af_heart} # NB: Kokoro has NO German voice.
+    # ja: {engine: kokoro, voice: jf_alpha} # already the default
+    # mk: {engine: edge,   voice: mk-MK-AleksandarNeural}   # male
+
   offline_fallback_voices: false    # let a language with no voice borrow a related
                                     # one's — Macedonian read by the Serbian voice.
                                     # Fully offline and understandable, but audibly

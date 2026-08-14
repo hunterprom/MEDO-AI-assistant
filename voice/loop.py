@@ -225,7 +225,8 @@ class VoiceLoop:
                 root, max_loaded=cfg.max_loaded_voices,
                 num_threads=cfg.num_threads,
                 auto_download=cfg.auto_download,
-                use_fallback_voices=cfg.offline_fallback_voices))
+                use_fallback_voices=cfg.offline_fallback_voices,
+                speed=cfg.speed, overrides=cfg.voices))
         chain.append(EdgeProvider(self._edge, allow_cloud=cfg.allow_cloud))
         chain.append(LegacyPiperProvider(self._tts))
         box = VoiceBox(chain)

@@ -104,8 +104,14 @@ class SherpaProvider:
     def __init__(self, root: Path, *, max_loaded: int = 3,
                  num_threads: int = 2, offline_only: bool = True,
                  auto_download: bool = True, normalize_loudness: bool = True,
-                 use_fallback_voices: bool = False) -> None:
+                 use_fallback_voices: bool = False, speed: float = 1.0,
+                 overrides: dict | None = None) -> None:
         self._root = Path(root)
+        # config.yaml's tts.voices applied over the built-in map, so changing
+        # how MEDO sounds is an edit to config, not to code.
+        self._table = voices.load_voices(overrides)
+        # tts.speed existed in config and was being ignored by this path.
+        self._speed = float(speed) if speed and speed > 0 else 1.0
         self._max_loaded = max(1, int(max_loaded))
         self._threads = max(1, int(num_threads))
         self._offline_only = offline_only
@@ -123,7 +129,8 @@ class SherpaProvider:
 
     def spec_for(self, language: str | None) -> VoiceSpec | None:
         spec = voices.spec_for(language, offline_only=self._offline_only,
-                               allow_fallback=self._use_fallback)
+                               allow_fallback=self._use_fallback,
+                               table=self._table)
         if spec is None or spec.engine == "edge":
             return None
         return spec
@@ -151,7 +158,7 @@ class SherpaProvider:
         if engine is None:
             return SILENCE
         try:
-            audio = engine.generate(text, sid=spec.speaker, speed=1.0)
+            audio = engine.generate(text, sid=spec.speaker, speed=self._speed)
         except Exception:
             logger.warning("sherpa synthesis failed for %s", spec.archive,
                            exc_info=True)

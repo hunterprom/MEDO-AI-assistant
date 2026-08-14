@@ -55,6 +55,40 @@ RELEASE_URL = ("https://github.com/k2-fsa/sherpa-onnx/releases/download/"
 SHARED_ESPEAK = "espeak-ng-data"
 
 
+#: Kokoro v1_0's speakers, name -> id, read from the model's own ONNX
+#: metadata (``speaker2id``). Embedded so config.yaml can say ``bf_emma``
+#: instead of ``21``: nobody should have to look up a magic number to change
+#: how their assistant sounds, and the id ordering is an implementation
+#: detail of the checkpoint.
+#:
+#: The prefix is the language and gender: ``af_``/``am_`` American English,
+#: ``bf_``/``bm_`` British, ``ef_``/``em_`` Spanish, ``ff_`` French, ``hf_``/
+#: ``hm_`` Hindi, ``if_``/``im_`` Italian, ``jf_``/``jm_`` Japanese, ``pf_``/
+#: ``pm_`` Portuguese, ``zf_``/``zm_`` Chinese.
+KOKORO_SPEAKERS: dict[str, int] = {
+    "af_alloy": 0, "af_aoede": 1, "af_bella": 2, "af_heart": 3,
+    "af_jessica": 4, "af_kore": 5, "af_nicole": 6, "af_nova": 7,
+    "af_river": 8, "af_sarah": 9, "af_sky": 10, "am_adam": 11,
+    "am_echo": 12, "am_eric": 13, "am_fenrir": 14, "am_liam": 15,
+    "am_michael": 16, "am_onyx": 17, "am_puck": 18, "am_santa": 19,
+    "bf_alice": 20, "bf_emma": 21, "bf_isabella": 22, "bf_lily": 23,
+    "bm_daniel": 24, "bm_fable": 25, "bm_george": 26, "bm_lewis": 27,
+    "ef_dora": 28, "em_alex": 29, "ff_siwis": 30, "hf_alpha": 31,
+    "hf_beta": 32, "hm_omega": 33, "hm_psi": 34, "if_sara": 35,
+    "im_nicola": 36, "jf_alpha": 37, "jf_gongitsune": 38, "jf_nezumi": 39,
+    "jf_tebukuro": 40, "jm_kumo": 41, "pf_dora": 42, "pm_alex": 43,
+    "pm_santa": 44, "zf_xiaobei": 45, "zf_xiaoni": 46, "zf_xiaoxiao": 47,
+    "zf_xiaoyi": 48, "zm_yunjian": 49, "zm_yunxi": 50, "zm_yunxia": 51,
+    "zm_yunyang": 52,
+}
+
+#: The archive each named engine lives in, so config can say ``engine: kokoro``
+#: without naming a release asset.
+ENGINE_ARCHIVES = {
+    "kokoro": ("sherpa-kokoro", "kokoro-multi-lang-v1_0", "model.onnx"),
+}
+
+
 @dataclass(frozen=True)
 class VoiceSpec:
     """One language's voice: what plays it, which file, and how good it is.
@@ -84,9 +118,17 @@ class VoiceSpec:
 #: The map. Voice choices favour a clear, single-speaker, female-or-neutral
 #: read at the highest tier each language actually has.
 VOICES: dict[str, VoiceSpec] = {
+    # --- Kokoro for English -------------------------------------------------
+    # Piper's lessac was here and it sounds like a 2010 satnav. That is not a
+    # tuning problem: Piper is a small 2021-era VITS model chosen for being
+    # tiny and fast, and flat delivery is what it trades away. Kokoro costs
+    # ~8x the synthesis time (410 ms -> 3.3 s on a 6.8 s sentence, RTF 0.061
+    # -> 0.48) and is still twice as fast as real time, so streaming stays
+    # ahead of playback. Worth a second of startup not to sound robotic.
+    "en": VoiceSpec("sherpa-kokoro", "kokoro-multi-lang-v1_0",
+                    "model.onnx", "high", speaker=KOKORO_SPEAKERS["bf_emma"],
+                    lang="en"),
     # --- Piper (VITS), local, CPU ------------------------------------------
-    "en": VoiceSpec("sherpa-vits", "vits-piper-en_US-lessac-medium",
-                    "en_US-lessac-medium.onnx", "medium"),
     # thorsten-MEDIUM, not -high. Measured on the same sentence: high took
     # 966 ms against medium's 181 ms for identical audio length — 5.3x, on the
     # one number that decides how long MEDO stands there before it starts
@@ -145,8 +187,81 @@ OFFLINE_FALLBACKS: dict[str, VoiceSpec] = {
 }
 
 
+def from_config(code: str, spec: dict) -> VoiceSpec | None:
+    """One ``tts.voices`` entry from config.yaml -> a :class:`VoiceSpec`.
+
+    Three shapes, in the order people reach for them::
+
+        en: {engine: kokoro, voice: bf_emma}       # a Kokoro speaker by NAME
+        de: {engine: piper,  voice: de_DE-thorsten-high}
+        mk: {engine: edge,   voice: mk-MK-AleksandarNeural}
+
+    Returns None for an entry that names nothing usable, so one typo costs
+    that language its override rather than crashing the assistant at startup.
+    """
+    if not isinstance(spec, dict):
+        return None
+    engine = str(spec.get("engine") or "").strip().lower()
+    voice = str(spec.get("voice") or "").strip()
+    quality = str(spec.get("quality") or "")
+    if not voice:
+        return None
+    if engine in ("kokoro", "sherpa-kokoro"):
+        kind, archive, model = ENGINE_ARCHIVES["kokoro"]
+        speaker = KOKORO_SPEAKERS.get(voice)
+        if speaker is None:
+            if not voice.isdigit():
+                logger.warning("unknown Kokoro voice %r for %s — keeping the "
+                               "built-in one", voice, code)
+                return None
+            speaker = int(voice)
+        lang = str(spec.get("lang") or _KOKORO_LANGS.get(voice[:2], ""))
+        return VoiceSpec(kind, archive, model, quality or "high",
+                         speaker=speaker, lang=lang)
+    if engine in ("piper", "vits", "sherpa-vits"):
+        # Accept either the bare voice name or the full release-asset name.
+        archive = voice if voice.startswith("vits-") else f"vits-piper-{voice}"
+        model = str(spec.get("model") or f"{voice.split('/')[-1]}.onnx")
+        return VoiceSpec("sherpa-vits", archive, model, quality or "medium",
+                         lang=str(spec.get("lang") or ""))
+    if engine == "edge":
+        return VoiceSpec("edge", voice, quality=quality or "cloud")
+    logger.warning("unknown tts.voices engine %r for %s", engine, code)
+    return None
+
+
+#: Which espeak voice a Kokoro speaker prefix implies, so config only has to
+#: name the speaker. Without the right one Kokoro phonemizes as en-us — the
+#: bug that made Japanese three times too long.
+#: Every code here was checked against the espeak-ng-data actually shipped
+#: (lang/*/<code>), not guessed. "en-gb" is NOT one of them — espeak's base
+#: "en" IS British, and asking for en-gb fails the whole synthesis with
+#: "Failed to set eSpeak-ng voice", which surfaces as a silent voice.
+_KOKORO_LANGS = {
+    "af": "en-us", "am": "en-us", "bf": "en", "bm": "en",
+    "ef": "es", "em": "es", "ff": "fr", "hf": "hi", "hm": "hi",
+    "if": "it", "im": "it", "jf": "ja", "jm": "ja",
+    "pf": "pt-BR", "pm": "pt-BR", "zf": "cmn", "zm": "cmn",
+}
+
+
+def load_voices(overrides: dict | None = None) -> dict[str, VoiceSpec]:
+    """:data:`VOICES` with any ``tts.voices`` entries from config applied.
+
+    Same contract as ``skills.sites.load_sites``: a malformed entry is skipped
+    with a warning rather than taken as a reason to have no voices at all.
+    """
+    merged = dict(VOICES)
+    for code, spec in (overrides or {}).items():
+        built = from_config(str(code), spec)
+        if built is not None:
+            merged[str(code).strip().lower()[:2]] = built
+    return merged
+
+
 def spec_for(language: str | None, *, offline_only: bool = False,
-             allow_fallback: bool = False) -> VoiceSpec | None:
+             allow_fallback: bool = False,
+             table: dict[str, VoiceSpec] | None = None) -> VoiceSpec | None:
     """The voice that speaks ``language``. None when nothing covers it.
 
     ``offline_only`` refuses the cloud engine. ``allow_fallback`` — and ONLY
@@ -160,7 +275,7 @@ def spec_for(language: str | None, *, offline_only: bool = False,
     reply instead of voicing it in the wrong language.
     """
     code = (language or "").strip().lower()[:2]
-    spec = VOICES.get(code)
+    spec = (table if table is not None else VOICES).get(code)
     if spec is None:
         return None
     if offline_only and spec.engine == "edge":

@@ -700,6 +700,18 @@ class TTSConfig(BaseModel):
     #: the single declared exception to MEDO being local; today it covers
     #: Macedonian alone. Off => those languages are shown, not spoken.
     allow_cloud: bool = True
+    #: Per-language voice overrides, applied over the built-in map in
+    #: voice/voices.py. Changing how MEDO sounds should never need a code
+    #: edit::
+    #:
+    #:     voices:
+    #:       en: {engine: kokoro, voice: bf_emma}
+    #:       de: {engine: piper,  voice: de_DE-thorsten-high}
+    #:       mk: {engine: edge,   voice: mk-MK-AleksandarNeural}
+    #:
+    #: A malformed entry is skipped with a warning — one typo costs that
+    #: language its override, never the whole voice stack.
+    voices: dict = Field(default_factory=dict)
     #: Let a language with no voice of its own borrow a related language's —
     #: Macedonian read by the Serbian voice. Understandable and fully offline,
     #: but audibly Serbian, so it is OFF and must be chosen deliberately. With

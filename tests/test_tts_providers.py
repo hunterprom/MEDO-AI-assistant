@@ -251,3 +251,97 @@ def test_the_providers_satisfy_the_interface():
     for provider in (EdgeProvider(None), LegacyPiperProvider(None),
                      _Fake("x", set())):
         assert isinstance(provider, TTSProvider)
+
+
+# --- config-editable voices --------------------------------------------------
+
+
+def test_english_is_the_natural_engine_not_the_flat_one():
+    # The user's actual complaint: it sounded robotic. Piper is a small
+    # 2021-era VITS model and flat delivery is what it trades away.
+    en = VOICES["en"]
+    assert en.engine == "sherpa-kokoro"
+    assert en.speaker == voices.KOKORO_SPEAKERS["bf_emma"]
+
+
+def test_a_kokoro_voice_can_be_chosen_by_name():
+    # config.yaml says "bf_emma", not "21". Nobody should have to look up a
+    # magic number to change how their assistant sounds.
+    spec = voices.from_config("en", {"engine": "kokoro", "voice": "af_heart"})
+    assert spec is not None
+    assert spec.speaker == voices.KOKORO_SPEAKERS["af_heart"]
+    assert spec.engine == "sherpa-kokoro"
+
+
+def test_a_kokoro_override_gets_the_right_phonemizer_language():
+    # Left unset, Kokoro phonemizes everything as en-us. Config names a
+    # SPEAKER, so the espeak voice has to be derived from its prefix.
+    assert voices.from_config("ja", {"engine": "kokoro", "voice": "jf_alpha"}).lang == "ja"
+    assert voices.from_config("es", {"engine": "kokoro", "voice": "ef_dora"}).lang == "es"
+    assert voices.from_config("en", {"engine": "kokoro", "voice": "bf_emma"}).lang == "en"
+
+
+def test_every_kokoro_prefix_maps_to_a_real_espeak_voice():
+    # "en-gb" is NOT a valid espeak voice in the shipped data and fails the
+    # whole synthesis with "Failed to set eSpeak-ng voice" — which surfaces as
+    # a silent assistant, not an error. These were checked against lang/*/.
+    valid = {"en", "en-us", "es", "fr", "hi", "it", "ja", "pt-BR", "cmn"}
+    for prefix in {n[:2] for n in voices.KOKORO_SPEAKERS}:
+        lang = voices._KOKORO_LANGS.get(prefix)
+        assert lang in valid, f"{prefix} -> {lang!r} is not a shipped espeak voice"
+
+
+def test_a_piper_override_accepts_either_name_form():
+    bare = voices.from_config("de", {"engine": "piper", "voice": "de_DE-thorsten-high"})
+    full = voices.from_config("de", {"engine": "piper",
+                                     "voice": "vits-piper-de_DE-thorsten-high"})
+    assert bare.archive == full.archive == "vits-piper-de_DE-thorsten-high"
+    assert bare.model.endswith(".onnx")
+
+
+def test_an_edge_override_picks_another_cloud_voice():
+    spec = voices.from_config("mk", {"engine": "edge",
+                                     "voice": "mk-MK-AleksandarNeural"})
+    assert spec.engine == "edge" and spec.archive == "mk-MK-AleksandarNeural"
+
+
+@pytest.mark.parametrize("bad", [
+    {"engine": "kokoro", "voice": "nope_nobody"},   # unknown speaker
+    {"engine": "wurlitzer", "voice": "x"},          # unknown engine
+    {"engine": "kokoro"},                           # no voice named
+    "just a string",                                # not a mapping
+    {},
+])
+def test_a_bad_override_costs_that_language_not_the_voice_stack(bad):
+    assert voices.from_config("en", bad) is None
+    # ...and load_voices keeps the built-in entry rather than dropping it.
+    assert voices.load_voices({"en": bad})["en"] == VOICES["en"]
+
+
+def test_load_voices_applies_an_override():
+    table = voices.load_voices({"en": {"engine": "kokoro", "voice": "am_eric"}})
+    assert table["en"].speaker == voices.KOKORO_SPEAKERS["am_eric"]
+    assert table["de"] == VOICES["de"]          # untouched languages survive
+
+
+def test_the_shipped_config_is_valid():
+    # config.yaml's tts.voices must actually parse — a typo there is silent.
+    from core.config import load_settings
+
+    overrides = load_settings().tts.voices or {}
+    for code, spec in overrides.items():
+        assert voices.from_config(code, spec) is not None, f"{code}: {spec}"
+
+
+def test_speed_from_config_reaches_the_engine(tmp_path):
+    from voice.providers import SherpaProvider
+
+    assert SherpaProvider(tmp_path, speed=1.3)._speed == pytest.approx(1.3)
+    # A nonsense speed must not silence the assistant.
+    assert SherpaProvider(tmp_path, speed=0)._speed == 1.0
+
+
+def test_demo_lines_cover_every_language():
+    from voice.tts import DEMO_LINES
+
+    assert set(DEMO_LINES) >= set(ALL_CODES)
