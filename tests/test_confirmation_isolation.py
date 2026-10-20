@@ -30,9 +30,13 @@ class _Wipe(Skill):
     def __init__(self) -> None:
         self.executed = 0
 
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return "Are you sure?"
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         if not request.context.get("confirmed"):
-            return SkillResult("Are you sure?", needs_confirmation=True)
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
         self.executed += 1
         return SkillResult("Done.")
 
@@ -172,6 +176,9 @@ def test_confirm_destructive_off_runs_the_action_instead_of_dead_ending():
         def __init__(self):
             self.ran = False
 
+        def confirmation_prompt(self, request):
+            return "Are you sure?"
+
         async def execute(self, request):
             if not request.context.get("confirmed"):
                 return SkillResult("Are you sure?", needs_confirmation=True)
@@ -212,8 +219,12 @@ def test_confirmation_mid_batch_reports_what_already_ran():
         name = "power"
         description = "power the machine"
         requires_confirmation = True
+
+        def confirmation_prompt(self, request):
+            return "Are you sure you want to shut down?"
+
         async def execute(self, request):
-            return SkillResult("Are you sure you want to shut down?",
+            return SkillResult(self.confirmation_prompt(request),
                                needs_confirmation=True)
 
     class Extra(Skill):

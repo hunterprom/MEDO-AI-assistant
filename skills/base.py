@@ -25,10 +25,39 @@ if TYPE_CHECKING:  # no runtime import — security.capabilities stays a leaf mo
 class SkillRequest:
     """Everything a skill needs to act on one request."""
 
-    text: str                                   # raw user utterance
+    text: str                                   # the words to act on
     match: re.Match[str] | None = None          # set on the fast path
     args: dict[str, Any] = field(default_factory=dict)  # set on the LLM tool path
     context: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def utterance(self) -> str:
+        """What the USER actually said — on every route.
+
+        On the fast and semantic paths ``text`` IS the utterance. On the LLM
+        tool path it is NOT: ``dispatch_tool`` synthesizes a stand-in out of the
+        tool name and the model's arguments ("smalltalk", "weather Skopje") so
+        pattern-driven skills still find their groups. That stand-in is always
+        written in English, which made every skill that picked its reply language
+        with ``mk.is_cyrillic(request.text)`` answer a Macedonian question in
+        English the moment the LLM tier — rather than a regex — dispatched it.
+        Asked "Твоја бога.", MEDO sniffed the synthetic word "smalltalk", found
+        no Cyrillic, and said "At your service."
+
+        Use this for anything that reasons about how the user PHRASED the
+        request — reply language above all; use ``text``/``args`` for the values
+        to act on.
+
+        A tool-path request with no utterance in its context returns "", NOT the
+        stand-in: it is the model's own words, and a safety check that read it
+        back would be confirming the model against itself. ``power`` asks
+        whether the user said "lock" — and the stand-in for that very call is
+        the string "power lock".
+        """
+        spoken = str(self.context.get("utterance") or "")
+        if spoken:
+            return spoken
+        return "" if self.context.get("via") == "tool" else self.text
 
 
 @dataclass
@@ -123,6 +152,40 @@ class Skill(ABC):
     def routing_text(self) -> str:
         """The single string embedded + cached for this skill (see M2.5a)."""
         return " · ".join(self.routing_surface())
+
+    # -- the confirmation contract (see core/router.py::_preconfirm) ----------
+    #
+    # A skill that declares ``requires_confirmation`` is never executed by the
+    # router until the user has said yes. That guarantee used to live inside
+    # each skill ("if not context['confirmed']: return needs_confirmation"),
+    # which meant one forgotten line — in a new skill, a plugin, a connector
+    # manifest, a device capability — was a destructive action that ran
+    # silently. The two hooks below move the guarantee into the router while
+    # keeping what the per-skill version was good at:
+    #
+    #   * ``preflight`` runs FIRST, so "that feature is switched off" or "what
+    #     should I do on the page?" still comes back instead of an absurd
+    #     "shall I go ahead?" about nothing.
+    #   * ``confirmation_prompt`` supplies the actual question, so it can name
+    #     the file, the app, or the task rather than the skill.
+    #
+    # Skills keep their internal ``confirmed`` check as well. It is now
+    # unreachable through the router, and that is the point: it is what still
+    # protects a direct ``execute`` call from a test or a future caller.
+
+    async def preflight(self, request: SkillRequest) -> "SkillResult | None":
+        """Checks that must happen BEFORE the user is asked to confirm.
+
+        Return a :class:`SkillResult` to answer now and never ask (a disabled
+        feature, a missing argument); return ``None`` to go ahead and confirm.
+        Only consulted for skills that declare ``requires_confirmation``.
+        """
+        return None
+
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        """The question asked before this skill runs. Override to be specific."""
+        return (f"Do you want me to {self.name.replace('_', ' ')}? "
+                f"Say yes to confirm.")
 
     def match(self, text: str) -> re.Match[str] | None:
         """Return the first pattern that matches ``text``, or ``None``."""

@@ -29,7 +29,7 @@ from typing import Any
 
 from core import mk
 from core.config import Settings
-from core.council import Specialist, find_specialist, rank_specialists
+from core.council import Specialist, find_specialist
 from core.safety import is_affirmative
 from skills.base import SkillRequest, SkillResult
 from skills.council import _CouncilBase
@@ -229,7 +229,7 @@ class SecondOpinionSkill(_CouncilBase):
     # -- execute --------------------------------------------------------------
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         if request.context.get("captured_reply"):
             return self._breakdown(request, speak_mk)
 
@@ -245,8 +245,8 @@ class SecondOpinionSkill(_CouncilBase):
         # is closest to — an answer about low-voltage wiring goes to the electrical
         # engineer, not a default. Rank the answer AND the question together so an
         # incidental word in a short answer can't outvote the real topic.
-        picked = rank_specialists(f"{answer}\n{question}", council,
-                                  self._settings.council.max_members)
+        picked = await self._select(f"{answer}\n{question}",
+                                    self._settings.council.max_members)
         if not picked:
             fallback = find_specialist(self._settings.council.default_agent, council)
             picked = [fallback] if fallback else list(council[:1])

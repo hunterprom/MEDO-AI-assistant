@@ -5,7 +5,7 @@ what it can do *to* your machine (or expose *about* it) if misused or
 misconfigured. MEDO is a desktop agent with real power — it types, clicks,
 reads the screen, watches the camera, and can shut the computer down — so it
 is worth understanding exactly where the guardrails are and where they aren't.
-See also [[Decisions]] (why each choice was made) and [[Bug Log]].
+See also [[decisions|Decisions]] (why each choice was made) and [[bug-log|Bug Log]].
 
 **One-line summary:** MEDO is **local-first and safe by default on a trusted
 home LAN**, but it is **not hardened against a hostile local network**, and it
@@ -41,14 +41,14 @@ vision model (moondream), gesture recognition, and long-term memory all run
 **on your machine**. With the default `provider: ollama`, no conversation, no
 audio, and no screen content leaves the computer. This was audited and
 corrected once already — v1's "100 % local" claim was false because browser
-Web-Speech STT sent audio to Google ([[Bug Log]] #14); v2's is genuine.
+Web-Speech STT sent audio to Google ([[bug-log|Bug Log]] #14); v2's is genuine.
 
 ### Confirmation gate for destructive actions
 Shutdown, restart, and sleep set `needs_confirmation` and route through
 `core/safety.py` — MEDO asks "Are you sure?" and only proceeds on a spoken
 **yes**. The gate is **bilingual** (English + Macedonian, Cyrillic and
 transliterated) and matches the *whole* reply, so an ambiguous answer
-("не знам" / "I don't know") cancels rather than guesses ([[Bug Log]] #22).
+("не знам" / "I don't know") cancels rather than guesses ([[bug-log|Bug Log]] #22).
 `safety.confirm_destructive: true` by default. Destructive tools called via
 the LLM path hit the same gate.
 
@@ -63,7 +63,7 @@ paths.
 ### No shell injection in app launching
 Apps open through a **config-mapped table** (`skills.apps`), not a shell
 string built from what you said — so "open chrome; rm -rf …" can't smuggle a
-command ([[Bug Log]] #15).
+command ([[bug-log|Bug Log]] #15).
 
 ### Pointer mode is opt-in and refusable
 Gesture mouse control **always boots OFF**, can be disabled entirely in config
@@ -82,7 +82,7 @@ The companion API on **port 8710** requires `Authorization: Bearer <token>`
 minted on first serve into `secrets.local.yaml`. Requests from `127.0.0.1`
 (the HUD, the vision sidecar) are exempt so local use stays zero-config. Auth
 **fails closed**, uses a constant-time compare, and oversized input is
-rejected (`MAX_TEXT_CHARS = 2000`). See [[Decisions]] and [[Bug Log]] #21.
+rejected (`MAX_TEXT_CHARS = 2000`). See [[decisions|Decisions]] and [[bug-log|Bug Log]] #21.
 
 ### Watch pairing without handing out the token
 "Pair with MEDO" proves physical presence: MEDO flashes a **6-digit code on
@@ -108,15 +108,31 @@ The companion API's M1 auth does **not** cover this port — the sidecar only
 *sends* the token to :8710, it doesn't *require* one. **Mitigation:** keep
 :8731 behind your firewall, never forward it, and turn the camera/sidecar off
 when unused. (A proper fix — bind to `127.0.0.1` or add the same bearer check
-— is a good next hardening step; noted for [[Roadmap]].)
+— is a good next hardening step; noted for [[roadmap|Roadmap]].)
 
-### ⚠️ 3.2 No TLS anywhere — LAN traffic is plaintext
-Neither :8710 nor :8730 nor :8731 uses HTTPS. On a shared or hostile network,
-someone sniffing can read the **bearer token** (on non-local requests), your
-transcripts, and the **webcam stream**. This was a deliberate trade — self-
-signed certs break the browser HUD and the watch client for no gain on a home
-LAN ([[Decisions]]) — but it means the security boundary *is* your router.
-**Never forward these ports.**
+### ⚠️ 3.2 TLS is available on :8710 — and off by default
+**Updated 2026-08-25.** The companion API can now serve HTTPS
+(`remote.tls_enabled`), minting a self-signed certificate on first run that
+covers `localhost` and this machine's addresses. `GET /tls` returns its SHA-256
+so a client can pin it, which is what gives a self-signed certificate identity
+as well as privacy.
+
+It is **off by default**, because switching it on changes the URL every already-
+paired client uses — a watch paired over http stops connecting until it is
+re-pointed. The original trade recorded here (self-signed certificates buy
+nothing on a home LAN) holds only while the LAN is trusted. **On a shared
+network — a flat, an office, anywhere with guest Wi-Fi — turn it on**: without
+it the bearer token, your transcripts and the webcam stream are readable by
+anyone who can sniff the segment.
+
+**:8730 (HUD) and :8731 (vision sidecar) are still plaintext**, and :8731 still
+carries the webcam. Both bind loopback, so the exposure is smaller, but it is
+not zero on a shared machine. **Never forward any of these ports.**
+
+Note for anyone testing this locally: an antivirus with HTTPS scanning (Avast,
+Kaspersky, ESET) intercepts even loopback TLS and re-signs it with its own root,
+so a client will not see MEDO's certificate. The channel is still encrypted; the
+fingerprint you pin just has to come from `GET /tls`, not from the handshake.
 
 ### ⚠️ 3.3 The companion API is, by design, near-total control
 Anyone who is on localhost, or who has the token, can drive `/ask`, which
@@ -129,7 +145,7 @@ the config comments mark this UNSAFE for a reason.
 
 ### ⚠️ 3.4 Plugins run arbitrary code with your privileges
 Any `plugins/*.py` file is imported at startup and its skills registered
-([[Bug Log]] context: this is the extensibility model). A malicious plugin is
+([[bug-log|Bug Log]] context: this is the extensibility model). A malicious plugin is
 **full code execution** as you. Only drop in plugins you have read and trust.
 
 ### ⚠️ 3.5 MCP servers run arbitrary commands from config

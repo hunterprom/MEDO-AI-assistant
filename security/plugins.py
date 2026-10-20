@@ -7,7 +7,7 @@ NOT imported at all — so untrusted code never runs until the user approves it,
 having seen exactly what it wants ("this plugin wants: network, write_files —
 allow?").
 
-Honest limit (documented in docs/Security.md): once approved and imported, an
+Honest limit (documented in docs/security.md): once approved and imported, an
 in-process plugin cannot be perfectly confined — Python can't stop `import httpx`
 inside already-running code. The controls that DO hold: (1) nothing runs until
 approved, (2) at runtime the engine gates each of a plugin's SKILLS to the

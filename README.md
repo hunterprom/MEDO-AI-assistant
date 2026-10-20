@@ -6,7 +6,7 @@
 
 **MEDO is a two-language (English/Macedonian) voice + gesture assistant that runs
 entirely on your own hardware** — a custom "medo" wake word trained on my own
-voice, Whisper ears, a swappable LLM brain, neural voices in either language,
+voice, Whisper ears, a swappable LLM brain, on-device neural voices,
 MediaPipe hand-tracking, a sci-fi HUD, and a bench of expert "council" agents it
 can put a question to — or turn loose on its *own* answers.
 
@@ -18,6 +18,9 @@ can put a question to — or turn loose on its *own* answers.
 
 - 🎙 **Voice, your voice** — custom "medo"/"hey medo" wake word → faster-whisper →
   neural TTS, spoken back in the language you asked in. Barge-in to interrupt.
+  Fifteen of the sixteen voices run **on your CPU** (sherpa-onnx, ~150–300 ms,
+  zero VRAM); Macedonian is the one declared cloud voice, until a permissively
+  licensed local one exists. → **[Voice](docs/voice.md)**
 - 🧠 **Five swappable brains** — Ollama (local, default), GPT / any
   OpenAI-compatible API, the Claude API, and the Claude Code & Codex CLI agents —
   switched live from the HUD.
@@ -38,13 +41,29 @@ can put a question to — or turn loose on its *own* answers.
   presentations, spreadsheets and small apps.
 - 🎮 **Controls other apps** — "play/pause", "minimize", "new tab", "close
   Notepad" by **direct local control** (not MCP), each gated by the policy engine.
+- 🔧 **Builds real engineering artifacts** — "design a circuit for an ESP32 and an
+  LED", "3D print a phone stand": the brain writes **library code** (SchemDraw,
+  CadQuery) and MEDO **runs it in a sandbox**, so what comes back is a valid
+  schematic and a printable STL — not a picture of one. Versioned, and edited by
+  saying what to change. → **[Maker Studio](docs/maker-studio.md)**
+- 🔁 **Routines** — chain skills in a YAML file, fired by a phrase or at 07:30, with
+  no Python. A step that needs confirmation is refused when the file loads:
+  composition never becomes privilege.
+- 🧭 **Cowork** *(off by default)* — hand over a whole multi-step task and MEDO
+  plans it **out loud**, lets you edit the plan by voice, confirms the risky
+  steps as they come, runs one at a time — and **stops** if one fails instead of
+  improvising. Bounded, not autonomous: six steps, real capabilities only, and
+  what it reads can never become what it does.
+  → **[Cowork](docs/cowork.md)**
 - 🛡 **Safe by default** — one **deny-by-default policy engine** gates every
   action, behind a user-instruction-vs-content **trust boundary** that stops a
   document or web page from turning injected text into a command; secrets stay
   local, and a cloud brain gets your question, not your files.
-  → **[Security](docs/Security.md)**
+  → **[Security](docs/security.md)**
 - 🧩 **Extensible** — drop a `.py` in `plugins/` (capability-reviewed), plug in
-  any **MCP** server, or pair the Wear OS **watch app**; a HUD at
+  any **MCP** server, pair the Wear OS **watch app**, or POST a manifest from an
+  ESP32/Pi and **[MEDO Link](docs/medo-link.md)** turns each capability into a
+  voice command *and* an LLM tool — anything that moves confirms first. A HUD at
   `localhost:8730` renders it all live.
 
 ## Install
@@ -72,7 +91,7 @@ No winget/Homebrew? Install [Ollama](https://ollama.com/download) and
 **Packaging it for someone non-technical?** An app layer (`app/` + `winsetup/`)
 builds a one-click Windows installer — a tray launcher that supervises every
 process, hardware-fit model selection, and a first-run wizard with progress bars,
-no terminal. See **[docs/Packaging.md](docs/Packaging.md)**.
+no terminal. See **[docs/packaging.md](docs/packaging.md)**.
 
 ```
 .venv\Scripts\python -m pytest      # run the tests
@@ -80,9 +99,18 @@ no terminal. See **[docs/Packaging.md](docs/Packaging.md)**.
 
 ## Local-first & LAN-only
 
-No TLS; never forward these ports beyond your LAN. The companion API requires a
-bearer token for LAN clients and refuses cross-origin browser requests; the HUD
-serves that token to loopback only; the vision sidecar binds `127.0.0.1`.
+Everything that thinks runs here: speech recognition, the default brain,
+embeddings, vision, and the voice in fifteen of sixteen languages. The two
+exceptions are ones you switch on — a cloud brain (`llm.provider`), and the
+Macedonian voice (`tts.allow_cloud: false` shows those replies instead of
+speaking them).
+
+Never forward these ports beyond your LAN. The companion API requires a bearer
+token for LAN clients, rate-limits each caller, and refuses cross-origin browser
+requests; the HUD serves that token to loopback only; the vision sidecar binds
+`127.0.0.1`. **TLS is available** (`remote.tls_enabled`, self-signed on first
+run) and off by default — worth turning on for any shared network, since
+without it the token crosses the wire in the clear.
 
 | Port | What |
 |------|------|
@@ -95,10 +123,14 @@ serves that token to loopback only; the vision sidecar binds `127.0.0.1`.
 
 - **[README-detailed.md](README-detailed.md)** — every feature, the security
   model, configuration, and troubleshooting.
-- **[`docs/Security.md`](docs/Security.md)** — the deny-by-default policy engine,
+- **[`docs/security.md`](docs/security.md)** — the deny-by-default policy engine,
   trust boundary, and honest threat model ·
-  **[`docs/Software Connectors.md`](docs/Software%20Connectors.md)** ·
-  **[`docs/Packaging.md`](docs/Packaging.md)**.
+  **[`docs/software-connectors.md`](docs/software-connectors.md)** ·
+  **[`docs/cowork.md`](docs/cowork.md)** ·
+  **[`docs/voice.md`](docs/voice.md)** ·
+  **[`docs/medo-link.md`](docs/medo-link.md)** ·
+  **[`docs/maker-studio.md`](docs/maker-studio.md)** ·
+  **[`docs/packaging.md`](docs/packaging.md)**.
 - **[`docs/`](docs/)** — an Obsidian vault: architecture, runbook, bug log,
   decisions, roadmap.
 - **[`config.yaml`](config.yaml)** — one file configures everything

@@ -6,7 +6,7 @@ detectable (``verify``). Honest limit: trailing TRUNCATION (an attacker with
 file-write access lopping off the most recent lines) leaves a valid prefix and is
 NOT detectable from the file alone — closing that needs an external anchor (a
 signed head / append-only store), and an attacker who can rewrite this local file
-already implies a compromised host, which docs/Security.md puts out of scope. It
+already implies a compromised host, which docs/security.md puts out of scope. It
 records security-relevant EVENTS as metadata only — event type, capability, skill,
 actor, decision, reason — never secret values (string fields are run through the
 redactor) and never message/document PAYLOADS.
@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Event types (metadata only — never a payload).
 AUTH_OK = "auth_ok"
 AUTH_FAIL = "auth_fail"
+CONFIRM_ASKED = "confirm_asked"      # a destructive action was held for a yes
 CONFIRM_GRANTED = "confirm_granted"
 CONFIRM_DENIED = "confirm_denied"
 ACTION = "action"

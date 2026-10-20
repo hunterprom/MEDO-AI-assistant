@@ -38,14 +38,22 @@ from pathlib import Path
 
 import numpy as np
 
+from core import db
+
 logger = logging.getLogger(__name__)
 
 #: Embeds a batch of strings; None when the backend is unavailable (mirrors
 #: core.embeddings.embed_texts / core.docindex.Embedder).
 Embedder = Callable[[Sequence[str]], "list[np.ndarray] | None"]
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS skill_route_vectors (
+#: The default table. Parameterised because the council reuses this whole
+#: machinery for a DIFFERENT population (specialists, not skills) and the two
+#: must not share a keyspace — a specialist named "weather" and a skill named
+#: "weather" would otherwise overwrite each other's vector.
+DEFAULT_TABLE = "skill_route_vectors"
+
+_SCHEMA_TEMPLATE = """
+CREATE TABLE IF NOT EXISTS {table} (
     skill        TEXT PRIMARY KEY,
     key          TEXT NOT NULL,          -- hash(skill + routing_text + embedder)
     routing_text TEXT NOT NULL,
@@ -110,18 +118,23 @@ class SkillRouteIndex:
     """Builds + caches per-skill routing vectors; holds them for the matcher."""
 
     def __init__(self, db_path: str | Path, embedder: Embedder | None,
-                 embedder_id: str) -> None:
+                 embedder_id: str, table: str = DEFAULT_TABLE) -> None:
         self._db_path = str(db_path)
         self._embedder = embedder
         #: Identifies the embedding SPACE; part of every cache key so a model
         #: swap invalidates cleanly rather than mixing incompatible vectors.
         self._embedder_id = embedder_id or "none"
+        # Identifier, not data: it is interpolated into SQL, so anything other
+        # than a plain name is refused rather than escaped.
+        if not table.replace("_", "").isalnum():
+            raise ValueError(f"not a valid table name: {table!r}")
+        self._table = table
         self._entries: list[RouteEntry] = []
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=10.0)
+        conn = db.connect(self._db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
-        conn.executescript(_SCHEMA)
+        conn.executescript(_SCHEMA_TEMPLATE.format(table=self._table))
         return conn
 
     # -- build ----------------------------------------------------------------
@@ -140,7 +153,7 @@ class SkillRouteIndex:
         with self._connect() as conn:
             cached = {r["skill"]: r for r in conn.execute(
                 "SELECT skill, key, routing_text, dim, embedding "
-                "FROM skill_route_vectors").fetchall()}
+                f"FROM {self._table}").fetchall()}
 
         entries: list[RouteEntry] = []
         to_embed: list[tuple[str, str, str, int]] = []   # skill, text, key, count
@@ -165,7 +178,7 @@ class SkillRouteIndex:
                     for (name, text, key, count), vec in zip(to_embed, vectors, strict=True):
                         v = np.asarray(vec, dtype=np.float32)
                         conn.execute(
-                            "INSERT INTO skill_route_vectors "
+                            f"INSERT INTO {self._table} "  # noqa: S608 - validated identifier
                             "(skill, key, routing_text, dim, embedding) "
                             "VALUES (?,?,?,?,?) "
                             "ON CONFLICT(skill) DO UPDATE SET "
@@ -275,8 +288,9 @@ class SkillRouteIndex:
         keep = set(live_names)
         with self._connect() as conn:
             rows = [r["skill"] for r in conn.execute(
-                "SELECT skill FROM skill_route_vectors").fetchall()]
+                f"SELECT skill FROM {self._table}").fetchall()]  # noqa: S608
             gone = [s for s in rows if s not in keep]
             for s in gone:
-                conn.execute("DELETE FROM skill_route_vectors WHERE skill = ?", (s,))
+                conn.execute(
+                    f"DELETE FROM {self._table} WHERE skill = ?", (s,))  # noqa: S608
         return len(gone)

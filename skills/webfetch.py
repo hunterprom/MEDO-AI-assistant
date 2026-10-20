@@ -24,7 +24,7 @@ user themselves supplied are fetched silently; anything that reaches the LLM
 tool path without ``url_source == "user"`` asks for a spoken yes first, naming
 the host. Non-http(s) schemes (``file:``, ``javascript:``, ``data:``) are
 refused outright and are never offered as a confirmation — see
-``docs/Decisions.md``.
+``docs/decisions.md``.
 """
 
 from __future__ import annotations
@@ -422,7 +422,7 @@ class WebFetchSkill(Skill):
         return f"{lead} {trim_for_speech(body)}"
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         groups = request.match.groupdict() if request.match else {}
         url = self._url_from(request, groups)
         if not url:
@@ -432,7 +432,7 @@ class WebFetchSkill(Skill):
 
         if not is_fetchable(url):
             # Refused outright, never offered as a confirmation: a file:// or
-            # javascript: "page" has no reading to do — see docs/Decisions.md.
+            # javascript: "page" has no reading to do — see docs/decisions.md.
             scheme = urlparse(url).scheme or "that"
             return SkillResult(
                 f"Не отворам {scheme} врски — читам само веб страници."

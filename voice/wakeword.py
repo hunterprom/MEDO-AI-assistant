@@ -7,7 +7,7 @@ off to STT.
 ``wakeword.phrase`` accepts either a bundled openWakeWord model name
 ("hey_jarvis") or a path to your own trained model — ``.onnx`` (onnxruntime)
 or ``.tflite`` (tflite-runtime), picked by extension. Training runbook:
-``docs/Wake Word Training.md``.
+``docs/wake-word-training.md``.
 """
 
 from __future__ import annotations

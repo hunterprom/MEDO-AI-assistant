@@ -1,0 +1,19 @@
+# Say "good morning" (or let it fire at 07:30 on a weekday) and MEDO runs
+# through the things you'd otherwise ask for one at a time.
+name: morning briefing
+description: >-
+  The morning round-up: today's date, the weather, and the headlines.
+  Say "good morning", or let it fire on a weekday morning.
+trigger:
+  # "добро утро" is left out: the built-in briefing skill already answers it.
+  phrase: ["good morning", "утринска рутина"]
+  at: "07:30"
+  days: [mon, tue, wed, thu, fri]
+params:
+  city: Skopje
+steps:
+  - skill: datetime
+  - skill: weather
+    args:
+      city: "{city}"
+  - skill: news

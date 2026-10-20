@@ -58,6 +58,16 @@ def _scrubbed_env(home: Path) -> dict:
     env.update({
         "HOME": hp, "USERPROFILE": hp, "TEMP": hp, "TMP": hp, "TMPDIR": hp,
         "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
+        # Generated code is NEVER attached to a screen, so any plotting library
+        # must be headless. Without this, schemdraw's matplotlib backend ends a
+        # drawing with fig.show() + plt.show() — which starts the MPL event loop
+        # and BLOCKS FOREVER in a subprocess with no display. Measured: every
+        # schematic ran until the sandbox timeout killed it (60 s by default,
+        # then retried, so one request cost four minutes and produced nothing);
+        # with Agg the same script finishes in 1.3 s and writes its SVG. This
+        # belongs here rather than in the schematic domain because it is true of
+        # ANY generated code that imports matplotlib, whatever the domain.
+        "MPLBACKEND": "Agg",
     })
     return env
 

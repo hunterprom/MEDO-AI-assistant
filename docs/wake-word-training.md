@@ -77,7 +77,7 @@ free Colab T4.
      lower; the threshold must work on the *worst* mic you actually use.
 
 8. **Update the docs** when it ships: README "Known limitations" (the
-   wake-word line dies), [[Roadmap]], and a [[Bug Log]] row if anything
+   wake-word line dies), [[roadmap|Roadmap]], and a [[bug-log|Bug Log]] row if anything
    surprising came up.
 
 ## Notes / gotchas

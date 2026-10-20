@@ -173,7 +173,7 @@ class FilesSkill(Skill):
             data={"app": app.name, "path": str(app.path)})
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         m = request.match
         gd = m.groupdict() if m else {}
         # LLM tool path: the model passes a `query` (and maybe action=open) that

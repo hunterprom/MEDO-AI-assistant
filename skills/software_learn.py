@@ -42,6 +42,19 @@ _UI_NOUN = (r"menu|menus|panel|panels|tab|tabs|toolbar|sidebar|button|slider|"
             r"preferences|options")
 _UI_NOUN_RE = re.compile(rf"\s+(?:{_UI_NOUN})\s*$", re.IGNORECASE)
 
+#: A polite/wake lead-in, so "learn X" can be anchored to the START of the
+#: utterance without losing the way people actually speak. Anchoring matters:
+#: these are IMPERATIVES, and matching the verb anywhere in the sentence let
+#: "turn off scan lines" be read as *scan the app called "lines"* — MEDO
+#: answered "I couldn't find lines open. Open it first, then say 'learn
+#: lines'." Any sentence merely CONTAINING "scan <word>" was claimed the same
+#: way. The wake word is in the list because Whisper writes it into the
+#: transcript, and it mishears "MEDO" as "Middle" or "Meadow".
+_LEAD = (r"^\s*(?:(?:hey|hi|ok|okay|so|well|please|now|medo|meadow|middle|"
+         r"еј|ајде|медо)[\s,]+)*"
+         r"(?:(?:can|could|would|will)\s+you\s+(?:please\s+)?)?"
+         r"(?:please\s+)?")
+
 
 def _foreground_app(title: str, learned) -> str:
     """The learned app whose name shows in the foreground window title, else ''.
@@ -82,9 +95,11 @@ class LearnAppSkill(Skill):
         self._vision = vision
         self._ctx = ctx        # core.app_context.SessionAppContext (shared) or None
         self.patterns = [re.compile(p, re.IGNORECASE) for p in (
-            r"\blearn\s+(?:how\s+to\s+use|to\s+use)\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)(?:\s+app)?\s*$",
-            r"\blearn\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)\s+(?:app|ui|interface)\s*$",
-            r"\b(?:scan|map|explore|study)\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)(?:'s)?\s*(?:app|ui|interface|window)?\s*$",
+            _LEAD + r"learn\s+(?:how\s+to\s+use|to\s+use)\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)(?:\s+app)?\s*[.!?]*\s*$",
+            _LEAD + r"learn\s+(?:the\s+)?(?P<app>[\w .+-]{2,40}?)\s+(?:app|ui|interface)\s*[.!?]*\s*$",
+            # "map OUT a plan" is a phrasal verb, not an app to scan — and the
+            # app group allows spaces, so it happily captured "out a plan".
+            _LEAD + r"(?:scan|map|explore|study)\s+(?!out\b)(?:the\s+)?(?P<app>[\w .+-]{2,40}?)(?:'s)?\s*(?:app|ui|interface|window)?\s*[.!?]*\s*$",
         )]
 
     def _app(self, request: SkillRequest) -> str:

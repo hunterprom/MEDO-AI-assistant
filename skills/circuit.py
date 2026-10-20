@@ -14,6 +14,7 @@ one answer nobody wants spoken.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from pathlib import Path
@@ -25,6 +26,23 @@ from core.council import HOUSE_STYLE, find_specialist, load_council
 from skills.base import Skill, SkillRequest, SkillResult
 
 logger = logging.getLogger(__name__)
+
+#: An explicit request for the DRAWING, not for an explanation of the wiring.
+#: Deliberately narrow: it takes a drafting verb AND the noun. "make/build a
+#: circuit" is left out on purpose — "help me build the circuit for a
+#: temperature sensor" is one of this skill's own routing phrases, and building
+#: a circuit usually means assembling it on a bench, not exporting an SVG.
+_WANTS_A_DRAWING = re.compile(
+    r"\b(?:design|draw|sketch|generate|render|plot)\s+"
+    # Up to four words of description may precede the noun ("an RC ALTERNATING
+    # CURRENT circuit"), stopped by a determiner so this stays in step with the
+    # studio skill's own pattern rather than drifting from it.
+    r"(?:me\s+)?(?:a\s+|an\s+|the\s+)?"
+    r"(?:(?!(?:the|a|an|my|your|this|that)\b)[\w-]+\s+){0,4}?"
+    r"(?:circuit|schematic|wiring\s+diagram)\b"
+    r"|\b(?:нацртај|дизајнирај|скицирај)\w*(?:\s+(?:ми|ме|го|ја|ги))*\s+"
+    r"(?:ед[нaо]\w*\s+)?(?:[\w-]+\s+){0,2}?(?:шем[аи]|кол[оа]|дијаграм)\w*",
+    re.IGNORECASE)
 
 #: The output contract. Without the explicit sections a model answers in an
 #: essay, and you cannot wire a board from an essay.
@@ -147,6 +165,31 @@ class CircuitSkill(Skill):
         re.compile(r"\bшема\s+за\s+(?P<qm2>.+)$", re.IGNORECASE),
     ]
 
+    def match(self, text: str):
+        """Explain the wiring — unless the ask is for the DRAWING itself.
+
+        This skill registers long before Maker Studio's ``design_circuit`` (the
+        council block, vs. the studio block at the end of ``build_registry``),
+        and registration order decides the fast path. Its "circuit/schematic
+        for X" pattern therefore claimed *"design a circuit for an ESP32
+        blinking an LED"* — which is the exact phrase ``docs/maker-studio.md``
+        tells people to say — and answered it with prose while the schematic
+        generator sat behind it, never reached. Two shipped features, and the
+        one that makes a file could not be spoken to.
+
+        So: when the Studio is ON and the words are an explicit request to
+        DRAW one, stand aside and let it produce a real SVG. Everything else —
+        "how do I wire X", "what resistor for this LED", a bare "schematic for
+        X" — is a question, and a question wants an answer, not a file. With
+        the Studio off nothing changes here: this skill keeps the lot, because
+        an explanation beats a phrase that routes nowhere.
+        """
+        if _WANTS_A_DRAWING.search(text or ""):
+            with contextlib.suppress(AttributeError):
+                if self._settings.studio.enabled:
+                    return None
+        return super().match(text)
+
     def __init__(self, settings: Settings, ask=None, summarize=None) -> None:
         self._settings = settings
         self._ask = ask                # async (system, user) -> str
@@ -154,7 +197,7 @@ class CircuitSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         question = (request.args.get("build") or gd.get("q") or gd.get("q3")
                     or gd.get("q4") or gd.get("qm") or gd.get("qm2") or "")
         if not question and gd.get("q2"):

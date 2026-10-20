@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.config import SelfDevConfig
+from core.selfdev_approval import ApprovalStore
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +132,7 @@ class SelfDevEngine:
 
     def __init__(self, config: SelfDevConfig, repo_root: Path, *,
                  agent=None, python_exe: str | None = None,
-                 git_exe: str = "git") -> None:
+                 git_exe: str = "git", approvals: ApprovalStore | None = None) -> None:
         self._config = config
         self._repo = Path(repo_root)
         self._agent = agent or self._run_cli_agent
@@ -139,6 +140,10 @@ class SelfDevEngine:
         # which has pytest/ruff and MEDO's deps; the worktree provides the code.
         self._python = python_exe or sys.executable
         self._git = git_exe
+        approvals_path = Path(config.approvals_path)
+        if not approvals_path.is_absolute():
+            approvals_path = self._repo / approvals_path
+        self.approvals = approvals or ApprovalStore(approvals_path)
 
     # -- public API ---------------------------------------------------------
 
@@ -188,10 +193,27 @@ class SelfDevEngine:
                 ["commit", "-m", f"self-dev: {request[:60]}", "--no-verify"],
                 cwd=worktree)
             diff = await self._run_git(["diff", f"{base}..{branch}"])
+            # Size ceiling, checked BEFORE the gate: an oversized proposal is
+            # refused whether or not its tests pass, and there is no reason to
+            # spend ten minutes running them to find that out. See
+            # SelfDevConfig.max_diff_bytes for why a cap exists at all.
+            oversized = self._size_violation(files, diff)
+            if oversized:
+                logger.warning("self-dev: %s", oversized)
+                await self._cleanup(branch, parent)
+                return Proposal(request, branch, worktree, base, diff, files,
+                                agent_output=agent_output, error=oversized)
             tests_ok, lint_ok, checks = await self._run_checks(worktree, files)
             proposal = Proposal(request, branch, worktree, base, diff, files,
                                 tests_ok, lint_ok, checks, agent_output)
             logger.info("self-dev: %s", proposal.summary())
+            if not proposal.ok and not self._config.keep_failed_worktree:
+                # A proposal that failed its gate can never be applied, so its
+                # worktree is litter — and litter that holds a branch checked
+                # out, which makes the next `git worktree` operation awkward.
+                # Everything a human needs to review the failure (the diff, the
+                # tail of the test run) is already in the Proposal.
+                await self._cleanup(branch, parent)
             return proposal
         except Exception as exc:
             await self._cleanup(branch, parent)
@@ -199,15 +221,63 @@ class SelfDevEngine:
                 raise
             raise SelfDevError(f"self-dev failed: {exc}") from exc
 
-    async def apply(self, proposal: Proposal) -> bool:
-        """Merge an approved proposal into the current branch (no restart).
+    def approve(self, proposal: Proposal, *, approved_by: str = "human"):
+        """Record a human's yes for this exact diff, on disk.
 
-        Refuses a proposal that didn't pass its gate. Aborts and reports on a
-        merge conflict rather than leaving the tree half-merged. The change lands
-        on disk; MEDO keeps running its old code until a manual restart.
+        Separate from :meth:`apply` on purpose. Approval is a decision about a
+        diff someone has read; applying is a mechanical step that may happen
+        later, from somewhere else, and must be able to check that the decision
+        was really made — which an in-memory flag on the object being applied
+        could never do.
+        """
+        if not proposal.ok:
+            raise SelfDevError(
+                "refusing to approve a proposal that didn't pass its checks")
+        return self.approvals.approve(proposal.branch, proposal.diff,
+                                      request=proposal.request,
+                                      approved_by=approved_by)
+
+    async def apply(self, proposal: Proposal) -> bool:
+        """Merge an APPROVED proposal into the current branch (no restart).
+
+        Four gates, in order, and all of them can say no:
+
+        1. The proposal passed its own test + lint run.
+        2. A human approved *this diff*, and it is written down
+           (``core/selfdev_approval.py``). ``auto_apply`` satisfies this by
+           recording the approval itself — a decision made in advance, and
+           logged as such, rather than a hole in the check.
+        3. The working tree is clean. Merging into a dirty tree mixes MEDO's
+           change with a person's unsaved work, and makes the rollback below
+           unsafe — it could not tell them apart.
+        4. The merged result still passes the suite. The gate proved the branch
+           was good on its own; whether it is good *here* is a separate question
+           whenever the branch was cut from an older HEAD. A failure rolls the
+           merge back to the exact commit we started from.
+
+        The change lands on disk; MEDO keeps running its old code until a
+        manual restart.
         """
         if not proposal.ok:
             raise SelfDevError("refusing to apply a proposal that didn't pass its checks")
+        approval = self.approvals.approval_for(proposal.branch, proposal.diff)
+        if approval is None:
+            if not self._config.auto_apply:
+                raise SelfDevError(
+                    "refusing to apply a change nobody approved — review the "
+                    "diff and approve it first")
+            approval = self.approve(proposal, approved_by="auto_apply")
+        # TRACKED changes only. `reset --hard` — the rollback below — restores
+        # tracked files and leaves untracked ones alone, so untracked files are
+        # never at risk and demanding a pristine tree would just mean self-dev
+        # stopped working for anyone with a scratch file in the repo.
+        dirty = (await self._run_git(
+            ["status", "--porcelain", "--untracked-files=no"])).strip()
+        if dirty:
+            raise SelfDevError(
+                "the working tree has uncommitted changes; commit or stash them "
+                "before applying a self-change (so a rollback can't lose them)")
+        before = (await self._run_git(["rev-parse", "HEAD"])).strip()
         code, out, err = await self._run(
             [self._git, "merge", "--no-ff", proposal.branch,
              "-m", f"self-dev: apply {proposal.request[:60]}"], cwd=self._repo)
@@ -215,14 +285,85 @@ class SelfDevEngine:
             with contextlib.suppress(Exception):
                 await self._run_git(["merge", "--abort"])
             raise SelfDevError(f"could not merge cleanly: {_tail(err or out, 200)}")
+        if self._config.verify_after_apply:
+            ok, output = await self._verify_merge()
+            if not ok:
+                await self._rollback(before)
+                self.approvals.revoke(proposal.branch)
+                raise SelfDevError(
+                    "the change broke the suite once merged, so I rolled it "
+                    "back:\n" + _tail(output, 800))
         await self._cleanup(proposal.branch, proposal.worktree.parent)
-        logger.info("self-dev: applied %s", proposal.branch)
+        logger.info("self-dev: applied %s (approved by %s)",
+                    proposal.branch, approval.approved_by)
         return True
 
+    async def _verify_merge(self) -> tuple[bool, str]:
+        """Run the test suite against the MERGED repo. (ok, output tail)."""
+        env = self._gate_env(Path(tempfile.mkdtemp(prefix="medo-selfdev-verify-")))
+        wrap = list(self._config.sandbox_cmd)
+        code, out, err = await self._run(
+            [*wrap, self._python, *self._config.test_cmd], cwd=self._repo,
+            timeout=self._config.check_timeout_s, env=env)
+        return code == 0, out + err
+
+    async def _rollback(self, sha: str) -> None:
+        """Return the repo to ``sha``, discarding the merge.
+
+        ``reset --hard`` is safe here and nowhere else: :meth:`apply` refused to
+        start unless the tree was clean, so the only thing being discarded is
+        the merge this method is undoing.
+        """
+        try:
+            await self._run_git(["reset", "--hard", sha])
+            logger.warning("self-dev: rolled back to %s", sha[:8])
+        except Exception:
+            logger.exception(
+                "self-dev: COULD NOT ROLL BACK to %s — the repository is left "
+                "with a merge that failed its tests. Run: git reset --hard %s",
+                sha, sha)
+            raise
+
     async def discard(self, proposal: Proposal) -> None:
-        """Roll a proposal back completely: drop its worktree and branch."""
+        """Roll a proposal back completely: drop its worktree, branch, approval."""
         await self._cleanup(proposal.branch, proposal.worktree.parent)
+        # Revoke too, so a discarded-then-rebuilt branch of the same name can
+        # never inherit the yes that was given to the old one.
+        self.approvals.revoke(proposal.branch)
         logger.info("self-dev: discarded %s", proposal.branch)
+
+    async def cleanup_stale(self) -> int:
+        """Reap worktrees and branches left behind by a crash. Returns the count.
+
+        A process killed mid-proposal leaves a registered worktree pointing at a
+        temp directory that no longer exists, and every later ``git worktree``
+        call trips over it. Git's own ``prune`` handles the registration; the
+        branches need naming explicitly because they are not reachable from
+        anything and ``prune`` leaves them alone.
+        """
+        reaped = 0
+        with contextlib.suppress(Exception):
+            await self._run_git(["worktree", "prune"])
+        try:
+            listing = await self._run_git(
+                ["for-each-ref", "--format=%(refname:short)",
+                 f"refs/heads/{self._config.branch_prefix}/**"])
+        except SelfDevError:
+            return reaped
+        checked_out = ""
+        with contextlib.suppress(Exception):
+            checked_out = await self._run_git(["worktree", "list", "--porcelain"])
+        for branch in (b.strip() for b in listing.splitlines() if b.strip()):
+            if branch in checked_out:      # still in use by a live proposal
+                continue
+            with contextlib.suppress(Exception):
+                await self._run_git(["branch", "-D", branch])
+                self.approvals.revoke(branch)
+                reaped += 1
+        self.approvals.prune()
+        if reaped:
+            logger.info("self-dev: reaped %d orphaned proposal branch(es)", reaped)
+        return reaped
 
     # -- internals ----------------------------------------------------------
 
@@ -256,6 +397,26 @@ class SelfDevEngine:
             lint_ok = True
         return tcode == 0, lint_ok, "\n\n".join(parts)
 
+    def _install_netblock(self, gate_dir: Path) -> str | None:
+        """Copy the egress guard in as ``sitecustomize``; return its directory.
+
+        CPython imports ``sitecustomize`` automatically at startup, before
+        pytest and before any conftest, which is the only hook early enough to
+        be in place when collection executes agent-authored module-level code.
+        Returns None (and logs) if the copy fails — a gate that runs with the
+        network up is worse than one that doesn't run at all only if you don't
+        notice, so this is loud rather than fatal.
+        """
+        source = Path(__file__).with_name("gate_netblock.py")
+        try:
+            gate_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, gate_dir / "sitecustomize.py")
+        except OSError as exc:
+            logger.warning("self-dev: could not install the gate network guard "
+                           "(%s); the gate will run WITH network access", exc)
+            return None
+        return str(gate_dir)
+
     def _gate_env(self, sandbox_home: Path) -> dict[str, str]:
         """Environment for the test/lint gate: real env minus secrets, with HOME
         and TEMP redirected into a throwaway dir. A payload that runs at
@@ -273,7 +434,35 @@ class SelfDevEngine:
             "HOME": hp, "USERPROFILE": hp, "TEMP": hp, "TMP": hp, "TMPDIR": hp,
             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
         })
+        if self._config.block_network_in_gate:
+            pypath = self._install_netblock(sandbox_home / "gate-pypath")
+            if pypath:
+                existing = env.get("PYTHONPATH", "")
+                env["PYTHONPATH"] = (f"{pypath}{os.pathsep}{existing}"
+                                     if existing else pypath)
+            # Point every proxy-honouring library at a dead port as well. Some
+            # HTTP stacks resolve and connect through a proxy without ever
+            # calling the functions the guard patches.
+            env.update({"http_proxy": "http://127.0.0.1:9",
+                        "https_proxy": "http://127.0.0.1:9",
+                        "HTTP_PROXY": "http://127.0.0.1:9",
+                        "HTTPS_PROXY": "http://127.0.0.1:9",
+                        "no_proxy": "127.0.0.1,localhost",
+                        "NO_PROXY": "127.0.0.1,localhost"})
         return env
+
+    def _size_violation(self, files: list[str], diff: str) -> str:
+        """Empty if the change is small enough to be reviewed, else why not."""
+        max_files = int(self._config.max_files_changed or 0)
+        if max_files > 0 and len(files) > max_files:
+            return (f"the change touches {len(files)} files, over the "
+                    f"{max_files}-file limit — ask for something narrower")
+        max_bytes = int(self._config.max_diff_bytes or 0)
+        size = len(diff.encode("utf-8", "replace"))
+        if max_bytes > 0 and size > max_bytes:
+            return (f"the diff is {size:,} bytes, over the {max_bytes:,}-byte "
+                    f"limit — a change that big can't be meaningfully reviewed")
+        return ""
 
     def _scope_violation(self, files: list[str]) -> str:
         """Empty if every changed file is in scope, else why it's refused."""

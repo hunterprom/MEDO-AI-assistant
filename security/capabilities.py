@@ -11,7 +11,7 @@ This module is pure data + two tiny, duck-typed helpers. It imports nothing from
 the rest of MEDO (so ``skills.base`` can import it with no cycle), and reads a
 skill only via ``getattr`` — never by type.
 
-Migration note (see docs/Decisions.md, S1): the coarse ``Skill.controls_pc``
+Migration note (see docs/decisions.md, S1): the coarse ``Skill.controls_pc``
 bit stays authored per skill and keeps working. ``capabilities`` is the richer,
 additive declaration; a skill that hasn't declared any yet is bridged to
 ``LEGACY_ACTUATION`` so the engine gates it exactly as ``controls_pc`` does

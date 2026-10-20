@@ -61,6 +61,19 @@ def _pretend_installed(monkeypatch, *libs):
                         lambda n: object() if n in libs else real(n))
 
 
+def _pretend_absent(monkeypatch, *libs):
+    """Hide a library that IS installed here.
+
+    The degradation tests below used to rely on cadquery/schemdraw simply not
+    being present in the dev venv. That stopped being true the moment the
+    engineering libraries were actually installed (requirements-studio.txt) —
+    and a test that only passes while a feature is unusable is no test at all.
+    """
+    real = _iu.find_spec
+    monkeypatch.setattr(_iu, "find_spec",
+                        lambda n: None if n in libs else real(n))
+
+
 def _run(coro):
     return asyncio.run(coro)
 
@@ -97,8 +110,9 @@ def test_model3d_prompts_and_brief():
     assert "a gear" in p and "prior=code" in p and "BOOM" in p
 
 
-def test_model3d_execute_reports_missing_library(tmp_path):
-    # cadquery is genuinely absent here -> honest install message, no crash.
+def test_model3d_execute_reports_missing_library(tmp_path, monkeypatch):
+    # On a machine without cadquery -> honest install message, no crash.
+    _pretend_absent(monkeypatch, "cadquery")
     out = _run(Model3DDomain().execute("code", tmp_path, FakeSandbox()))
     assert out.ok is False and "cadquery" in out.stderr and "install" in out.stderr
 
@@ -131,9 +145,10 @@ def test_model3d_check_watertight_vs_not(tmp_path):
 
 # -- schematic domain ---------------------------------------------------------
 
-def test_schematic_prompts_and_missing_library(tmp_path):
+def test_schematic_prompts_and_missing_library(tmp_path, monkeypatch):
     dom = SchematicDomain()
     assert "schemdraw" in dom.system_prompt().lower()
+    _pretend_absent(monkeypatch, "schemdraw")
     out = _run(dom.execute("code", tmp_path, FakeSandbox()))
     assert out.ok is False and "schemdraw" in out.stderr
 
@@ -164,11 +179,23 @@ def test_circuit_skill_matches_and_extracts():
     assert m is not None and "esp32" in m.groupdict()["desc"].lower()
 
 
-def test_studio_skill_off_by_default():
+def test_studio_is_off_until_someone_turns_it_on():
+    """The SHIPPED default is off — it runs generated code on your machine.
+
+    Asserted against the model's own default rather than ``load_settings()``:
+    this repo's own config.yaml now enables it, and a test that reads the
+    developer's config was really testing that nobody had switched the feature
+    on yet.
+    """
+    from core.config import StudioConfig
+    assert StudioConfig().enabled is False
+
+
+def test_studio_skill_refuses_while_disabled():
     from core.config import load_settings
     from skills.maker_studio import Model3DSkill
     s = load_settings()
-    assert s.studio.enabled is False
+    s.studio.enabled = False
     r = _run(Model3DSkill(s).execute(
         SkillRequest(text="", args={"description": "a bracket"})))
     assert r.success is False and r.data.get("reason") == "disabled"

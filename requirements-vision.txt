@@ -1,15 +1,37 @@
 # Vision sidecar deps — install into a SEPARATE venv (.venv-vision).
 #
-# MediaPipe's macOS/Windows x86_64 wheels pin numpy<2, which conflicts with the
-# main app's numpy 2 voice stack. Keeping vision in its own venv/process avoids
-# the conflict entirely; the sidecar talks to the app over the companion API.
-#
 #   python3.12 -m venv .venv-vision
 #   .venv-vision/bin/pip install --only-binary=:all: -r requirements-vision.txt
 #
-mediapipe>=0.10.18,<0.10.30   # hand landmarks; pins numpy<2
+# WHY A SECOND VENV STILL EXISTS (checked 2026-08-25, mediapipe 1.0.1 current)
+# ---------------------------------------------------------------------------
+# The original reason was the numpy pin: mediapipe <= 0.10.21 requires numpy<2,
+# the main app's voice stack is on numpy 2. That reason is gone — 0.10.30
+# dropped the pin, and 1.0.1 installs cleanly against numpy 2.5 with no
+# downgrade (verified by resolving it against the main venv).
+#
+# It was replaced by a harder one. The SAME release that dropped the numpy pin
+# removed the legacy `mp.solutions` API, and `vision/gestures.py` is built on
+# `mp.solutions.hands.Hands` + `mp.solutions.drawing_utils`. Verified directly:
+#
+#   0.10.21  numpy<2   mp.solutions present
+#   0.10.30+ numpy any mp.solutions GONE  (AttributeError on import path)
+#   1.0.1    numpy any mp.solutions GONE
+#
+# There is no version that gives both. Merging the venvs therefore requires
+# porting gesture tracking to the Tasks API (mediapipe.tasks.python.vision.
+# HandLandmarker), which also means shipping/downloading a hand_landmarker.task
+# model and reimplementing the landmark overlay that drawing_utils provided.
+# That is a real piece of work with a camera-in-the-loop acceptance test, not a
+# dependency bump — so vision stays in its own venv and its own PROCESS, which
+# is the arrangement that made the conflict harmless in the first place: the
+# sidecar never imports the main app, it talks to it over the companion API.
+#
+# Keep the upper bound until that port lands. Removing it does not fail at
+# install time — it fails at the first hand gesture.
+mediapipe>=0.10.18,<0.10.30   # last line with mp.solutions; see above
 opencv-python>=4.9            # camera capture + drawing
-numpy<2                       # required by mediapipe
+numpy<2                       # required by mediapipe <= 0.10.21
 PyYAML>=6.0                   # read config.yaml (vision + remote sections)
 
 # --- optional: click snapping (vision/snap.py) ---

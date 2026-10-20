@@ -201,7 +201,7 @@ class ImportFileSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         raw = (request.args.get("path") or gd.get("path") or gd.get("path2")
                or gd.get("path3") or gd.get("pathm") or gd.get("pathm2") or "")
         source, problem = self._resolve_source(raw)

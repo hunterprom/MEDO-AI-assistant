@@ -5,7 +5,7 @@ on THIS target, and does it need confirmation?* → ``Decision(allow|confirm|den
 plus a plain-language reason and a machine ``code`` (so the router can keep the
 exact user-facing wording, e.g. the PC-control-off reply).
 
-Design contract (docs/Decisions.md, S1):
+Design contract (docs/decisions.md, S1):
 - **Pure.** ``check`` is a deterministic function of its injected inputs (the
   security + safety config and the path whitelist) and the request. It performs
   NO prompting, execution, or logging — those live at the call sites.

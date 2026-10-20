@@ -38,8 +38,20 @@ REM    Guarded by the .medo-setup-done marker so we don't re-run winget or
 REM    re-download 24 GB of models on every launch. The marker is only written
 REM    once the big brain (qwen3:30b) has landed, so an interrupted first run
 REM    simply resumes next time. MEDO_FIRSTRUN also gates the model pulls below.
+REM
+REM    The marker is VERSIONED (scripts\setup_marker.py): it records a hash of
+REM    each requirements file, so editing one makes that venv reinstall on the
+REM    next launch. Provisioning (this section) and dependencies (sections 2/3)
+REM    are asked separately - a changed requirements.txt must not re-trigger the
+REM    24 GB download, and a completed download must not freeze the deps.
 set "MEDO_FIRSTRUN="
-if not exist ".medo-setup-done" set "MEDO_FIRSTRUN=1"
+py -3.12 scripts\setup_marker.py --provisioned >nul 2>&1
+if not %errorlevel%==0 set "MEDO_FIRSTRUN=1"
+set "MEDO_STALE="
+for /f "delims=" %%s in ('py -3.12 scripts\setup_marker.py --stale 2^>nul') do set "MEDO_STALE=%%s"
+if not defined MEDO_STALE goto stale_checked
+echo [medo] setup spec changed - will reinstall: %MEDO_STALE%
+:stale_checked
 if not defined MEDO_FIRSTRUN goto firstrun_done
 echo [medo] ============================================================
 echo [medo]  FIRST-RUN SETUP - installing Ollama, Obsidian and the local
@@ -103,15 +115,24 @@ if defined MEDO_FIRSTRUN (
 :ollama_done
 
 REM 2. Main venv -----------------------------------------------------------------
+REM    The venv is created once; the DEPENDENCIES are re-installed whenever
+REM    requirements.txt changes (pip is a fast no-op when nothing has). That
+REM    split is the point of the versioned marker - the old "venv exists, so
+REM    we're done" test meant a new dependency never reached anyone's machine.
 if not exist ".venv\" (
-  echo [medo] creating main venv + installing deps ^(one-time^)...
+  echo [medo] creating main venv ^(one-time^)...
   py -3.12 -m venv .venv
+)
+echo %MEDO_STALE% | findstr /c:"main-deps" >nul
+if %errorlevel%==0 (
+  echo [medo] installing main dependencies...
   call .venv\Scripts\pip install -q -r requirements.txt
   call .venv\Scripts\python -c "import openwakeword.utils as u; u.download_models()" || (
     echo [medo] WARNING: wake-word model download failed ^(this network's TLS
     echo [medo]          interception breaks python requests^). Voice wake won't
     echo [medo]          work until openwakeword's models are in the venv.
   )
+  py -3.12 scripts\setup_marker.py --write main-deps >nul 2>&1
 )
 
 REM 2b. Piper voice model ^(spoken replies; --voice needs it^) --------------------
@@ -125,11 +146,16 @@ if not exist "models\piper\en_US-lessac-medium.onnx" (
   if not exist "models\piper\en_US-lessac-medium.onnx" echo [medo] WARNING: Piper voice download failed - MEDO runs but won't speak until it's present.
 )
 
-REM 3. Vision venv ^(MediaPipe pins numpy^<2, so it lives apart^) -----------------
+REM 3. Vision venv ^(MediaPipe: see requirements-vision.txt for why it's apart^) --
 if not exist ".venv-vision\" (
-  echo [medo] creating vision venv + installing deps ^(one-time^)...
+  echo [medo] creating vision venv ^(one-time^)...
   py -3.12 -m venv .venv-vision
+)
+echo %MEDO_STALE% | findstr /c:"vision-deps" >nul
+if %errorlevel%==0 (
+  echo [medo] installing vision dependencies...
   call .venv-vision\Scripts\pip install -q --only-binary=:all: -r requirements-vision.txt
+  py -3.12 scripts\setup_marker.py --write vision-deps >nul 2>&1
 )
 
 REM 3b. Mark first-run setup complete - only once the 18 GB brain has actually
@@ -170,7 +196,7 @@ REM :finish_setup - write the first-run marker only when the big model is presen
 :finish_setup
 ollama list 2>nul | findstr /i /c:"qwen3:30b" >nul
 if %errorlevel%==0 (
-  echo done> ".medo-setup-done"
+  py -3.12 scripts\setup_marker.py --write --mark-provisioned >nul 2>&1
   echo [medo] first-run setup complete - later launches start straight up.
 ) else (
   echo [medo] setup incomplete: qwen3:30b still needed - it resumes on the next launch.

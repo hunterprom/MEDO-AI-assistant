@@ -14,6 +14,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from core import db
+
 _SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS projects (
@@ -48,7 +50,7 @@ class ProjectStore:
         self._db_path = str(db_path)
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn = db.connect(self._db_path, timeout=5.0)
         conn.execute("PRAGMA foreign_keys = ON")
         for stmt in _SCHEMA:
             conn.execute(stmt)
@@ -112,7 +114,15 @@ class ProjectStore:
         project, text = _clean(project), _clean(text)
         if not project or not text:
             return False
-        with self._connect() as conn:
+        # The write lock makes look-then-create atomic. Without it two turns
+        # adding the first task to the same new project race: both see it
+        # missing, both INSERT, and the loser raises UNIQUE constraint failed —
+        # losing a task the user was told had been saved. (Found by
+        # tests/test_db_concurrency.py, which is why that test exists.)
+        with db.writing(self._db_path, timeout=5.0) as conn:
+            conn.execute("PRAGMA foreign_keys = ON")   # as in _connect
+            for stmt in _SCHEMA:
+                conn.execute(stmt)
             pid = self._project_id(conn, project)
             if pid is None:
                 if not create:

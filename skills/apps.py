@@ -145,7 +145,7 @@ class AppsSkill(Skill):
         return None
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         args = request.args or {}
         m = request.match
         # The LLM tool path passes structured args with match=None; the fast

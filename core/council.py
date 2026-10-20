@@ -57,6 +57,39 @@ class Specialist:
     #: running code, fetching a datasheet) — i.e. worth a real CLI sub-agent.
     wants_tools: bool = False
 
+    # -- semantic selection surface (core/council_index.py) -------------------
+    #
+    # The word lists below decide who gets a question today. They have two
+    # problems that no amount of tuning fixes: somebody has to write them, in
+    # both languages, for every specialist — including the ones a user adds in
+    # `council.extra`, who therefore arrive deaf — and a list of nouns cannot
+    # represent "this question is about heat flow" unless the word "heat" is in
+    # it. Embedding the role description instead gets both for free.
+    #
+    # What is embedded is the ROLE, not the triggers: the prompt is a paragraph
+    # of natural language about what this expert reasons about, which is exactly
+    # the thing a question should be compared against. The title comes along
+    # because it is how people name the expert; the triggers come along because
+    # they are real topical vocabulary and cost nothing to include.
+
+    @property
+    def name(self) -> str:
+        """Alias for :attr:`key`, so a Specialist fits the routing-source
+        contract (``.name`` + ``.routing_text()``) that core/route_index.py
+        already implements and tests."""
+        return self.key
+
+    def routing_surface(self) -> list[str]:
+        """The strings that represent this specialist in embedding space."""
+        parts = [self.title.removeprefix("the "), self.prompt]
+        if self.triggers:
+            parts.append(", ".join(self.triggers))
+        return [p for p in parts if p and p.strip()]
+
+    def routing_text(self) -> str:
+        """The single string embedded + cached for this specialist."""
+        return " · ".join(self.routing_surface())
+
 
 COUNCIL: tuple[Specialist, ...] = (
     Specialist(
@@ -384,6 +417,66 @@ def rank_specialists(question: str, council: tuple[Specialist, ...] = COUNCIL,
             scored.append((-hits, index, member))
     scored.sort()
     return [member for _neg, _i, member in scored[:limit]]
+
+
+def trigger_hits(question: str, member: Specialist) -> int:
+    """How many of ``member``'s trigger words the question contains."""
+    text = question.lower()
+    return sum(1 for trigger in member.triggers if _trigger_hit(trigger, text))
+
+
+def rank_specialists_semantic(
+    question: str,
+    council: tuple[Specialist, ...],
+    scores: dict[str, float],
+    *,
+    limit: int = 3,
+    threshold: float = 0.45,
+    tie_band: float = 0.02,
+) -> tuple[list[Specialist], str]:
+    """Pick specialists by MEANING, with the word list as the tiebreaker.
+
+    Returns ``(picked, method)`` — the method being ``"semantic"`` or
+    ``"wordlist"``, so the caller can log which one actually decided and the
+    two can be compared on real questions.
+
+    The rules, and why each one is there:
+
+    * A specialist is a candidate when their cosine similarity to the question
+      clears ``threshold``. This is the whole point: "will this melt?" reaches
+      the materials scientist without anyone having thought to write "melt" in
+      a list, and a specialist a user added in ``council.extra`` — who has no
+      trigger words at all — is reachable the moment they exist.
+    * **Nobody clears the bar → the word list decides.** Embeddings can be
+      unavailable (Ollama cold, model not pulled) or simply unhelpful on a
+      terse question, and the old behaviour is a perfectly good floor. It is
+      never worse than what it replaced.
+    * **Near-ties go to the word list.** Cosine scores within ``tie_band`` are
+      not meaningfully different — treating 0.612 as beating 0.607 is reading
+      noise. When two experts are that close and one of them has the question's
+      actual vocabulary in their triggers, that is real evidence, and it breaks
+      the tie. This is the "fallback/tiebreaker" role the word lists keep.
+
+    Pure: takes scores, returns specialists. The embedding call lives in
+    :mod:`core.council_index`, so every rule above is unit-testable without a
+    model.
+    """
+    order = {member.key: i for i, member in enumerate(council)}
+    above = [m for m in council if scores.get(m.key, -1.0) >= threshold]
+    if not above:
+        return rank_specialists(question, council, limit), "wordlist"
+    band = max(tie_band, 1e-9)
+
+    def sort_key(member: Specialist) -> tuple:
+        score = scores.get(member.key, -1.0)
+        # Quantising into bands is what makes the word list a TIEBREAKER rather
+        # than a thumb on the scale: within one band the trigger count decides,
+        # across bands the cosine does, and no number of keyword hits can pull a
+        # specialist past someone the question is genuinely more about.
+        return (-int(score / band), -trigger_hits(question, member),
+                order.get(member.key, 1 << 30))
+
+    return sorted(above, key=sort_key)[:limit], "semantic"
 
 
 def system_prompt(member: Specialist, macedonian: bool = False) -> str:

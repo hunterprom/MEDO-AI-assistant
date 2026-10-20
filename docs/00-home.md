@@ -5,11 +5,11 @@ merged 2026-07-03). Open this folder as a vault in Obsidian.
 
 ## Map
 
-- [[Architecture]] — how the pieces fit: pipeline, ports, venvs, skills
-- [[Runbook]] — start/stop, health checks, common failures and their fixes
-- [[Bug Log]] — every bug found and fixed during the merge, plus known limits
-- [[Roadmap]] — what's next (streaming TTS, "hey MEDO" wake word, mk voice…)
-- [[Decisions]] — why things are the way they are
+- [[architecture|Architecture]] — how the pieces fit: pipeline, ports, venvs, skills
+- [[runbook|Runbook]] — start/stop, health checks, common failures and their fixes
+- [[bug-log|Bug Log]] — every bug found and fixed during the merge, plus known limits
+- [[roadmap|Roadmap]] — what's next (streaming TTS, "hey MEDO" wake word, mk voice…)
+- [[decisions|Decisions]] — why things are the way they are
 
 ## Quick start
 

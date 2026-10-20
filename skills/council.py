@@ -18,6 +18,7 @@ loaded, so on Ollama this costs no extra processes at all.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 from typing import Any
@@ -30,6 +31,7 @@ from core.council import (
     find_specialist,
     load_council,
     rank_specialists,
+    rank_specialists_semantic,
     system_prompt,
 )
 from skills.base import Skill, SkillRequest, SkillResult
@@ -56,6 +58,119 @@ class _CouncilBase(Skill):
     @property
     def _council(self) -> tuple[Specialist, ...]:
         return enabled_council(self._roster, self._settings.council.disabled)
+
+    # -- semantic selection ---------------------------------------------------
+
+    async def _ensure_index(self):
+        """The council embedding index, built once. None when unavailable.
+
+        Lazy for the same reason the semantic route index is: embedding
+        eighteen role descriptions is one Ollama call, and a session that never
+        convenes the council should not pay for it at startup. A failed build
+        is not latched — the embed model is often just cold on the first call —
+        so the next question retries.
+        """
+        if not self._settings.council.semantic_selection:
+            return None
+        index = getattr(self, "_index", None)
+        if index is not None:
+            return index or None            # False => permanently unavailable
+        if not self._settings.memory.embed_model:
+            self._index = False
+            return None
+        from core.council_index import CouncilIndex
+        from core.embeddings import embed_texts
+
+        model, host = self._settings.memory.embed_model, self._settings.llm.host
+
+        def embedder(texts):
+            return embed_texts(texts, model, host)
+
+        index = CouncilIndex(self._settings.memory.db_path, embedder, model)
+        try:
+            # The FULL roster, not `self._council` (which is the enabled subset).
+            # `council.disabled` is a live HUD toggle: indexing only what was on
+            # at build time meant a specialist switched back on afterwards had no
+            # vector, scored -1, and was silently skipped — so a legal question
+            # went to whoever else cleared the threshold, and that expert
+            # answered it confidently. Selection filters to the enabled set on
+            # every call, so indexing everyone is both correct and free (the
+            # vectors are cached in SQLite regardless).
+            count = await asyncio.to_thread(index.build, self._roster)
+        except Exception:
+            logger.warning("council index build failed — using the word lists",
+                           exc_info=True)
+            return None
+        if not count:
+            return None                     # cold model; retry next question
+        self._index = index
+        logger.info("council index ready: %d specialist(s)", count)
+        return index
+
+    async def _select(self, question: str, limit: int) -> list[Specialist]:
+        """Who should answer this? Embeddings first, trigger words as backstop.
+
+        Also logs the two methods against each other whenever they disagree,
+        which is what turns "the council sometimes picks the wrong expert" from
+        an impression into a number.
+        """
+        council = self._council
+        wordlist = rank_specialists(question, council, limit)
+        index = await self._ensure_index()
+        if index is None:
+            return wordlist
+        scores = await asyncio.to_thread(index.scores, question)
+        if not scores:
+            return wordlist
+        picked, method = rank_specialists_semantic(
+            question, council, scores, limit=limit,
+            threshold=self._settings.council.semantic_threshold,
+            tie_band=self._settings.council.semantic_tie_band)
+        if method == "semantic":
+            self._log_selection(question, "embedding_vs_wordlist",
+                                picked[0] if picked else None,
+                                wordlist[0] if wordlist else None)
+        return picked or wordlist
+
+    # -- selection telemetry --------------------------------------------------
+
+    def _metrics(self):
+        """The metrics store, built on first use. None when telemetry is off.
+
+        Lazy and self-contained rather than injected: the council skills are
+        constructed in a dozen places (main.py, half the test suite) and none of
+        them should have to learn about a database to keep working.
+        """
+        if not getattr(self._settings.logging, "route_telemetry", False):
+            return None
+        store = getattr(self, "_metrics_store", None)
+        if store is None:
+            from core.metrics import MetricsStore
+
+            store = self._metrics_store = MetricsStore(self._settings.memory.db_path)
+        return store
+
+    def _log_selection(self, question: str, method: str,
+                       chosen: Specialist | None,
+                       alternative: Specialist | None) -> None:
+        """Record who was picked, and who a different method would have picked.
+
+        This is the evidence for replacing the hardcoded word lists with
+        embedding similarity: without it, "the council sometimes picks the wrong
+        expert" is an anecdote. A disagreement is not automatically a mistake —
+        it is a case worth looking at, and the rate is what tells you whether
+        the word lists are carrying their weight.
+        """
+        store = self._metrics()
+        if store is None:
+            return
+        with contextlib.suppress(Exception):
+            store.record_council_selection(
+                question, method,
+                chosen.key if chosen else None,
+                alternative.key if alternative else None,
+                agreed=(chosen is not None and alternative is not None
+                        and chosen.key == alternative.key))
 
     async def _consult(self, member: Specialist, question: str,
                        speak_mk: bool) -> tuple[Specialist, str]:
@@ -144,7 +259,7 @@ class AskSpecialistSkill(_CouncilBase):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         who = (request.args.get("specialist") or gd.get("who") or gd.get("who2")
                or gd.get("who3") or gd.get("who4") or gd.get("who5")
                or gd.get("who6") or gd.get("who7") or gd.get("who8") or "").strip()
@@ -170,6 +285,14 @@ class AskSpecialistSkill(_CouncilBase):
                                else "What should I ask them?", success=False)
         if self._ask is None:
             return SkillResult(NO_BRAIN_MK if speak_mk else NO_BRAIN, success=False)
+
+        if request.args.get("specialist"):
+            # The model named an expert, which makes this turn a free A/B: the
+            # LLM's pick against the word list's, on the same question, with no
+            # extra round-trip to pay for.
+            ranked = rank_specialists(question, self._council, 1)
+            self._log_selection(question, "llm_vs_wordlist", member,
+                                ranked[0] if ranked else None)
 
         _member, answer = await self._consult(member, question, speak_mk)
         if not answer:
@@ -257,7 +380,7 @@ class ConveneCouncilSkill(_CouncilBase):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         question = (request.args.get("question") or gd.get("q") or gd.get("q2")
                     or gd.get("q3") or gd.get("q4") or gd.get("q5") or gd.get("q6")
                     or gd.get("q7") or "").strip(" ?.!")
@@ -271,8 +394,7 @@ class ConveneCouncilSkill(_CouncilBase):
         if self._ask is None:
             return SkillResult(NO_BRAIN_MK if speak_mk else NO_BRAIN, success=False)
 
-        picked = rank_specialists(question, self._council,
-                                  self._settings.council.max_members)
+        picked = await self._select(question, self._settings.council.max_members)
         if not picked:
             # Nothing matched a field — fall back to the configured generalist
             # rather than answering as a committee of nobody.
@@ -396,7 +518,7 @@ class CouncilRosterSkill(_CouncilBase):
         return found
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         gd = request.match.groupdict() if request.match else {}
         who = (request.args.get("specialist") or gd.get("who") or "").strip()
         members = self._council

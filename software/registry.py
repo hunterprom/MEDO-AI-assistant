@@ -47,7 +47,12 @@ class ConnectorActionSkill(Skill):
             return phrase.replace("{app}", re.escape(self._connector.display_name))
         return phrase
 
-    async def execute(self, request: SkillRequest) -> SkillResult:
+    async def preflight(self, request: SkillRequest) -> SkillResult | None:
+        """Trust and installed-ness, decided BEFORE anyone is asked to confirm.
+
+        Both answers are refusals, not questions: "that came from a web page"
+        and "the app isn't installed" must never be preceded by "are you sure?".
+        """
         ctx = request.context or {}
         # --- TRUST BOUNDARY: only the user's own voice/text drives software ---
         if ctx.get("untrusted") or ctx.get("provenance") == "untrusted":
@@ -64,13 +69,25 @@ class ConnectorActionSkill(Skill):
             return SkillResult(f"{self._connector.display_name} isn't installed "
                                f"on this computer.", success=False,
                                data={"reason": "not_installed"})
+        return None
+
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return self._action.confirm_prompt or (
+            f"Do you want me to {self._action.name.replace('_', ' ')} in "
+            f"{self._connector.display_name}? Say yes to confirm.")
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        ctx = request.context or {}
+        early = await self.preflight(request)
+        if early is not None:
+            return early
 
         # --- confirmation for high-impact / any send-post (bilingual) ---------
+        # Unreachable via the router, which holds the action at _preconfirm;
+        # this keeps a direct execute() honest.
         if self.requires_confirmation and not ctx.get("confirmed"):
-            prompt = self._action.confirm_prompt or (
-                f"Do you want me to {self._action.name.replace('_', ' ')} in "
-                f"{self._connector.display_name}? Say yes to confirm.")
-            return SkillResult(prompt, needs_confirmation=True)
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
 
         # --- ensure the app is available (open it if needed) ------------------
         if not await asyncio.to_thread(self._connector.is_running):

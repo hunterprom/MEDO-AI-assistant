@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
 import logging
 import re
 import threading
@@ -124,6 +125,20 @@ class VoiceLoop:
         # Set by the interruptible player when the user barges in mid-reply;
         # the turn loop reads it to skip the wake word and listen immediately.
         self._barged_in = False
+        # The same fact, in a form an awaiting task can WAKE ON. The bool alone
+        # is only ever noticed at the top of a loop, so a task parked on
+        # `await queue.get()` or on a 3-second Kokoro synthesis sits there until
+        # its own work finishes — which is exactly the "MEDO carries on for a
+        # moment after you cut in" feel this is meant to remove. Set on the
+        # event loop (never from the player thread) right after playback returns.
+        self._interrupted = asyncio.Event()
+        # Milliseconds from the start of the turn to the first sound out of the
+        # speakers, set by the streaming player on its first chunk and consumed
+        # (and cleared) once per turn. On the instance rather than in the turn's
+        # locals because the player that knows the answer runs two call frames
+        # down, inside _stream_speaker.
+        self._first_audio_ms: float | None = None
+        self._turn_began: float | None = None
         # Serializes speech: the turn pipeline and the timer/reminder announcer
         # both reach _speak on the same event loop, and each drives the SINGLE
         # global sounddevice stream and the SHARED (non-thread-safe) openWakeWord
@@ -523,7 +538,121 @@ class VoiceLoop:
     async def _play(self, wav, sr: int) -> None:
         """Play a waveform, watching the mic for a barge-in."""
         if await asyncio.to_thread(self._play_interruptible, wav, sr):
-            self._barged_in = True
+            self.interrupt()
+
+    def interrupt(self) -> None:
+        """Record that the user cut in. Safe to call more than once.
+
+        Called on the event loop (the thread has already been awaited), so
+        setting the Event needs no call_soon_threadsafe dance.
+        """
+        self._barged_in = True
+        self._interrupted.set()
+
+    @staticmethod
+    async def _race(awaitable, event: asyncio.Event):
+        """``(interrupted, result)`` — awaits, but gives up when ``event`` sets.
+
+        The abandoned awaitable is cancelled. For a synthesis already running
+        in a worker thread that cancel does NOT stop the thread — nothing can,
+        short of killing it — but it does drop the result on the floor, which
+        is the part that matters: no audio queued after the user cut in.
+        """
+        if event.is_set():
+            # Close the coroutine nobody is going to await. Without this every
+            # early return leaks one — `RuntimeWarning: coroutine 'Queue.get'
+            # was never awaited` — and a barge-in is exactly when this branch
+            # is taken repeatedly, once per queued sentence.
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                close()
+            return True, None
+        work = asyncio.ensure_future(awaitable)
+        stop = asyncio.ensure_future(event.wait())
+        try:
+            await asyncio.wait({work, stop}, return_when=asyncio.FIRST_COMPLETED)
+            if work.done() and not work.cancelled():
+                return False, work.result()
+            return True, None
+        finally:
+            for task in (work, stop):
+                if not task.done():
+                    task.cancel()
+
+    @staticmethod
+    def _drain(queue: asyncio.Queue) -> int:
+        """Throw away everything still queued. Returns how much was dropped."""
+        dropped = 0
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return dropped
+            dropped += 1
+
+    async def _stream_speaker(self, stream_q: asyncio.Queue) -> None:
+        """Voice queued sentences, synthesizing one AHEAD of playback.
+
+        Two stages, not one. Synthesizing and playing in the same step
+        meant the next sentence only started synthesizing after the
+        current one had finished being heard, so every sentence boundary
+        was a silent gap the length of a full synthesis — 150-300 ms on a
+        Piper voice and ~2.8 s on Japanese. Now the gap is only whatever
+        synthesis takes LONGER than the audio already playing, which for
+        every language but Japanese is nothing at all.
+
+        The queue is bounded: run ahead without limit and a long reply
+        synthesizes itself entirely into RAM, and every buffered sentence
+        is one more that has to be thrown away on a barge-in.
+        """
+        audio_q: asyncio.Queue = asyncio.Queue(maxsize=_SYNTH_LOOKAHEAD)
+        stop = self._interrupted
+
+        async def synthesize() -> None:
+            while True:
+                cut, sentence = await self._race(stream_q.get(), stop)
+                if cut or sentence is None:
+                    break
+                # Synthesis is the long pole — ~3.3 s a sentence on the
+                # Kokoro voice — so waiting for it to finish before even
+                # LOOKING at the interrupt is most of the lag a barge-in
+                # used to have. Race it and drop the result.
+                cut, audio = await self._race(
+                    self._synthesize(sentence, None), stop)
+                if cut:
+                    break
+                if audio is not None:
+                    await audio_q.put(audio)
+            # Nothing more is coming. Clear space first: the sentinel must
+            # not block on a full queue whose consumer has already left.
+            self._drain(audio_q)
+            audio_q.put_nowait(None)
+
+        async def play() -> None:
+            while True:
+                cut, audio = await self._race(audio_q.get(), stop)
+                if cut or audio is None:
+                    break
+                await self._sm.transition(AssistantState.SPEAKING)
+                # The lock still serializes against the filler and timer
+                # announcements; it is held per SENTENCE, not for the whole
+                # reply, so a barge-in doesn't wait for the queue to drain.
+                async with self._speak_lock:
+                    if (self._first_audio_ms is None
+                            and self._turn_began is not None):
+                        self._first_audio_ms = (
+                            time.monotonic() - self._turn_began) * 1000.0
+                    await self._play(*audio)
+                if stop.is_set():
+                    break
+            # Whatever is still queued must never reach the speakers: a
+            # sentence that plays AFTER the user cut in is the thing that
+            # makes an assistant feel like it isn't listening.
+            dropped = self._drain(audio_q) + self._drain(stream_q)
+            if stop.is_set() and dropped:
+                logger.info("barge-in: dropped %d queued chunk(s)", dropped)
+
+        await asyncio.gather(synthesize(), play())
 
     # --- listen --------------------------------------------------------------
 
@@ -714,6 +843,16 @@ class VoiceLoop:
     async def _run_turn(self, audio, wake_to_listen_ms: float, require_wake: bool) -> bool:
         """Handle one recorded utterance; returns next turn's ``require_wake``."""
         assert self._stt is not None
+        # A NEW turn is by definition not interrupted yet. Clearing here as well
+        # as at the end is not belt-and-braces, it is the actual fix for MEDO
+        # going silent: the end-of-turn clear is skipped by the empty-transcript
+        # early return below, and a barge-in over a TIMER announcement sets the
+        # flag outside any turn at all. Either leaves it armed, and an armed flag
+        # makes _stream_speaker drop every sentence before it is synthesized —
+        # so the HUD shows a correct answer that is never spoken, for every LLM
+        # turn thereafter, until some later turn happens to complete cleanly.
+        self._barged_in = False
+        self._interrupted.clear()
         await self._sm.transition(AssistantState.THINKING)
         t0 = time.perf_counter()
         # Quiet mics (webcam/onboard) record speech peaking at a few percent;
@@ -739,12 +878,21 @@ class VoiceLoop:
         stream_buf = {"text": ""}
         streamed = {"count": 0}
         stream_q: asyncio.Queue = asyncio.Queue()
+        # Set the moment the first complete sentence is queued for speech.
+        first_sentence = asyncio.Event()
+        # Wall clock for the number that matters to a person: how long after
+        # they stopped talking did MEDO make a sound. Streaming exists to
+        # shorten exactly this, and it is NOT route_ms — a streamed reply can
+        # start speaking at 2 s and finish generating at 12 s.
+        turn_began = self._turn_began = time.monotonic()
         # A code fence spans many chunks, so it can only be caught with state:
         # without this the speaker voices the inside of the block long before
         # the closing ``` arrives (MEDO once read out a whole JSON tool schema).
         fence = FenceFilter()
 
         def on_delta(chunk: str) -> None:
+            if self._interrupted.is_set():
+                return      # cut in — stop queueing what won't be spoken
             stream_buf["text"] += fence.feed(chunk)
             sentences, stream_buf["text"] = drain_sentences(stream_buf["text"])
             for s in sentences:
@@ -752,50 +900,16 @@ class VoiceLoop:
                 if not spoken:
                     continue          # the sentence was pure markup
                 streamed["count"] += 1
+                # Tell the filler immediately. Checking streamed["count"] only
+                # at the filler's own wake points left a window: a first
+                # sentence queued at 2.1 s could not stop a filler whose timer
+                # expired at 2.0 s, and MEDO said "let me think" over the top of
+                # its own answer. Signalling makes it a race the answer wins.
+                first_sentence.set()
                 stream_q.put_nowait(spoken)
 
         async def stream_speaker() -> None:
-            """Voice queued sentences, synthesizing one AHEAD of playback.
-
-            Two stages, not one. Synthesizing and playing in the same step
-            meant the next sentence only started synthesizing after the
-            current one had finished being heard, so every sentence boundary
-            was a silent gap the length of a full synthesis — 150-300 ms on a
-            Piper voice and ~2.8 s on Japanese. Now the gap is only whatever
-            synthesis takes LONGER than the audio already playing, which for
-            every language but Japanese is nothing at all.
-
-            The queue is bounded: run ahead without limit and a long reply
-            synthesizes itself entirely into RAM, and every buffered sentence
-            is one more that has to be thrown away on a barge-in.
-            """
-            audio_q: asyncio.Queue = asyncio.Queue(maxsize=_SYNTH_LOOKAHEAD)
-
-            async def synthesize() -> None:
-                while True:
-                    sentence = await stream_q.get()
-                    if sentence is None or self._barged_in:
-                        await audio_q.put(None)
-                        return
-                    audio = await self._synthesize(sentence, None)
-                    if audio is not None:
-                        await audio_q.put(audio)
-
-            async def play() -> None:
-                while True:
-                    audio = await audio_q.get()
-                    if audio is None:
-                        return
-                    if self._barged_in:
-                        continue    # user cut in — drop what's still queued
-                    await self._sm.transition(AssistantState.SPEAKING)
-                    # The lock still serializes against the filler and timer
-                    # announcements; it is held per SENTENCE, not for the whole
-                    # reply, so a barge-in doesn't wait for the queue to drain.
-                    async with self._speak_lock:
-                        await self._play(*audio)
-
-            await asyncio.gather(synthesize(), play())
+            await self._stream_speaker(stream_q)
 
         speaker_task = asyncio.create_task(stream_speaker())
 
@@ -812,12 +926,24 @@ class VoiceLoop:
         route_done = asyncio.Event()
 
         async def _sleep_or_done(seconds: float) -> bool:
-            """Sleep, waking early (True) the moment the reply has arrived."""
+            """Sleep, waking early (True) once there is nothing left to bridge.
+
+            That is EITHER the whole reply arriving or — since sentence
+            streaming — the first sentence being queued, which is the point
+            from which MEDO is about to be audible. Waiting only on the former
+            was right when a reply was spoken in one piece; now it is most of a
+            generation too late.
+            """
+            waiters = [asyncio.ensure_future(route_done.wait()),
+                       asyncio.ensure_future(first_sentence.wait())]
             try:
-                await asyncio.wait_for(route_done.wait(), seconds)
-                return True
-            except asyncio.TimeoutError:
-                return False
+                done, _ = await asyncio.wait(
+                    waiters, timeout=seconds,
+                    return_when=asyncio.FIRST_COMPLETED)
+                return bool(done)
+            finally:
+                for w in waiters:
+                    w.cancel()
 
         async def filler_task() -> None:
             fill = self._filler
@@ -868,6 +994,15 @@ class VoiceLoop:
             stream_q.put_nowait(None)
             await speaker_task
 
+        # A barge-in mid-answer arms the router to read the NEXT utterance as a
+        # correction of this one ("actually, make it shorter") rather than as a
+        # fresh request. Only when something was actually being said — cutting
+        # into silence is just talking.
+        if self._barged_in and streamed["count"]:
+            spoken_so_far = " ".join(strip_markup(result.speech or "").split())[:500]
+            with contextlib.suppress(Exception):
+                self._router.note_interruption(text, spoken_so_far)
+
         tts_ms = None
         # Speak result.speech UNLESS it was already voiced by the streamer.
         # It was voiced only when sentences actually drained (count > 0) AND the
@@ -880,11 +1015,25 @@ class VoiceLoop:
         if not already_voiced and result.speech:
             await self._sm.transition(AssistantState.SPEAKING)
             tts_ms = await self._speak(result.speech)
+        first_audio_ms = self._first_audio_ms
+        self._first_audio_ms = None
+        if first_audio_ms is None and tts_ms is not None:
+            # Not streamed: first audio is when the one-shot synthesis finished.
+            first_audio_ms = (time.monotonic() - turn_began) * 1000.0
         self._log.record(TurnTimings(
             path=result.path.value,
             wake_to_listen_ms=wake_to_listen_ms if require_wake else None,
             stt_ms=stt_ms, route_ms=result.latency_ms, tts_ms=tts_ms,
+            first_audio_ms=first_audio_ms,
         ))
+        if first_audio_ms is not None:
+            metrics = getattr(self._router, "metrics", None)
+            if metrics is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        metrics.record_first_audio, result.path.value,
+                        first_audio_ms, streamed=bool(streamed["count"]),
+                        total_ms=(time.monotonic() - turn_began) * 1000.0)
         self._ui.turn(result, self._log.turns[-1])
         # A self-close skill (QuitSkill) asked MEDO to end the session. The
         # farewell has now been spoken, so exit cleanly — reusing the Ctrl-C path
@@ -895,6 +1044,7 @@ class VoiceLoop:
             raise KeyboardInterrupt
         next_require_wake = not self._should_relisten(self._barged_in)
         self._barged_in = False
+        self._interrupted.clear()
         # The turn's language voiced its reply above; clear it so a later
         # timer/reminder announcement (or the dictation-exit line) — spoken via
         # _speak with no language — falls back to detect_script(text) instead of
@@ -984,3 +1134,4 @@ class VoiceLoop:
                 console.print("[red]That one failed — say the wake word to try again.[/red]")
                 require_wake = True
                 self._barged_in = False
+                self._interrupted.clear()

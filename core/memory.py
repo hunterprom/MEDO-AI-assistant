@@ -9,11 +9,13 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core import db
 from core.config import PROJECT_ROOT
 
 
@@ -37,7 +39,13 @@ class NoteStore:
             path = PROJECT_ROOT / path
         path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: skills run in worker threads via to_thread.
-        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        # That makes this ONE connection shared across threads, which sqlite3
+        # allows but does not serialise — two concurrent writes can interleave
+        # mid-statement. `_lock` is what serialises them; core.db adds WAL and a
+        # busy timeout so readers (and the vision sidecar's own process) don't
+        # queue behind a write.
+        self._db = db.connect(str(path), check_same_thread=False)
+        self._lock = threading.RLock()
         self._db.row_factory = sqlite3.Row
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS notes ("
@@ -49,11 +57,12 @@ class NoteStore:
 
     def add(self, text: str) -> Note:
         created = _now_iso()
-        cur = self._db.execute(
-            "INSERT INTO notes (text, created_at) VALUES (?, ?)", (text, created)
-        )
-        self._db.commit()
-        return Note(id=int(cur.lastrowid), text=text, created_at=created)
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO notes (text, created_at) VALUES (?, ?)", (text, created)
+            )
+            self._db.commit()
+            return Note(id=int(cur.lastrowid), text=text, created_at=created)
 
     def list(self, limit: int = 20) -> list[Note]:
         rows = self._db.execute(
@@ -74,13 +83,15 @@ class NoteStore:
         return [Note(**dict(r)) for r in rows]
 
     def delete(self, note_id: int) -> bool:
-        cur = self._db.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-        self._db.commit()
-        return cur.rowcount > 0
+        with self._lock:
+            cur = self._db.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+            self._db.commit()
+            return cur.rowcount > 0
 
     def clear(self) -> int:
-        cur = self._db.execute("DELETE FROM notes")
-        self._db.commit()
+        with self._lock:
+            cur = self._db.execute("DELETE FROM notes")
+            self._db.commit()
         return cur.rowcount
 
     def close(self) -> None:
@@ -103,7 +114,8 @@ class ReminderStore:
         if not path.is_absolute():
             path = PROJECT_ROOT / path
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        self._db = db.connect(str(path), check_same_thread=False)
+        self._lock = threading.RLock()      # see NoteStore.__init__
         self._db.row_factory = sqlite3.Row
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS reminders ("
@@ -115,12 +127,13 @@ class ReminderStore:
         self._db.commit()
 
     def add(self, due_at: str, label: str) -> Reminder:
-        cur = self._db.execute(
-            "INSERT INTO reminders (due_at, label, created_at) VALUES (?, ?, ?)",
-            (due_at, label, _now_iso()),
-        )
-        self._db.commit()
-        return Reminder(int(cur.lastrowid), due_at, label, _now_iso())
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT INTO reminders (due_at, label, created_at) VALUES (?, ?, ?)",
+                (due_at, label, _now_iso()),
+            )
+            self._db.commit()
+            return Reminder(int(cur.lastrowid), due_at, label, _now_iso())
 
     def all(self) -> list[Reminder]:
         rows = self._db.execute(
@@ -129,8 +142,10 @@ class ReminderStore:
         return [Reminder(**dict(r)) for r in rows]
 
     def delete(self, reminder_id: int) -> bool:
-        cur = self._db.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-        self._db.commit()
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM reminders WHERE id = ?", (reminder_id,))
+            self._db.commit()
         return cur.rowcount > 0
 
     def close(self) -> None:

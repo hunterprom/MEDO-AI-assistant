@@ -16,6 +16,8 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from core import db
+
 #: Embeds a batch of texts to vectors; None when the backend is unavailable.
 Embedder = Callable[[Sequence[str]], "list | None"]
 
@@ -46,7 +48,7 @@ class FactsStore:
         self._embedder = embedder
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn = db.connect(self._db_path, timeout=5.0)
         conn.execute(_SCHEMA)
         # Older databases predate the embedding column; add it in place.
         try:

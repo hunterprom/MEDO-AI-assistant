@@ -69,7 +69,7 @@ class DateTimeSkill(Skill):
         if kind is None:
             kind = "date" if self._wants_date(request.text) else "time"
 
-        if mk.is_cyrillic(request.text):
+        if mk.is_cyrillic(request.utterance):
             # 24-hour and Macedonian month/day names — "%A %B" would emit
             # English ones whatever the locale, which is exactly the mismatch
             # that makes a bilingual assistant feel broken.

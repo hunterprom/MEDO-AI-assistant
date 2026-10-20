@@ -25,7 +25,7 @@ wakeword:
 The generator synthesizes a diverse "hey medo" positive set (many edge-tts
 voices + Piper). The training run itself (~1 h on a free Colab GPU, or locally
 if you have the openWakeWord background datasets) is the one manual step — full
-runbook in [`docs/Wake Word Training.md`](../../docs/Wake%20Word%20Training.md).
+runbook in [`docs/wake-word-training.md`](../../docs/wake-word-training.md).
 
 Everything in this folder except this README is git-ignored (models are large
 and personal).

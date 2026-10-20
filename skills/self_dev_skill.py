@@ -169,12 +169,17 @@ class SelfDevSkill(Skill):
             "all the tests. Say yes to merge it.",
             needs_confirmation=True)
 
-    async def _apply_now(self) -> SkillResult:
+    async def _apply_now(self, approved_by: str = "human") -> SkillResult:
         self._awaiting_apply = False
         if self._pending is None:
             return SkillResult("There's nothing to apply.", success=False)
         p = self._pending
         try:
+            # Reaching here means a person said yes — out loud, or with the HUD's
+            # APPLY button. Write that down before merging: the engine refuses to
+            # apply anything without a recorded approval for this exact diff, and
+            # the record is what makes the decision auditable after a restart.
+            self._engine.approve(p, approved_by=approved_by)
             await self._engine.apply(p)
         except SelfDevError as exc:
             return SkillResult(f"I couldn't merge it: {exc}", success=False)
@@ -211,7 +216,7 @@ class SelfDevSkill(Skill):
 
     async def apply_pending(self) -> dict:
         """Apply the pending proposal (the HUD's APPLY button is the approval)."""
-        result = await self._apply_now()
+        result = await self._apply_now(approved_by="hud")
         return {"ok": result.success, "message": result.speech}
 
     async def discard_pending(self) -> dict:

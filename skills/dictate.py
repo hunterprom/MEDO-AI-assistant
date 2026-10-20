@@ -95,7 +95,7 @@ class DictateSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
 
         if request.args.get("action") == "stop" or STOP_DICTATION.search(request.text):
             was = self._modes.dictation_path

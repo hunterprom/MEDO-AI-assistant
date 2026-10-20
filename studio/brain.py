@@ -62,5 +62,22 @@ class Brain:
         if self._client is None:
             from llm.client import OllamaClient
 
-            self._client = OllamaClient(self._settings.llm)
-        return await self._client.chat(model, messages)
+            # Writing a part is a BUILD, not a spoken turn, so it gets the
+            # studio's own allowance rather than the conversation's. Measured:
+            # a parametric phone stand is 195 s of genuine code writing, and
+            # llm.cli_timeout_s (180 s, sized so nobody waits three minutes for
+            # an answer out loud) killed it just short — every time, then three
+            # more times through the retry loop.
+            cfg = self._settings.llm.model_copy()
+            budget = float(getattr(self._settings.studio, "generate_timeout_s", 0)
+                           or 0)
+            if budget > 0:
+                cfg.cli_timeout_s = max(cfg.cli_timeout_s, budget)
+                cfg.request_timeout_s = max(cfg.request_timeout_s, budget)
+            self._client = OllamaClient(cfg)
+        # NOT for speech. On a CLI-agent brain the flattened prompt otherwise
+        # ends "Reply with only your spoken answer, as plain text" — the last
+        # line the agent reads, and it beats the domain's "output ONLY the
+        # Python code". That is how a request for a phone stand came back as a
+        # paragraph describing one, which was then executed as Python.
+        return await self._client.chat(model, messages, for_speech=False)

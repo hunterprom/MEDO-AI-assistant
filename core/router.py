@@ -11,14 +11,16 @@ Routing stats are tallied for the README.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from core import speech_text
+from core import mk, speech_text
 from core.config import Settings
+from core.corrections import corrects_previous, is_correction, is_refinement
 from core.events import Event, EventBus, EventType, RoutePath
 from core.facts import FactsStore
 from core.memory import ConversationMemory
@@ -29,6 +31,7 @@ from llm.prompts import system_prompt
 from llm.tools import build_tools, coerce_args, dispatch_tool
 from security.audit import (
     CLOUD_CALL,
+    CONFIRM_ASKED,
     CONFIRM_DENIED,
     CONFIRM_GRANTED,
     POLICY_DENY,
@@ -51,6 +54,48 @@ _LIVE_INFO_RE = re.compile(
     r"tariff\w*|sanction\w*|election\w*|inflation|gdp|market\w*|"
     r"вест\w*|новост\w*|најнов\w*|што\s+се\s+случува|пребар\w*|"
     r"царин\w*|санкц\w*|на\s+интернет)\b",
+    re.IGNORECASE,
+)
+
+#: A request for MEDO to DO something, rather than a question to answer.
+#:
+#: This exists for one reason: a CLI brain (claude-code / codex) is handed a
+#: flat prompt and returns text — ``OllamaClient._chat_cli`` takes no ``tools``
+#: argument at all, so MEDO's sixty-odd skills simply are not there. Asked to
+#: turn on pointer mode, the agent answered "I don't have a pointer mode to
+#: switch on — no tool for that here", which was *true of the agent* and false
+#: of MEDO: the very next turn, "Pointer mode on." hit the fast path and worked.
+#: Same for "build me a counter app" (make_app exists) and "build me a 3D
+#: model". Worse, one such turn answered "Pointer mode off." having called
+#: nothing at all.
+#:
+#: So an actuation-shaped turn borrows the local tool-brain, exactly as a
+#: live-info one already does. A false positive costs one slower turn on a
+#: local model and never a wrong answer, so this leans inclusive.
+_ACTUATION_RE = re.compile(
+    r"\b(?:turn|switch|toggle)\s+(?:it\s+|them\s+)?(?:on|off)\b"
+    r"|\b(?:open|close|quit|exit|launch|start|stop|kill|restart)\s+\w"
+    r"|\b(?:build|make|create|generate|write)\s+(?:me\s+)?(?:a|an|the)\s+"
+    r"|\b(?:play|pause|resume|mute|unmute|skip|screenshot|dictate)\b"
+    r"|\b(?:volume|brightness|pointer\s+mode|dictation|lion\s+mode)\b"
+    r"|\b(?:remind|remember|set)\s+(?:me\s+|a\s+|the\s+)"
+    r"|\b(?:type|press|click|copy|paste|delete|rename|move)\s+\w"
+    r"|\b(?:вклучи|исклучи|отвори|затвори|пушти|направи|создади|потсети)\b",
+    re.IGNORECASE,
+)
+
+#: ...but an explanatory frame turns the same verb into a QUESTION. "How can I
+#: make a motor driver" and "tell me how to build a vision model" both trip
+#: ``make``/``build`` above and are pure knowledge questions — MEDO answered
+#: them well and must keep answering them on the selected brain, not hand them
+#: to a small local model that would answer them worse.
+_EXPLAIN_RE = re.compile(
+    r"\bhow\s+(?:can|do|would|should|could|might)\s+(?:i|we|you|one)\b"
+    r"|\bhow\s+to\b"
+    r"|\b(?:what|why|when|where|which|who)\s+(?:is|are|was|were|does|do|did)\b"
+    r"|\b(?:explain|describe|teach|recommend|suggest|compare)\b"
+    r"|\btell\s+me\s+(?:about|how|what|why)\b"
+    r"|\b(?:како\s+(?:да|можам)|објасни|препорач\w*|што\s+е)\b",
     re.IGNORECASE,
 )
 
@@ -97,6 +142,19 @@ def pick_model_tier(text: str, *, long_words: int = 24) -> str:
     t = (text or "").strip()
     if not t:
         return "fast"
+    if mk.is_cyrillic(t):
+        # NOT a judgement about Macedonian being hard — it is about what the
+        # fast tier IS. `fast_model` is a small English-first model
+        # (llama3.2:3b here), and a small model that half-understands the words
+        # still gets the whole tool list. Live, on this exact heuristic:
+        # "Твоја бога." (two words, no strong keyword, so "fast") went to
+        # llama3.2:3b, which called power(action=lock) and locked the screen;
+        # "каде се наоѓа селото Другово" became locate_in_app(app="Other App")
+        # — the place name translated into an app that does not exist. Neither
+        # is a reasoning failure the strong model would also make; both are the
+        # 3B not reading the sentence. Length and keywords cannot catch this,
+        # because the giveaway is the language, not the difficulty.
+        return "strong"
     if len(t.split()) >= long_words:          # a long, multi-part question
         return "strong"
     if t.count("?") >= 2:                      # several questions at once
@@ -106,6 +164,17 @@ def pick_model_tier(text: str, *, long_words: int = 24) -> str:
     return "fast"
 
 #: How many tool rounds before we force a final text answer (loop guard).
+#:
+#: WHY 4. A round is a full model call, so on the local brain this is the
+#: difference between a four-second answer and a twenty-second one — the cap is
+#: felt directly as latency by someone waiting for speech. Four covers the
+#: genuinely multi-step requests MEDO gets: fetch a page then summarise it (2),
+#: search then read then answer (3), with one spare for a tool that errors and
+#: is retried. Past that the model is not making progress, it is looping — the
+#: characteristic failure is re-calling the same tool with the same arguments —
+#: and the right response is to make it answer with what it has rather than to
+#: let it keep spending seconds. Hard-coded rather than configurable on purpose:
+#: raising it does not buy better answers, it buys longer silences.
 MAX_TOOL_ROUNDS = 4
 #: Re-check a DOWN council tool-brain no more than once per this many seconds,
 #: so a parallel convene never fires the blocking ~2s probe per specialist.
@@ -133,12 +202,76 @@ OFFLINE_CLI_REPLY = (
     "logged in, and on your PATH — or switch provider in the HUD."
 )
 CANCELLED_REPLY = "Okay, cancelled."
+
+#: Turn sources with nobody listening for a "yes". A confirmation is scoped to
+#: the channel that armed it, so one armed by a timer can only ever be answered
+#: by the same timer — which is to say, by the routine's own next step. Rather
+#: than leave that loophole open, a destructive action reached from one of these
+#: is refused outright. Voice, the REPL, the HUD and a paired device are all
+#: interactive: a person is there and can answer.
+NON_INTERACTIVE_SOURCES = frozenset({"routine", "webhook", "trigger",
+                                     "schedule", "briefing"})
+
+#: How a mid-generation correction is put back to the model. The framing matters
+#: more than it looks: without "do not apologise or mention the interruption" a
+#: local model spends its first sentence saying sorry, which is the one thing
+#: the user — who just cut in to save time — least wants to hear.
+CORRECTION_PROMPT = (
+    "The user interrupted your previous answer to change what they wanted.\n\n"
+    "Their original request: {question}\n"
+    "{partial}"
+    "What they said when they cut in: {correction}\n\n"
+    "Answer the original request again, honouring the correction. Do not "
+    "apologise, do not mention the interruption, and do not repeat the part "
+    "they objected to."
+)
 PC_CONTROL_OFF_REPLY = (
     "PC control is switched off — flip the PC CONTROL switch in the HUD "
     "settings if you want me to do that."
 )
 #: Spoken when the model returns nothing usable (e.g. reasoning truncated mid-think).
 EMPTY_REPLY = "Sorry — I lost my train of thought. Ask me that again?"
+#: …and the same in the languages MEDO is actually spoken to in. An English
+#: apology is itself a language violation on a Macedonian turn.
+EMPTY_REPLY_BY_LANG = {
+    "mk": "Извини — ми се загуби мислата. Може ли да прашаш повторно?",
+}
+
+#: Placeholder tokens a model emits INSTEAD of admitting it has nothing. They
+#: are code, not speech: nobody answers a spoken question with "Nil." Asked in
+#: Macedonian where the village Другово is, MEDO thought for 24 seconds and said
+#: "Nil." — which sounds like an answer and is not one, so the user cannot tell
+#: a fact from a failure. Left OUT on purpose: "no", "none", "nothing",
+#: "unknown" — each is a perfectly good spoken answer ("Anything on my
+#: calendar?" — "Nothing.").
+_NON_ANSWERS = frozenset({
+    "nil", "null", "nan", "n/a", "n.a.", "na", "undefined", "void", "nul",
+})
+#: Trimmed before the comparison — and a reply made of NOTHING else ("...", "?",
+#: "--") is a non-answer too: punctuation alone is never speech.
+_REPLY_TRIM = ".!?,;:\"'()[]—–-…*_`"
+
+
+def _is_non_answer(reply: str) -> bool:
+    """True when a reply is a placeholder rather than an answer.
+
+    Deliberately narrow — a SINGLE bare token from ``_NON_ANSWERS``, or nothing
+    but punctuation. Anything with a second word is a real sentence and is left
+    alone however unhelpful, because judging content is the model's job, not a
+    regex's. That is why "no", "none", "nothing" and "unknown" are absent: each
+    is a perfectly good spoken answer.
+    """
+    raw = (reply or "").strip()
+    if not raw:
+        return False          # already covered by the `or EMPTY_REPLY` fallback
+    bare = raw.strip(_REPLY_TRIM).strip().casefold()
+    return not bare or bare in _NON_ANSWERS
+
+
+def _empty_reply(language: str | None) -> str:
+    """The "nothing usable" apology, in the language of the turn."""
+    return EMPTY_REPLY_BY_LANG.get(
+        str(language or "").strip().lower()[:2], EMPTY_REPLY)
 
 
 #: Questions ABOUT MEDO — its features, opinions, preferences, or design —
@@ -189,6 +322,11 @@ class RouteResult:
     #: False — their text never went through the streamer, so the loop must
     #: voice them even when a filler preamble WAS streamed first.
     streamed_reply: bool = False
+    #: How sure the DETERMINISTIC tiers were. The semantic tier's cosine score;
+    #: for the fast path, the share of the utterance the regex matched (see
+    #: Router.match_confidence). None on the LLM path, which has neither.
+    #: Telemetry only — nothing routes on this value.
+    confidence: float | None = None
 
 
 class Router:
@@ -257,6 +395,16 @@ class Router:
             MetricsStore(settings.memory.db_path)
             if settings.logging.routing_stats else None
         )
+        #: Set by the voice loop when the user cuts in mid-reply:
+        #: (their original question, whatever had been spoken so far). The NEXT
+        #: utterance is then allowed to be read as a correction of it rather
+        #: than as a fresh request. Cleared after exactly one turn — a stale one
+        #: would turn an unrelated question into a bizarre re-answer.
+        self._interrupted_turn: tuple[str, str] | None = None
+        #: The last deterministic route logged for misfire telemetry:
+        #: (row id, monotonic time, skill). Held for exactly one turn — the next
+        #: utterance either takes it back or it is forgotten.
+        self._last_route_event: tuple[int, float, str | None] | None = None
         #: A destructive action awaiting a spoken yes/no, if any.
         self._pending: tuple[Skill, SkillRequest] | None = None
         #: A skill awaiting a free-text follow-up (e.g. self-dev's "what should I
@@ -639,7 +787,19 @@ class Router:
 
         # Announce the utterance so any UI (HUD) can show it, whatever the source.
         await self._bus.emit(Event(EventType.TRANSCRIPT, text))
-        result = await self._route_inner(text, context or {}, on_delta, on_llm_start)
+        try:
+            result = await self._route_inner(text, context or {}, on_delta,
+                                             on_llm_start)
+        finally:
+            # A barge-in arms exactly ONE TURN — this one, however it ended up
+            # being answered. Spending it inside the correction check left the
+            # arm standing whenever a gate above claimed the turn first (a
+            # yes/no, a tie-break answer, a captured reply), so a bare
+            # "shorter" two turns later re-answered a question nobody was
+            # thinking about any more. Cleared here, an ambiguous confirmation
+            # that cancels and re-routes still gets to use it: that is the same
+            # turn, and _route_inner recursing is an implementation detail.
+            self._interrupted_turn = None
         result.latency_ms = (time.perf_counter() - started) * 1000.0
 
         # An ambiguous confirmation reply (neither yes nor no) was cancelled and
@@ -661,10 +821,16 @@ class Router:
         self.stats[result.path] += 1
         if self.metrics is not None:
             # to_thread: a slow disk must never delay the spoken reply's caller.
-            await asyncio.to_thread(
-                self.metrics.record, result.path.value, result.skill_name,
-                result.latency_ms,
-            )
+            # suppress: nor may a broken one cost the reply altogether. The store
+            # swallows its own errors, but "the store" is whatever was injected —
+            # the guarantee has to hold at the call site to be a guarantee.
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(
+                    self.metrics.record, result.path.value, result.skill_name,
+                    result.latency_ms,
+                )
+        with contextlib.suppress(Exception):
+            await self._record_route_telemetry(text, result)
         # Remember the turn, UNLESS this utterance was the yes/no that answered a
         # pending confirmation — that's what shouldn't pollute the context. (The
         # command that TRIGGERED a confirmation is recorded; the "yes" is not.)
@@ -767,13 +933,29 @@ class Router:
                    "last_reply": self.conversation.last_reply(),
                    "last_question": self.conversation.last_question()}
 
+        # --- MID-GENERATION CORRECTION ---
+        # "Actually, make it shorter" after cutting in is a continuation of the
+        # last request, not a new one. Re-ask the model with the original
+        # question plus the correction, BEFORE the fast path gets a chance to
+        # route those words somewhere absurd. The conversation window is
+        # untouched: route() still records what the user actually said.
+        rewritten = self._as_correction(text, self._interrupted_turn)
+        if rewritten is not None:
+            logger.info("[correction] re-answering with %r folded in", text)
+            if on_llm_start is not None:
+                with contextlib.suppress(Exception):
+                    on_llm_start()
+            return await self._llm_reply(rewritten, context, on_delta)
+
         # --- FAST PATH ---
         if self._settings.router.fast_path_enabled:
             match = self._registry.find_match(text)
             if match is not None:
                 skill, regex_match = match
                 request = SkillRequest(text=text, match=regex_match, context=context)
-                return await self._run_skill(skill, request)
+                return await self._run_skill(
+                    skill, request,
+                    confidence=self.match_confidence(text, regex_match))
 
         # --- SEMANTIC TIER (M2.5) ---
         # No regex matched; try to reach a query-style skill by MEANING before
@@ -790,7 +972,7 @@ class Router:
                     logger.info("[semantic] %r -> %s (%.2f)", text, skill.name, score)
                     return await self._run_skill(
                         skill, SkillRequest(text=text, context=context),
-                        path=RoutePath.SEMANTIC)
+                        path=RoutePath.SEMANTIC, confidence=score)
 
             # Near-tie tie-break (M2.5f): the tier DECLINED (two safe skills too
             # close to call). Rather than pay for the LLM and maybe guess wrong,
@@ -842,15 +1024,180 @@ class Router:
         if self._audit_log is not None:
             self._audit_log.record(event, **fields)
 
+    def note_interruption(self, question: str, partial: str = "") -> None:
+        """Tell the router the user cut in while an answer was being generated.
+
+        Called by the voice loop on a barge-in. It does not itself change any
+        routing — it arms the NEXT turn to be readable as a correction, which is
+        what makes "actually, make it shorter" continue the same request instead
+        of starting a baffling new one.
+        """
+        if question and question.strip():
+            self._interrupted_turn = (question.strip(), (partial or "").strip())
+
+    def _as_correction(self, text: str,
+                       interrupted: tuple[str, str] | None) -> str | None:
+        """The re-ask this utterance implies, or None if it isn't a correction.
+
+        Two ways in, with deliberately different bars:
+
+        * The user **cut in** mid-answer. Then even a bare "shorter" is a
+          correction — nobody interrupts to make an unrelated remark, and the
+          thing they interrupted is unambiguous.
+        ``interrupted`` is the barge-in arming, if this turn follows one.
+        It is passed in rather than read here because :meth:`route` owns its
+        lifetime — one turn, cleared when that turn ends however it ended.
+
+        * They did **not** cut in. Then only an explicit disowning counts
+          ("no, I meant..."), because "make it shorter" said calmly after an
+          answer could equally be the start of something new, and guessing
+          wrong loses the request entirely.
+        """
+        text = (text or "").strip()
+        if not text:
+            return None
+        if interrupted is not None:
+            question, partial = interrupted
+            if not (is_correction(text) or is_refinement(text)):
+                return None
+        else:
+            if not is_correction(text):
+                return None
+            question = self.conversation.last_question() or ""
+            partial = ""
+            if not question:
+                return None
+        said = f"What you had already said: {partial}\n" if partial else ""
+        return CORRECTION_PROMPT.format(question=question, partial=said,
+                                        correction=text)
+
+    @staticmethod
+    def match_confidence(text: str, match: "re.Match[str] | None") -> float:
+        """How much of the utterance the winning regex actually accounted for.
+
+        A regex has no probability, so this is the honest stand-in: the share of
+        the sentence the pattern matched. It is not arbitrary — it is exactly the
+        shape a fast-path false positive takes. "The CURRENT approach is fine"
+        routes to a power skill on a seven-character match inside a thirty-two
+        character sentence: coverage 0.22. "lights off" matching "lights off" is
+        1.0. Sorting the misfire report by this number puts the suspicious
+        matches at the top, which is the whole reason to record it.
+        """
+        if match is None or not text:
+            return 1.0
+        span = max(0, match.end() - match.start())
+        return round(min(1.0, span / max(1, len(text.strip()))), 3)
+
+    async def _record_route_telemetry(self, text: str, result: RouteResult) -> None:
+        """Log this route, and mark the PREVIOUS one if this took it back.
+
+        Best-effort throughout: telemetry that can break a reply is worse than
+        no telemetry.
+        """
+        if self.metrics is None or not self._settings.logging.route_telemetry:
+            return
+        now = time.monotonic()
+        previous = self._last_route_event
+        if previous is not None:
+            event_id, when, _skill = previous
+            if corrects_previous(text, elapsed_s=now - when,
+                                 window_s=self._settings.logging.correction_window_s):
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        self.metrics.mark_route_corrected, event_id, text)
+                logger.info("[route-telemetry] %r looks like a correction of the "
+                            "previous route", text)
+            self._last_route_event = None
+        # EVERY tier is stored — the dashboard is a history of what was asked
+        # and answered, and a history missing the LLM turns is missing most of
+        # the conversation. The misfire REPORT still narrows to FAST/SEMANTIC,
+        # where a wrong route means a wrong pattern; see routing_report().
+        try:
+            event_id = await asyncio.to_thread(
+                self.metrics.record_route_event, result.path.value,
+                result.skill_name, text, result.confidence, result.speech,
+                result.latency_ms)
+        except Exception:  # noqa: BLE001
+            return
+        if event_id is not None:
+            self._last_route_event = (event_id, now, result.skill_name)
+
+    async def _preconfirm(self, skill: Skill, request: SkillRequest,
+                          path: RoutePath) -> RouteResult | None:
+        """Ask before a declared-destructive skill runs. None = go ahead.
+
+        This is the single choke point that makes "no route reaches a
+        destructive skill unconfirmed" a property of the ROUTER rather than a
+        promise each skill keeps individually. Every tier funnels through it:
+        the fast path and the semantic tier via :meth:`_run_skill`, the LLM
+        (and therefore MCP tools, plugins, connector actions and device
+        capabilities, which are all skills) via :meth:`_run_tool_calls`.
+
+        Only ``requires_confirmation`` skills are affected. A skill that is
+        destructive only for *some* arguments (deleting a file vs. reading one)
+        can't be gated from here without asking about harmless requests too, so
+        it keeps deciding for itself and returns ``needs_confirmation`` — that
+        route is caught downstream, and tested per skill.
+        """
+        if not getattr(skill, "requires_confirmation", False):
+            return None
+        ctx = request.context or {}
+        if ctx.get("confirmed"):
+            return None
+        early = await skill.preflight(request)
+        if early is not None:
+            if early.await_reply:
+                # A preflight that ASKS ("what should I do on the page?") needs
+                # the next utterance captured, exactly as _run_skill does for a
+                # question from execute(). Dropping the flag here would route
+                # the answer as a fresh request, losing both it and the request
+                # it belonged to.
+                self._pending_reply = (skill, request)
+                self._reply_is_offer = early.reply_is_offer
+                self._reply_is_open = early.reply_is_open
+            return RouteResult(path=path, speech=early.speech,
+                               skill_name=skill.name, data=early.data)
+        prompt = skill.confirmation_prompt(request)
+        refusal = self._unattended_refusal(skill, ctx, prompt, path)
+        if refusal is not None:
+            return refusal
+        self._pending = (skill, request)
+        self._audit(CONFIRM_ASKED, skill=skill.name)
+        return RouteResult(path=path, speech=prompt, skill_name=skill.name)
+
+    def _unattended_refusal(self, skill: Skill, ctx: dict[str, Any],
+                            prompt: str, path: RoutePath) -> RouteResult | None:
+        """Refuse instead of arming a confirmation nobody can answer.
+
+        A routine or a webhook fires on a timer with no one listening. Arming
+        the gate there is worse than useless: the confirmation is source-scoped,
+        so the person at the machine can't answer it either — but the NEXT step
+        of the same routine can, and a routine whose steps happen to be
+        ``["delete my downloads", "yes"]`` would then have talked itself through
+        the safety prompt. Refuse outright; a scheduled job that wants to act
+        destructively has to be given standing permission, not tricked into it.
+        """
+        source = str(ctx.get("source") or "")
+        if source not in NON_INTERACTIVE_SOURCES:
+            return None
+        self._audit(CONFIRM_DENIED, skill=skill.name, reason="unattended")
+        logger.warning("refusing %s from an unattended source (%s): %r",
+                       skill.name, source, prompt)
+        return RouteResult(
+            path=path, skill_name=skill.name,
+            speech=(f"I won't {skill.name.replace('_', ' ')} on a schedule — "
+                    f"that needs someone to confirm it."))
+
     async def _run_skill(self, skill: Skill, request: SkillRequest,
-                         path: RoutePath = RoutePath.FAST) -> RouteResult:
+                         path: RoutePath = RoutePath.FAST,
+                         confidence: float | None = None) -> RouteResult:
         """Execute a fast-path (or semantic-tier) skill, deferring for
         confirmation if it asks.
 
         There is deliberately NO profile that relaxes this gate. Lion mode
         (mode.lion) surfaces extra skills and reskins the HUD, but the
         confirmation and PC-control checks below run identically whether it is
-        on or off — see docs/Decisions.md. ``path`` only labels the result
+        on or off — see docs/decisions.md. ``path`` only labels the result
         (FAST vs SEMANTIC); the safety checks are the same either way.
         """
         gate = self._policy.gate_skill(skill, actor=self._actor_for(request.context))
@@ -858,7 +1205,12 @@ class Router:
             self._audit(POLICY_DENY, skill=skill.name, code=gate.code)
             speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
                       else gate.reason)
-            return RouteResult(path=path, speech=speech, skill_name=skill.name)
+            return RouteResult(path=path, speech=speech, skill_name=skill.name,
+                               confidence=confidence)
+        held = await self._preconfirm(skill, request, path)
+        if held is not None:
+            held.confidence = confidence
+            return held
         outcome = await self._safe_execute(skill, request)
         if outcome.await_reply:
             # The skill asked a question; capture the NEXT utterance as its answer.
@@ -866,6 +1218,13 @@ class Router:
             self._reply_is_offer = outcome.reply_is_offer
             self._reply_is_open = outcome.reply_is_open
         if (outcome.needs_confirmation and self._settings.safety.confirm_destructive):
+            # A skill that gates itself per-argument (delete vs. read) lands
+            # here rather than in _preconfirm — the unattended rule has to hold
+            # for it too, or a routine could still walk itself through a prompt.
+            refusal = self._unattended_refusal(
+                skill, request.context or {}, outcome.speech, path)
+            if refusal is not None:
+                return refusal
             # Stash the request; the next utterance is treated as the yes/no.
             self._pending = (skill, request)
         elif outcome.success and not skill.requires_confirmation:
@@ -880,6 +1239,7 @@ class Router:
             speech=outcome.speech,
             skill_name=skill.name,
             data=outcome.data,
+            confidence=confidence,
         )
 
     async def _resolve_confirmation(
@@ -1111,14 +1471,14 @@ class Router:
         (once — the result is cached) rather than freezing the event loop, which
         would stall the companion API and voice for every CLI-provider live query.
         """
-        if (self._settings.llm.provider in CLI_PROVIDERS
-                and self._wants_live_info(text)):
+        why = self._needs_tool_brain(text)
+        if why:
             tb = self._tool_brain_client()
             if tb is not None and (self._tool_brain_ok
                                    or await asyncio.to_thread(tb.is_available)):
                 self._tool_brain_ok = True
-                logger.info("auto tool-brain: %r needs live info -> %s",
-                            text, self._settings.llm.tool_brain_model)
+                logger.info("auto tool-brain: %r %s -> %s", text, why,
+                            self._settings.llm.tool_brain_model)
                 return tb, self._settings.llm.tool_brain_model, True
         return self._llm, self._tier_model(text), False
 
@@ -1142,6 +1502,26 @@ class Router:
                 logger.info("auto-model: simple turn -> %s (from %s)", fast, model)
             return fast
         return model
+
+    def _needs_tool_brain(self, text: str) -> str:
+        """Why this turn must leave a CLI brain, or "" to keep the selected one.
+
+        A CLI agent cannot call MEDO's skills — the integration hands it a flat
+        prompt and reads back text — so any turn that needs one has to go to a
+        brain that has them. Two kinds do: a query needing live info (already
+        handled), and a request to ACT.
+
+        Returning a REASON rather than a bool so the log says which rule fired;
+        an unexplained brain switch is the kind of thing that gets debugged
+        twice.
+        """
+        if self._settings.llm.provider not in CLI_PROVIDERS:
+            return ""
+        if self._wants_live_info(text):
+            return "needs live info"
+        if _ACTUATION_RE.search(text or "") and not _EXPLAIN_RE.search(text or ""):
+            return "is a request to act"
+        return ""
 
     def _wants_live_info(self, text: str) -> bool:
         """Whether this turn likely needs live/online info the CLI agent can't get.
@@ -1261,7 +1641,11 @@ class Router:
                     f"{name} — do not fall back to English for a word you find "
                     f"hard, and never put letters from two alphabets inside one "
                     f"word. Only a product or brand name may keep its own "
-                    f"spelling."
+                    f"spelling. A NAME is not a word to translate: say a place "
+                    f"or person back exactly as the user said it, never as its "
+                    f"dictionary meaning — asked about the village Другово, "
+                    f"never answer about 'Other'. If you do not know the place "
+                    f"or person they named, say so."
                 )
         messages: list[dict[str, Any]] = [
             {
@@ -1305,12 +1689,19 @@ class Router:
                             reply, retried = fixed, True
                     # Whatever survives, strip the markers before anyone says it.
                     reply = speech_text.strip_markup(reply)
+                    if _is_non_answer(reply):
+                        # A placeholder SOUNDS like an answer, so the user can't
+                        # tell it from a fact. Fall back to the honest apology
+                        # rather than bank "Nil." as the reply to a question.
+                        logger.info("LLM returned the placeholder %r; falling "
+                                    "back to the empty reply", reply)
+                        reply = ""
                     # This reply IS what streamed through on_delta (unless we
                     # had to retry off-stream) — flag it so the loop doesn't
                     # re-speak it. A retried reply never streamed, so leave it
                     # False and let the loop voice it.
                     return RouteResult(
-                        path=RoutePath.LLM, speech=reply or EMPTY_REPLY,
+                        path=RoutePath.LLM, speech=reply or _empty_reply(spoken),
                         streamed_reply=(on_delta is not None and not retried
                                         and bool(reply)))
 
@@ -1321,10 +1712,10 @@ class Router:
 
             # Ran out of rounds: ask once more for a plain answer.
             message = await llm.chat(model, messages)
+            last = speech_text.strip_markup((message.get("content") or "").strip())
             return RouteResult(
                 path=RoutePath.LLM,
-                speech=speech_text.strip_markup(
-                    (message.get("content") or "").strip()) or EMPTY_REPLY,
+                speech=("" if _is_non_answer(last) else last) or _empty_reply(spoken),
             )
         except LLMUnavailableError as exc:
             logger.warning("LLM path unavailable: %s", exc)
@@ -1445,6 +1836,11 @@ class Router:
         skip a second, error-prone synthesis hop). Returns None to keep looping
         only when a synthesis tool (web search) needs the model to summarize.
         """
+        # The model reduces the turn to a tool name and arguments, and
+        # dispatch_tool rebuilds an English stand-in utterance from those. Carry
+        # the real words alongside so a skill can still tell HOW the user asked
+        # — above all which language to answer in (SkillRequest.utterance).
+        context = {**context, "utterance": text}
         direct: list[str] = []
         needs_synthesis = False
         used_skill: str | None = None
@@ -1493,6 +1889,24 @@ class Router:
                 speech = (PC_CONTROL_OFF_REPLY if gate.code == "pc_control_off"
                           else gate.reason)
                 result = SkillResult(speech, success=False)
+            elif (gated_skill is not None
+                  and (held := await self._preconfirm(
+                      gated_skill,
+                      SkillRequest(text=text, args=args, context=context),
+                      RoutePath.LLM)) is not None):
+                # A declared-destructive tool never runs on the model's say-so.
+                # Anything already executed in this batch keeps its speech (the
+                # user must hear what did happen), and the rest of the batch is
+                # abandoned — only the confirmed skill re-runs on "yes".
+                skipped = [str((c.get("function") or {}).get("name") or "")
+                           for c in tool_calls[_call_index + 1:]]
+                skipped = [s.replace("_", " ") for s in skipped if s]
+                tail = (f" I haven't done {', '.join(skipped)} — ask me again "
+                        f"after this." if skipped else "")
+                return RouteResult(
+                    path=RoutePath.LLM, skill_name=name,
+                    speech=" ".join([*direct, held.speech]) + tail,
+                    data=held.data)
             else:
                 try:
                     result = await dispatch_tool(self._registry, name, args, context)
@@ -1508,6 +1922,10 @@ class Router:
                     and self._settings.safety.confirm_destructive):
                 skill = self._registry.get(name)
                 if skill is not None:
+                    refusal = self._unattended_refusal(
+                        skill, context, result.speech, RoutePath.LLM)
+                    if refusal is not None:
+                        return refusal
                     request = SkillRequest(text=text, args=args, context=context)
                     self._pending = (skill, request)
                 # Tools EARLIER in this batch already ran. Returning only the

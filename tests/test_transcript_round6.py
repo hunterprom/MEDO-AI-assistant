@@ -424,8 +424,30 @@ def test_the_prompt_forbids_offering_capabilities_medo_lacks():
     from llm.prompts import system_prompt
 
     prompt = system_prompt(PersonalityConfig()).lower()
-    assert "never offer something you have no tool for" in prompt
-    assert "your tools are the complete list" in prompt
+    assert "never offer to do something you have no tool for" in prompt
+    assert "complete list of what you can do" in prompt
+
+
+def test_the_prompt_does_not_turn_that_into_refusing_QUESTIONS():
+    """The other half of the same rule, and the reason it is worded "TO DO".
+
+    The original read "your tools are the complete list of what you can do",
+    which a model applies to answering as well as acting. Asked to recommend an
+    autumn cologne, MEDO said "no tool gets me actual fragrance
+    recommendations, so I'd just be guessing names, and I won't do that"; asked
+    how to make a motor driver, "I can't walk you through soldering it". Both
+    are ordinary knowledge questions needing no tool at all.
+
+    These two assertions have to travel together: tightening either one alone
+    is what produced each failure in turn.
+    """
+    from core.config import PersonalityConfig
+    from llm.prompts import system_prompt
+
+    prompt = system_prompt(PersonalityConfig()).lower()
+    assert "it is not about answering" in prompt
+    assert "never use it to refuse a question" in prompt
+    assert "recommend the perfume" in prompt
 
 
 @pytest.mark.parametrize("command", [

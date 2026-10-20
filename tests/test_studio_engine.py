@@ -166,3 +166,82 @@ def test_extract_code_tolerates_crlf_and_trailing_tag_space():
 if __name__ == "__main__":  # pragma: no cover
     import pytest
     pytest.main([__file__, "-v"])
+
+
+# -- a failed CHECK deserves the retry budget too ------------------------------
+
+class _CheckFailsThenPasses:
+    """Executes cleanly every time; its check fails for the first N attempts."""
+
+    name = "fake"
+    filename = "design.py"
+
+    def __init__(self, fail_checks: int):
+        self._fail_checks = fail_checks
+        self.exec_calls = 0
+        self.errors_seen = []
+
+    def build_brief(self, description, answers):
+        return Brief(description=description)
+
+    def system_prompt(self):
+        return "SYSTEM"
+
+    def user_prompt(self, brief, prior_code, error):
+        self.errors_seen.append(error)
+        return f"make {brief.description}"
+
+    async def execute(self, code, workdir, sandbox):
+        self.exec_calls += 1
+        (workdir / "model.stl").write_text("ARTIFACT", encoding="utf-8")
+        return ExecOutcome(ok=True, artifacts=["model.stl"], preview="model.stl")
+
+    def check(self, outcome, workdir):
+        if self.exec_calls <= self._fail_checks:
+            return [Advisory("fail", "the mesh isn't watertight (2 open edges)")]
+        return [Advisory("info", "watertight · 900 triangles")]
+
+
+def _check_engine(tmp_path, brain=None):
+    settings = load_settings()
+    settings.studio.enabled = True
+    settings.studio.max_retries = 3
+    return StudioEngine(settings, brain=brain or FakeBrain(),
+                        sandbox=None, base_dir=tmp_path)
+
+
+def test_a_mesh_that_fails_its_check_is_tried_again(tmp_path):
+    """The code RAN, so the old loop stopped — and reported failure with three
+    attempts still in hand.
+
+    A non-watertight mesh is the commonest way a CAD script "succeeds", and it
+    is exactly the kind of mistake the brain can fix once it is told. A real
+    rocket came back on the first attempt as "I tried to model that but
+    couldn't — the mesh isn't watertight (2 open edges)".
+    """
+    domain = _CheckFailsThenPasses(fail_checks=2)
+    result = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        _check_engine(tmp_path).create(domain, "a rocket"))
+    assert result.ok is True
+    assert domain.exec_calls == 3
+    # The failure was handed back in words the model can act on.
+    assert any("watertight" in (e or "") for e in domain.errors_seen)
+    assert any("failed its check" in (e or "") for e in domain.errors_seen)
+
+
+def test_a_check_that_never_passes_still_reports_honestly(tmp_path):
+    """Retrying must not turn into claiming success. The budget is bounded and
+    a mesh that is still broken at the end is still broken."""
+    domain = _CheckFailsThenPasses(fail_checks=99)
+    result = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        _check_engine(tmp_path).create(domain, "a rocket"))
+    assert result.ok is False
+    assert domain.exec_calls == 4               # max_retries + 1, no more
+    assert any(a.level == "fail" for a in result.advisories)
+
+
+def test_a_clean_first_attempt_still_costs_one_attempt(tmp_path):
+    domain = _CheckFailsThenPasses(fail_checks=0)
+    result = asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        _check_engine(tmp_path).create(domain, "a rocket"))
+    assert result.ok is True and domain.exec_calls == 1

@@ -457,7 +457,11 @@ def test_discovery_protocol_answers_probe():
     import json
 
     payload = json.loads(sent[0][0])
-    assert payload == {"service": "medo", "name": "MEDO", "port": 8710}
+    # `scheme` tells a discovering client whether to build an http:// or an
+    # https:// URL — guessing wrong against a TLS listener is a bare connection
+    # reset with no explanation.
+    assert payload == {"service": "medo", "name": "MEDO", "port": 8710,
+                       "scheme": "http"}
     assert sent[0][1] == ("10.0.0.9", 5000)
 
 

@@ -208,7 +208,7 @@ class FileEditSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         args = request.args
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
 
         action = (args.get("action") or "").lower()
         name = (args.get("file") or gd.get("rfile") or gd.get("afile")
@@ -396,7 +396,7 @@ class WriteInAppSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         app = (request.args.get("app") or gd.get("app") or "").strip()
         text = (request.args.get("text") or gd.get("text") or "").strip()
         key = self._resolve(app)
@@ -498,7 +498,7 @@ class OpenInEditorSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         name = _drop_file_noun(
             (request.args.get("file") or gd.get("file") or "").strip(" .,:;\"'"))
         if not name:

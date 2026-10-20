@@ -45,8 +45,12 @@ def _config(**over) -> SelfDevConfig:
     # Deterministic gate: the "python" just exits 0/1, so the flow doesn't depend
     # on pytest/ruff behaving inside a throwaway repo. Scope checks off by default
     # here (safelist/denylist empty) — they get their own dedicated tests.
+    # verify_after_apply off by default here: the fake gate command is a
+    # `print`, so re-running it after a merge proves nothing and every apply
+    # test would pay for a second subprocess. The verification has its own tests.
     base = dict(enabled=True, test_cmd=["-c", "print('tests ok')"],
-                lint_cmd=["-c", "print('lint ok')"], safelist=[], denylist=[])
+                lint_cmd=["-c", "print('lint ok')"], safelist=[], denylist=[],
+                verify_after_apply=False)
     base.update(over)
     return SelfDevConfig(**base)
 
@@ -138,6 +142,7 @@ async def test_agent_that_changes_nothing_is_reported(repo):
 async def test_apply_lands_the_change_on_the_live_branch(repo):
     engine = _engine(repo, _config(), _adds_file())
     proposal = await engine.propose("add feature.py")
+    engine.approve(proposal)          # the human step, now mandatory
     assert await engine.apply(proposal) is True
 
     # The change is now in the real working tree + history; the temp worktree and

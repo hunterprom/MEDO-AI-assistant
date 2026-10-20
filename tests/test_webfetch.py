@@ -444,10 +444,15 @@ async def test_macedonian_asks_the_summarizer_in_macedonian(monkeypatch):
 async def test_macedonian_confirmation_prompt_is_macedonian(monkeypatch):
     calls = _patch_httpx(monkeypatch, _FakeResponse([PAGE.encode()]))
     skill = WebFetchSkill(WebFetchConfig(), _echo_summarize)
+    # As the tool path really arrives: ``text`` is dispatch_tool's English
+    # stand-in (it is built from the tool name and the model's arguments, so it
+    # is never the user's Macedonian), and the words the user actually said ride
+    # in context['utterance']. That is what picks the language of the prompt.
     result = await skill.execute(SkillRequest(
-        text="земи https://tracker.example.com",
+        text="web fetch https://tracker.example.com",
         args={"url": "https://tracker.example.com"},
-        context={"via": "tool", "url_source": "document"}))
+        context={"via": "tool", "url_source": "document",
+                 "utterance": "земи https://tracker.example.com"}))
     assert result.needs_confirmation is True
     assert result.speech.startswith("Тој линк доаѓа од документ")
     assert _fetches(calls) == []

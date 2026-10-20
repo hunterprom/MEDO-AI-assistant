@@ -460,6 +460,37 @@ class PowerSkill(Skill):
             return "sleep"
         return None
 
+    #: Words that ask for each power action, in both of MEDO's languages.
+    #: Matched against what the USER said, never against the model's chosen
+    #: argument — the model choosing "shutdown" is the claim being checked.
+    _POWER_WORDS = {
+        "lock": re.compile(r"\block(?:s|ed|ing)?\b|\bзаклучи|\bзаклучува|"
+                           r"\bзаклучување", re.IGNORECASE),
+        "sleep": re.compile(r"\bsleep\b|\bsuspend\b|\bhibernate\b|"
+                            r"\bспиј|\bспиење|\bмирување", re.IGNORECASE),
+        "shutdown": re.compile(r"\bshut\s*(?:down|off)\b|\bpower\s*(?:off|down)\b|"
+                               r"\bturn\s+(?:it|the\s+\w+|my\s+\w+)?\s*off\b|"
+                               r"\bисклучи|\bугаси|\bисклучување", re.IGNORECASE),
+        "restart": re.compile(r"\brestart\b|\breboot\b|\bрестарт", re.IGNORECASE),
+    }
+
+    def _asked_for(self, request: SkillRequest, action: str) -> bool:
+        """True when this power action is what the user actually asked for.
+
+        Already-confirmed re-runs pass, as does a fast-path match (the pattern
+        that got here named the machine and the action). Everything else has to
+        show the words, because the alternative is arming a destructive
+        confirmation on the model's say-so: "Позе." — one garbled syllable —
+        armed "Are you sure you want to shut down?", leaving the user a single
+        misheard "да" away from a real shutdown. "Паузирај а музиката, не да
+        гузга сис компјутерот" ("pause the music, NOT the computer") armed a
+        sleep, having been told in the same breath not to.
+        """
+        if request.context.get("confirmed") or request.match is not None:
+            return True
+        pattern = self._POWER_WORDS.get(action)
+        return bool(pattern and pattern.search(request.utterance))
+
     def _run(self, action: str) -> str:
         os_name = current_os()
         cmds = {
@@ -531,6 +562,20 @@ class PowerSkill(Skill):
         # Everything except locking the screen interrupts what you were doing,
         # so everything except locking asks first. Sleep used to be silent —
         # and a stray sleep costs you your session just as surely as a reboot.
+        #
+        # Before any of that: did the user ask for a power action AT ALL? The
+        # model picks this tool out of garbled speech, and a confirmation is not
+        # the backstop it looks like — arming one leaves the user a single
+        # misheard "yes"/"да" from a real shutdown, and locking does not even
+        # ask. So an action the words never named is refused outright rather
+        # than confirmed. Declining (success=False) makes the router ask the
+        # model to answer what was actually said.
+        if not self._asked_for(request, action):
+            logger.info("power: %r proposed %s but the utterance never asked "
+                        "for it; refusing", request.utterance, action)
+            return SkillResult(
+                "I don't think you asked me to do that to the computer. Say it "
+                "again if you did.", success=False)
         if action != "lock" and not request.context.get("confirmed"):
             phrase = {"shutdown": "shut down", "restart": "restart",
                       "sleep": "put the machine to sleep"}[action]
@@ -593,7 +638,12 @@ class QuitSkill(Skill):
     # (a misheard "close MEDO") used to miss the fast path and reach the LLM,
     # which then NARRATED a shutdown. The tight `verb + name` shape plus the
     # confirmation gate make a rare false hit ("close meadow") cost one "no".
-    _MEDO = r"(?:medo|medoh|meddo|medal|meadow)"
+    # "middle" added from a live transcript: Whisper rendered "Hey, MEDO" as
+    # "Hey, Middle". It is a real English word, so it rides on the tight
+    # `verb + name` shape and the confirmation gate like the rest — "close
+    # middle" is not something anyone says by accident, and if they did it
+    # costs one "no".
+    _MEDO = r"(?:medo|medoh|meddo|medal|meadow|middle)"
     _SELF = rf"(?:your\s*self|{_MEDO}|the\s+assistant)"
     patterns = [
         re.compile(rf"\b(?:close|quit|exit)\s+{_SELF}\b", re.IGNORECASE),
@@ -604,11 +654,16 @@ class QuitSkill(Skill):
         re.compile(rf"\bgoodbye,?\s+{_MEDO}\b", re.IGNORECASE),
     ]
 
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return "Do you want me to close down? Say yes to confirm."
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         if not request.context.get("confirmed"):
-            return SkillResult(
-                "Do you want me to close down? Say yes to confirm.",
-                needs_confirmation=True)
+            # Unreachable through the router (it holds this skill at
+            # _preconfirm), and kept precisely for the callers that aren't the
+            # router: a direct execute() from a test or future code.
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
         # The voice loop reads data['exit'] and ends the session AFTER speaking.
         return SkillResult("Shutting down — goodbye.", data={"exit": True})
 

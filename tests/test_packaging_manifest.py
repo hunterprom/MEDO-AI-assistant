@@ -65,7 +65,7 @@ def test_engine_bundles_hud_and_language_data():
 
 
 def test_docs_flag_the_mediapipe_numpy_fight_and_signing():
-    doc = _read("docs/Packaging.md").lower()
+    doc = _read("docs/packaging.md").lower()
     assert "numpy<2" in doc and "mediapipe" in doc
     assert "smartscreen" in doc and "sign" in doc
     assert "manual install-test checklist" in doc

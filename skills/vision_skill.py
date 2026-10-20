@@ -246,7 +246,7 @@ class SeeCameraSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         import httpx
 
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         port = self._settings.vision.stream_port
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
@@ -348,12 +348,12 @@ class SeeScreenSkill(Skill):
             small = await asyncio.to_thread(_shrink, buf.getvalue())
         except Exception as exc:
             return SkillResult(
-                f"Не успеав да го фатам екранот: {exc}" if mk.is_cyrillic(request.text)
+                f"Не успеав да го фатам екранот: {exc}" if mk.is_cyrillic(request.utterance)
                 else f"I couldn't capture the screen: {exc}", success=False)
         prompt = READ_SCREEN_PROMPT if wants_read else DESCRIBE_SCREEN_PROMPT
         return await _describe(
             self._settings, base64.b64encode(small).decode(), prompt,
-            mk.is_cyrillic(request.text)
+            mk.is_cyrillic(request.utterance)
         )
 
     def tool_schema(self) -> dict[str, Any]:
@@ -440,7 +440,7 @@ class PointAtSkill(Skill):
         if not (0 <= cx < shot.width and 0 <= cy < shot.height):
             return SkillResult(
                 "Стрелката е на екран што не можам да го фотографирам."
-                if mk.is_cyrillic(request.text) else
+                if mk.is_cyrillic(request.utterance) else
                 "The cursor is on a display I can't capture — move it to the "
                 "main screen and ask again.",
                 success=False,

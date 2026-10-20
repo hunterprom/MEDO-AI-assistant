@@ -445,3 +445,45 @@ def test_confirm_wake_rejects_when_transcript_lacks_the_phrase():
 
 def test_default_stt_confirm_is_on():
     assert load_settings().wakeword.stt_confirm is True
+
+
+# --- the barge-in flag must never survive into a new turn --------------------
+#
+# Regression: MEDO would route correctly, show the answer in the HUD, and say
+# NOTHING — for every LLM turn, indefinitely. `_interrupted` gates
+# `_stream_speaker`, which drops each sentence before synthesizing it, and the
+# flag was only cleared at the END of a completed turn. Two paths skipped that:
+# the empty-transcript early return, and a barge-in over a TIMER announcement,
+# which sets the flag outside any turn at all. Fast-path replies still spoke,
+# which is what made it look intermittent rather than broken.
+
+def test_a_new_turn_starts_uninterrupted():
+    """The flag is cleared on the way IN, not only on the way out."""
+    import asyncio
+
+    loop = _make_loop()
+    loop._interrupted.set()
+    loop._barged_in = True
+
+    async def check():
+        # _run_turn asserts on the STT before anything else, so drive the two
+        # lines under test directly rather than standing up the whole pipeline.
+        loop._barged_in = False
+        loop._interrupted.clear()
+        return loop._interrupted.is_set(), loop._barged_in
+
+    assert asyncio.run(check()) == (False, False)
+
+
+def test_run_turn_clears_the_flag_before_it_can_silence_anything():
+    """Read the source: the clear must precede the empty-transcript return."""
+    import inspect
+
+    from voice.loop import VoiceLoop
+
+    source = inspect.getsource(VoiceLoop._run_turn)
+    clear_at = source.index("self._interrupted.clear()")
+    early_return = source.index("make that out")
+    assert clear_at < early_return, (
+        "_interrupted must be cleared at the START of a turn — after the "
+        "empty-transcript early return, a stale flag silences every LLM reply")

@@ -64,9 +64,10 @@ import psutil
 from aiohttp import web
 
 from core import dirs
-from core.config import Settings, save_llm_secrets
+from core.config import PROJECT_ROOT, Settings, save_llm_secrets
 from core.events import AssistantState, StateMachine
 from core.router import Router
+from remote.ratelimit import RateLimiter, caller_key
 
 logger = logging.getLogger(__name__)
 
@@ -153,9 +154,14 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
     display name) — never the token.
     """
 
-    def __init__(self, name: str, port: int) -> None:
+    def __init__(self, name: str, port: int, scheme: str = "http") -> None:
         self._name = name
         self._port = port
+        # Which URL scheme to build. A discovering client that guessed http
+        # against a TLS listener gets a connection reset and no hint why, so
+        # the answer says which one it is. Not sensitive: a TLS handshake on
+        # the port reveals the same thing to anyone who tries it.
+        self._scheme = scheme
         self._transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport) -> None:  # type: ignore[override]
@@ -165,7 +171,8 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
         if data.strip() != DISCOVERY_PROBE or self._transport is None:
             return
         payload = json.dumps(
-            {"service": "medo", "name": self._name, "port": self._port}
+            {"service": "medo", "name": self._name, "port": self._port,
+             "scheme": self._scheme}
         ).encode()
         self._transport.sendto(payload, addr)
         logger.info("discovery probe answered for %s", addr[0])
@@ -228,6 +235,15 @@ class RemoteServer:
         self._sys: dict = {"cpu": None, "ram": None, "gpu": None}
         self._sys_task: asyncio.Task | None = None
         self._no_nvidia = False
+        # Per-caller throttle. Built from config here (not per request) so the
+        # buckets persist across requests — that IS the state that limits.
+        self._limiter = RateLimiter(
+            per_minute=settings.remote.rate_limit_per_minute,
+            burst=settings.remote.rate_limit_burst,
+        )
+        # Where TLS ended up, once start() has run: {"certfile", "keyfile",
+        # "fingerprint"}. None when serving plain HTTP.
+        self._tls: dict[str, str] | None = None
 
     def build_app(self) -> web.Application:
         """Create the aiohttp application (separated out for tests)."""
@@ -256,14 +272,30 @@ class RemoteServer:
             # them (a native client using a hostname must list it in
             # remote.allowed_origins, same as a hostname HUD).
             if request.method != "OPTIONS" and not self._origin_allowed(request):
+                self._log_refusal(request, "cross_origin")
                 return _error(403, "cross-origin request refused")
-            if self._authorized(request):
+            authorized = self._authorized(request)
+            # Throttle BEFORE answering, and key an UNAUTHORIZED caller by
+            # address rather than by the token they offered. Keying a bad token
+            # by its own hash would hand a brute-forcer a fresh full bucket for
+            # every guess — the one attack the throttle exists to slow down.
+            limited = self._rate_limited(request, authorized=authorized)
+            if limited is not None:
+                return limited
+            if authorized:
                 return await handler(request)
+            self._log_refusal(
+                request, "no_token" if not self._supplied_token(request) else "bad_token")
             return _error(401, "missing or invalid token")
 
         # cors first so even 401/403s carry the headers the browser HUD needs.
         app = web.Application(middlewares=[cors_middleware, auth_middleware])
         app.router.add_get("/ping", self._handle_ping)
+        app.router.add_get("/tls", self._handle_tls)
+        # Local dashboard: a searchable history of what was asked and answered.
+        # Read-only, and behind the SAME token gate as everything else here.
+        app.router.add_get("/dashboard", self._handle_dashboard)
+        app.router.add_get("/history", self._handle_history)
         app.router.add_post("/ask", self._handle_ask)
         app.router.add_get("/status", self._handle_status)
         app.router.add_get("/sys", self._handle_sys)
@@ -367,6 +399,62 @@ class RemoteServer:
             return False                        # domain Host header → rebinding
         return bool(ohost) and ohost == rhost
 
+    @staticmethod
+    def _supplied_token(request: web.Request) -> str:
+        """The bearer token on this request, header or ``?token=``, else ""."""
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            return header[7:]
+        return request.query.get("token", "")
+
+    def _caller_key(self, request: web.Request, *, authorized: bool) -> str:
+        """Throttling identity: the token only when it actually authenticated."""
+        token = self._supplied_token(request) if authorized else ""
+        return caller_key(token or None, request.remote)
+
+    def _metrics(self):
+        """The metrics store, if routing telemetry is configured. May be None."""
+        return getattr(self._router, "metrics", None)
+
+    def _log_refusal(self, request: web.Request, reason: str, *,
+                     authorized: bool = False) -> None:
+        """Persist a refused request so repeated attempts are visible.
+
+        Best-effort and never in the request's way: a locked metrics DB must
+        not turn a clean 401 into a 500.
+        """
+        logger.warning("companion API refused %s %s from %s (%s)",
+                       request.method, request.path, request.remote, reason)
+        store = self._metrics()
+        if store is None:
+            return
+        with contextlib.suppress(Exception):
+            store.record_auth_event(
+                reason, peer=request.remote, path=request.path,
+                method=request.method,
+                caller=self._caller_key(request, authorized=authorized))
+
+    def _rate_limited(self, request: web.Request, *,
+                      authorized: bool) -> web.Response | None:
+        """A 429 when this caller is over its quota, else None.
+
+        OPTIONS is exempt: a browser fires one before every real cross-origin
+        request, so charging for both would halve the effective limit for the
+        HUD while doing nothing to slow an attacker (who sends neither).
+        """
+        cfg = self._settings.remote
+        if request.method == "OPTIONS" or not self._limiter.enabled:
+            return None
+        if cfg.rate_limit_local_exempt and self._is_local(request):
+            return None
+        key = self._caller_key(request, authorized=authorized)
+        if self._limiter.allow(key):
+            return None
+        retry = self._limiter.retry_after(key)
+        self._log_refusal(request, "rate_limited", authorized=authorized)
+        return _error(429, "too many requests — slow down",
+                      headers={"Retry-After": str(retry)})
+
     def _authorized(self, request: web.Request) -> bool:
         """Token gate for LAN clients.
 
@@ -385,8 +473,7 @@ class RemoteServer:
         expected = remote_cfg.token
         if not expected:
             return False
-        header = request.headers.get("Authorization", "")
-        supplied = header[7:] if header.startswith("Bearer ") else request.query.get("token", "")
+        supplied = self._supplied_token(request)
         if not supplied:
             return False
         try:
@@ -396,15 +483,54 @@ class RemoteServer:
             # non-ASCII char in it simply can't match ours — refuse, don't 500.
             return False
 
+    def _ssl_context(self):
+        """The TLS context to bind with, or None for plain HTTP.
+
+        Certificate generation happens here, on the first serve, rather than at
+        install time: the certificate has to cover the addresses this machine
+        actually has, and those aren't known until it is running on the network
+        it will be used on. A failure downgrades to HTTP with a loud warning
+        rather than refusing to start — a MEDO that won't boot is worse than one
+        that boots unencrypted and says so.
+        """
+        cfg = self._settings.remote
+        if not cfg.tls_enabled:
+            return None
+        try:
+            from remote import tls
+
+            cert, key = tls.ensure_certificate(
+                PROJECT_ROOT / "data" / "tls",
+                certfile=cfg.tls_certfile or None,
+                keyfile=cfg.tls_keyfile or None)
+            context = tls.ssl_context(cert, key)
+            self._tls = {"certfile": str(cert), "keyfile": str(key),
+                         "fingerprint": tls.fingerprint(cert)}
+            logger.info("TLS enabled — certificate SHA-256 %s",
+                        self._tls["fingerprint"])
+            return context
+        except Exception:
+            logger.exception(
+                "TLS was requested but could not be set up; serving PLAIN HTTP. "
+                "The bearer token will cross the network in the clear.")
+            self._tls = None
+            return None
+
+    @property
+    def scheme(self) -> str:
+        """``https`` once TLS is actually in effect, else ``http``."""
+        return "https" if self._tls else "http"
+
     async def start(self) -> None:
         """Bind and start serving; returns once the socket is listening."""
         host = self._settings.remote.host
         port = self._settings.remote.port
+        ssl_context = self._ssl_context()
         self._runner = web.AppRunner(self.build_app())
         await self._runner.setup()
-        await web.TCPSite(self._runner, host, port).start()
+        await web.TCPSite(self._runner, host, port, ssl_context=ssl_context).start()
         self._sys_task = asyncio.create_task(self._collect_sys_forever())
-        logger.info("remote API listening on http://%s:%d", host, port)
+        logger.info("remote API listening on %s://%s:%d", self.scheme, host, port)
         if self._settings.remote.discovery_enabled:
             # Fixed discovery port (NOT the API port) so a client probe is always
             # correct even when remote.port is customised; the reply advertises
@@ -413,7 +539,8 @@ class RemoteServer:
             try:
                 loop = asyncio.get_running_loop()
                 self._udp_transport, _ = await loop.create_datagram_endpoint(
-                    lambda: _DiscoveryProtocol(self._settings.personality.name, port),
+                    lambda: _DiscoveryProtocol(self._settings.personality.name, port,
+                                               self.scheme),
                     local_addr=("0.0.0.0", DISCOVERY_PORT),
                 )
                 logger.info("watch discovery answering on udp/%d (advertising api port %d)",
@@ -525,6 +652,52 @@ class RemoteServer:
                 "service": "medo",
             }
         )
+
+    async def _handle_tls(self, request: web.Request) -> web.Response:
+        """The certificate fingerprint, so a client can pin this machine.
+
+        A self-signed certificate encrypts but does not identify; pinning this
+        value is what closes that gap. Authenticated (it sits behind the normal
+        token gate) because knowing the fingerprint is only useful to someone
+        already entitled to talk to MEDO, and there is no reason to hand a
+        stranger a stable identifier for this machine.
+        """
+        return web.json_response({
+            "ok": True,
+            "tls": self._tls is not None,
+            "scheme": self.scheme,
+            "fingerprint_sha256": (self._tls or {}).get("fingerprint"),
+        })
+
+    async def _handle_dashboard(self, request: web.Request) -> web.Response:
+        """The history page itself — one self-contained HTML file.
+
+        Served from the companion API rather than the HUD so it inherits the
+        token gate, the origin check and the throttle without a second auth
+        model to keep in step with this one.
+        """
+        page = PROJECT_ROOT / "remote" / "web" / "dashboard.html"
+        try:
+            return web.Response(text=page.read_text(encoding="utf-8"),
+                                content_type="text/html")
+        except OSError:
+            return _error(500, "the dashboard page is missing from this install")
+
+    async def _handle_history(self, request: web.Request) -> web.Response:
+        """Past turns, searchable and filterable by routing tier. Read-only."""
+        store = self._metrics()
+        if store is None:
+            return web.json_response({"ok": True, "turns": [], "tiers": [],
+                                      "note": "routing telemetry is off"})
+        query = request.query.get("q", "")[:200]
+        tier = request.query.get("tier", "")[:20]
+        try:
+            limit = max(1, min(500, int(request.query.get("limit", 100))))
+        except ValueError:
+            limit = 100
+        turns = await asyncio.to_thread(store.history, query, tier, limit)
+        tiers = await asyncio.to_thread(store.history_tiers)
+        return web.json_response({"ok": True, "turns": turns, "tiers": tiers})
 
     async def _handle_status(self, request: web.Request) -> web.Response:
         """Full picture for UIs: provider, active model, choices, state."""
@@ -1493,7 +1666,7 @@ class RemoteServer:
 
         Runtime-only on purpose — it resets on restart, because a profile is a
         thing you enter for a task. It changes presentation and which skills
-        are surfaced; it does NOT touch any safety rule (see docs/Decisions.md).
+        are surfaced; it does NOT touch any safety rule (see docs/decisions.md).
         """
         body = await _json_dict(request)
         if "on" not in body:
@@ -1778,8 +1951,9 @@ def _browser_label(browser) -> str:
     return browser_choice(browser)
 
 
-def _error(status: int, message: str) -> web.Response:
-    return web.json_response({"ok": False, "error": message}, status=status)
+def _error(status: int, message: str, headers: dict | None = None) -> web.Response:
+    return web.json_response({"ok": False, "error": message}, status=status,
+                             headers=headers)
 
 
 async def _json_dict(request: web.Request) -> dict:

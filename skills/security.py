@@ -225,7 +225,7 @@ class _LionSkill(Skill):
 
     def _preamble(self, request: SkillRequest) -> SkillResult | None:
         """Shared gate: off -> say so; offensive -> refuse. None -> proceed."""
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         if not self._settings.mode.lion:
             return SkillResult(OFF_REPLY_MK if speak_mk else OFF_REPLY,
                                success=False, data={"lion": False})
@@ -314,7 +314,7 @@ class SecurityCheckSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         import asyncio
         try:
             ports = await asyncio.to_thread(self._list_ports)
@@ -415,7 +415,7 @@ class ExplainProcessSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         gd = request.match.groupdict() if request.match else {}
         query = (request.args.get("process") or gd.get("q") or gd.get("q2")
                  or gd.get("qm") or "").strip()
@@ -515,7 +515,7 @@ class FirewallAuditSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         import asyncio
         try:
             raw = await asyncio.to_thread(self._read)
@@ -610,7 +610,7 @@ class UpdateCheckSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         import asyncio
         try:
             updates = await asyncio.to_thread(self._list_updates)
@@ -670,7 +670,7 @@ class ExplainPermissionsSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         gd = request.match.groupdict() if request.match else {}
         raw = (request.args.get("path") or gd.get("p") or gd.get("p2")
                or gd.get("pm") or "").strip().strip("\"'` ")

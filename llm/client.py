@@ -274,8 +274,13 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float | None = None,
         on_delta: Any = None,
+        for_speech: bool = True,
     ) -> dict[str, Any]:
         """Send a chat completion and return the assistant *message* dict.
+
+        ``for_speech=False`` says the caller wants a structured artifact rather
+        than something to say out loud. It only reaches the CLI-agent providers,
+        which are handed one flat prompt: see :func:`_flatten_for_cli`.
 
         The message has ``content`` and, when the model decides to call tools,
         a ``tool_calls`` list whose ``function.arguments`` is always a dict —
@@ -292,7 +297,7 @@ class LLMClient:
             # CLI agents bring their own tools and don't stream: run the
             # subprocess, then hand the whole reply to on_delta in one piece so
             # the sentence-streaming TTS still speaks it.
-            message = await self._chat_cli(model, messages)
+            message = await self._chat_cli(model, messages, for_speech=for_speech)
             if on_delta is not None and message.get("content"):
                 on_delta(message["content"])
             if isinstance(message.get("content"), str):
@@ -645,7 +650,8 @@ class LLMClient:
     # -- local CLI agents (Claude Code / Codex) ------------------------------
 
     async def _chat_cli(
-        self, model: str, messages: list[dict[str, Any]]
+        self, model: str, messages: list[dict[str, Any]], *,
+        for_speech: bool = True
     ) -> dict[str, Any]:
         """One non-interactive turn through a local CLI agent.
 
@@ -658,7 +664,7 @@ class LLMClient:
             raise LLMUnavailableError(
                 f"the {self._provider} CLI ({cmd!r}) is not installed or not on PATH"
             )
-        prompt = _flatten_for_cli(messages)
+        prompt = _flatten_for_cli(messages, for_speech=for_speech)
         if self._provider == "claude-code":
             argv = [cmd, "-p", prompt, "--output-format", "text"]
             if model and model != "default":
@@ -730,8 +736,21 @@ def _codex_final_message(stdout: str) -> str:
     return result or stdout.strip()
 
 
-def _flatten_for_cli(messages: list[dict[str, Any]]) -> str:
-    """Collapse the chat history into one prompt for a single-shot CLI agent."""
+def _flatten_for_cli(messages: list[dict[str, Any]], *,
+                     for_speech: bool = True) -> str:
+    """Collapse the chat history into one prompt for a single-shot CLI agent.
+
+    ``for_speech`` is what MEDO wants back. True (the default) is the voice
+    path, and the flattened prompt ends by asking for a spoken answer. False is
+    a caller that wants a STRUCTURED artifact — Maker Studio asking for a
+    CadQuery script, say — and there the trailer is actively harmful: it is the
+    last line the agent reads, so it overrides the system prompt above it.
+    Measured: with "Output ONLY the Python code — no prose, no markdown fences"
+    as the system prompt, claude-code returned a paragraph of English prose
+    describing a phone stand. That prose was written to ``model.py`` and of
+    course failed to run, and the retry loop then asked the same brain to fix
+    it. The 3D domain could not produce a model at all on a CLI brain.
+    """
     system_parts: list[str] = []
     turns: list[str] = []
     for msg in messages:
@@ -752,7 +771,8 @@ def _flatten_for_cli(messages: list[dict[str, Any]]) -> str:
     if len(turns) > 1:
         parts.append("Conversation so far:\n" + "\n".join(turns[:-1]))
     if turns:
-        parts.append(turns[-1] + "\nReply with only your spoken answer, as plain text.")
+        parts.append(turns[-1] + ("\nReply with only your spoken answer, as plain "
+                                  "text." if for_speech else ""))
     return "\n\n".join(parts)
 
 

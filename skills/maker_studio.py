@@ -9,6 +9,8 @@ deliberate build action, gated by the policy engine like any PC control.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import re
 
@@ -36,6 +38,20 @@ _CANCEL = re.compile(
     r"^\s*(?:never\s*mind|nevermind|cancel|forget\s+it|stop|nothing|no)\s*[.!]*$",
     re.IGNORECASE)
 
+#: A determiner ends the run — "a schematic of THE amplifier" is describing
+#: something that already exists, "an RC ALTERNATING CURRENT circuit" is the
+#: thing to draw. Same test the app builder uses, for the same reason.
+_DET = (r"(?:the|a|an|my|your|our|their|its|this|that|these|those|"
+        r"every|each|all|any|some|no)")
+
+#: What may sit between the article and the noun being made. English puts the
+#: description in FRONT of it — "an RC alternating current CIRCUIT", "a simple
+#: low-pass FILTER circuit" — and with no slot for that, the whole request
+#: missed and fell to the LLM, which answered "Could you design an RC
+#: alternating current circuit?" with the sentence "Detailed design and
+#: explanations for an RC alternating current circuit." and nothing else.
+_MODS = rf"(?P<mods>(?:(?!{_DET}\b)[\w-]+\s+){{0,4}})"
+
 
 class _StudioSkill(Skill):
     """Shared drive-the-engine flow for a domain."""
@@ -46,10 +62,16 @@ class _StudioSkill(Skill):
     _noun = "the design"
     _ask = "What should I make?"
 
-    def __init__(self, settings, domain, *, engine=None) -> None:
+    def __init__(self, settings, domain, *, engine=None, announcer=None) -> None:
         self._settings = settings
         self._domain = domain
         self._engine = engine
+        # Where to speak the result when the build runs in the background. None
+        # keeps the whole thing synchronous — which is what the tests want, and
+        # what a caller with nowhere to announce to needs.
+        self._announce = announcer
+        self._task: asyncio.Task | None = None
+        self._busy = False
         # What we were asked to make when we posed a clarifying question, so the
         # captured reply extends the brief instead of replacing it.
         self._pending_desc = ""
@@ -62,9 +84,15 @@ class _StudioSkill(Skill):
         return self._engine
 
     def _description(self, request: SkillRequest) -> str:
+        """The brief, from whichever half of the sentence carries it.
+
+        ``desc`` is what follows the noun ("a circuit FOR an ESP32"); ``mods``
+        is what precedes it ("an RC ALTERNATING CURRENT circuit"). English uses
+        both, so a pattern that only reads one throws away half the requests.
+        """
         gd = request.match.groupdict() if request.match else {}
-        return _clean(gd.get("desc") or str((request.args or {}).get("description")
-                                             or ""))
+        return _clean(gd.get("desc") or gd.get("mods")
+                      or str((request.args or {}).get("description") or ""))
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         if not self._settings.studio.enabled:
@@ -92,6 +120,52 @@ class _StudioSkill(Skill):
         if not desc:
             self._pending_desc = ""
             return SkillResult(self._ask, await_reply=True, reply_is_open=True)
+        # Ask for a missing critical spec BEFORE going anywhere near the brain:
+        # the brief is pure and instant, and a question has to be asked in the
+        # turn that prompted it, not announced ten minutes later.
+        question = self._domain.build_brief(desc, {}).question
+        if question:
+            self._pending_desc = desc          # keep the brief for the reply
+            return SkillResult(question, await_reply=True, reply_is_open=True)
+        if self._announce is not None:
+            return self._begin(desc, speak_mk=mk.is_cyrillic(request.utterance))
+        return await self._build(desc)
+
+    def _begin(self, desc: str, *, speak_mk: bool) -> SkillResult:
+        """Start the build and get out of the way.
+
+        A real one is minutes of work — a phone stand measured 514 s from the
+        spoken sentence to the finished STL, nearly all of it the brain writing
+        CadQuery. Awaiting that inside the turn left MEDO mute and unable to
+        take another word for eight minutes: the assistant went away to do the
+        job. ``make_app`` already had the answer, so this borrows it — say it's
+        started, build off to the side, speak when it's done.
+        """
+        if self._busy:
+            return SkillResult(
+                "Веќе градам едно — да го завршам прво него." if speak_mk else
+                "I'm already working on one — let me finish it first.",
+                success=False)
+        self._busy = True
+        self._task = asyncio.ensure_future(self._work(desc, speak_mk))
+        return SkillResult(
+            "Добро — ќе го направам тоа и ќе ти јавам кога е готово."
+            if speak_mk else
+            f"Okay — I'll {self._verb} that now and tell you when it's ready. "
+            f"It takes a few minutes.",
+            data={"studio": "started", "domain": self._domain.name,
+                  "description": desc})
+
+    async def _work(self, desc: str, speak_mk: bool) -> None:
+        try:
+            result = await self._build(desc)
+        finally:
+            self._busy = False
+        logger.info("studio %s: %s", self._domain.name, result.speech)
+        with contextlib.suppress(Exception):
+            await self._announce(result.speech)
+
+    async def _build(self, desc: str) -> SkillResult:
         try:
             result = await self._get_engine().create(self._domain, desc)
         except Exception as exc:                # never crash the turn
@@ -204,10 +278,11 @@ class Model3DSkill(_StudioSkill):
             return None
         return found
 
-    def __init__(self, settings, *, engine=None) -> None:
+    def __init__(self, settings, *, engine=None, announcer=None) -> None:
         from studio.domains.model3d import Model3DDomain
 
-        super().__init__(settings, Model3DDomain(), engine=engine)
+        super().__init__(settings, Model3DDomain(), engine=engine,
+                         announcer=announcer)
 
 
 class DesignCircuitSkill(_StudioSkill):
@@ -223,7 +298,13 @@ class DesignCircuitSkill(_StudioSkill):
                        "wire up a temperature sensor to an Arduino"]
 
     patterns = [
-        re.compile(r"\b(?:design|draw|make|create|build|sketch)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:circuit|schematic|wiring(?:\s+diagram)?)\s+(?:for\s+|of\s+|to\s+|that\s+)?(?P<desc>.+)", re.IGNORECASE),
+        # The noun may come after the description ("design an RC alternating
+        # current CIRCUIT") or before it ("design a circuit FOR an ESP32"), so
+        # both halves are optional and either one can supply the brief.
+        re.compile(r"\b(?:design|draw|make|create|build|sketch)\s+(?:me\s+)?(?:a\s+|an\s+)?"
+                   + _MODS
+                   + r"(?:circuit|schematic|wiring(?:\s+diagram)?)\b"
+                   r"(?:\s+(?:for\s+|of\s+|to\s+|that\s+)?(?P<desc>.+))?", re.IGNORECASE),
         re.compile(r"\b(?:schematic|circuit|wiring)\s+(?:for|of)\s+(?P<desc>.+)", re.IGNORECASE),
         re.compile(r"\bwire\s+up\s+(?P<desc>.+)", re.IGNORECASE),
         # MK — "нацртај ми шема за …", "струјно коло за …".
@@ -235,10 +316,11 @@ class DesignCircuitSkill(_StudioSkill):
                    r"(?:за|на)\s+(?P<desc>.+)", re.IGNORECASE),
     ]
 
-    def __init__(self, settings, *, engine=None) -> None:
+    def __init__(self, settings, *, engine=None, announcer=None) -> None:
         from studio.domains.schematic import SchematicDomain
 
-        super().__init__(settings, SchematicDomain(), engine=engine)
+        super().__init__(settings, SchematicDomain(), engine=engine,
+                         announcer=announcer)
 
 
 class CodeBuildSkill(_StudioSkill):
@@ -266,10 +348,11 @@ class CodeBuildSkill(_StudioSkill):
                    re.IGNORECASE),
     ]
 
-    def __init__(self, settings, *, engine=None) -> None:
+    def __init__(self, settings, *, engine=None, announcer=None) -> None:
         from studio.domains.code import CodeDomain
 
-        super().__init__(settings, CodeDomain(), engine=engine)
+        super().__init__(settings, CodeDomain(), engine=engine,
+                         announcer=announcer)
 
 
 class StudioProjectsSkill(Skill):

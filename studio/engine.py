@@ -109,6 +109,7 @@ class StudioEngine:
                    prior_code: str) -> StudioResult:
         n, vdir = project.begin_version()
         code, error, outcome = prior_code, "", None
+        advisories: List[Advisory] = []
         attempts = 0
         for attempt in range(self._cfg.max_retries + 1):
             attempts = attempt + 1
@@ -128,12 +129,27 @@ class StudioEngine:
                 outcome = await domain.execute(code, vdir, self._sandbox)
             except Exception as exc:            # a domain bug must not crash the turn
                 outcome = ExecOutcome(ok=False, stderr=f"execution crashed: {exc}")
-            if outcome.ok:
+            if not outcome.ok:
+                error = _tail(outcome.stderr) or "execution produced no artifact"
+                advisories = []
+                continue
+            # The code RAN. That is not the same as having made something usable,
+            # so the check is part of the loop rather than a verdict passed after
+            # it. A mesh with two open edges is the single most common way a CAD
+            # script "succeeds" — and it is precisely the kind of mistake the
+            # brain can fix if it is told about it. Before this, the whole retry
+            # budget was reserved for tracebacks: a rocket came back on the FIRST
+            # attempt as "I tried to model that but couldn't — the mesh isn't
+            # watertight (2 open edges)", with three unused attempts in hand.
+            advisories = domain.check(outcome, vdir)
+            fails = [a.message for a in advisories if a.level == "fail"]
+            if not fails:
                 break
-            error = _tail(outcome.stderr) or "execution produced no artifact"
+            error = ("the code ran and produced the file, but it failed its "
+                     "check: " + "; ".join(fails))
+            logger.info("studio %s: attempt %d failed its check (%s)",
+                        domain.name, attempts, error)
 
-        # Checks only run on a real artifact; a 'fail' advisory blocks "ready".
-        advisories = domain.check(outcome, vdir) if (outcome and outcome.ok) else []
         hard_fail = any(a.level == "fail" for a in advisories)
         ok = bool(outcome and outcome.ok) and not hard_fail
         version = project.finalize_version(

@@ -111,15 +111,42 @@ class FenceFilter:
         return "" if self._inside else tail
 
 
+#: A markdown TABLE row — two or more pipes on one line. Written-only: nobody
+#: says a table out loud.
+_TABLE_ROW = re.compile(r"^[ \t]*\|.*\|[ \t]*$", re.MULTILINE)
+#: LaTeX math, "$1^2 = 1$" / "$$...$$". Deliberately requires a LaTeX-ish
+#: character inside the delimiters so ordinary money ("$5", "$5 to $10") is not
+#: mistaken for it.
+_LATEX = re.compile(r"\$\$.+?\$\$|\$[^$\n]*[\\^_{}][^$\n]*\$", re.DOTALL)
+#: An ATX heading or a horizontal rule on its own line.
+_DOC_STRUCTURE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]+\S|(?:---+|\*\*\*+|___+)[ \t]*$)",
+                            re.MULTILINE)
+#: Two or more bullet/numbered list lines. One is a stray dash; several are a
+#: written list, which the system prompt already forbids out loud.
+_LIST_LINES = re.compile(r"^[ \t]*(?:[-*+][ \t]+\S|\d+[.)][ \t]+\S)", re.MULTILINE)
+
+
 def looks_like_markup(text: str) -> bool:
     """True when the model answered in writing rather than in speech.
 
     A fence or a JSON object means the reply was never spoken language; the
     right response is to ask again, not to salvage the prose around it.
+
+    Fences and JSON alone were not enough. Asked in Macedonian how to memorise
+    squares and cubes, MEDO spent six minutes and replied with an English essay
+    — markdown tables, "$11^2 = 100 + 20(1) + 1 = 121$", `---` rules, a bullet
+    list and a brain emoji — and the voice read all of it aloud, because none of
+    it is a fence or a JSON object. These are the other shapes of "written".
     """
     if not text:
         return False
-    return "```" in text or bool(_JSON_BLOB.search(text))
+    if "```" in text or _JSON_BLOB.search(text):
+        return True
+    if _TABLE_ROW.search(text) or _LATEX.search(text):
+        return True
+    if _DOC_STRUCTURE.search(text):
+        return True
+    return len(_LIST_LINES.findall(text)) >= 2
 
 
 def leaked_tool_names(text: str, names: object) -> list[str]:

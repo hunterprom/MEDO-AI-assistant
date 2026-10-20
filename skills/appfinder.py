@@ -359,7 +359,7 @@ class LocateAppSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         name = (request.args.get("app") or gd.get("app") or gd.get("app2")
                 or gd.get("app3") or gd.get("app4") or gd.get("appm")
                 or gd.get("appm2") or "").strip()
@@ -451,7 +451,7 @@ class OpenDiscoveredAppSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         name = (request.args.get("app") or gd.get("app") or gd.get("appm") or "").strip()
         if not name:
             return SkillResult("Која апликација?" if speak_mk else "Which app?",
@@ -517,7 +517,7 @@ class InstallAppSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         name = (request.args.get("app") or gd.get("app") or gd.get("app2")
                 or gd.get("appm") or "").strip()
         if not name:

@@ -451,7 +451,7 @@ class BrowserControlSkill(Skill):
         return super().match(text)
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         if not self._config.enabled:
             return SkillResult(
                 "Контролата на прелистувачот е исклучена во конфигурацијата."
@@ -644,26 +644,41 @@ class BrowserAgentSkill(Skill):
         self._session = session or BrowserSession(config)
         self._think = think          # async (prompt: str) -> str
 
-    async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+    def _task_of(self, request: SkillRequest) -> str:
+        gd = request.match.groupdict() if request.match else {}
+        return (request.args.get("task") or gd.get("task") or "").strip(" .?!")
+
+    async def preflight(self, request: SkillRequest) -> SkillResult | None:
+        """Say what's actually wrong instead of asking to confirm nothing."""
+        speak_mk = mk.is_cyrillic(request.utterance)
         if not self._config.enabled:
             return SkillResult(
                 "Контролата на прелистувачот е исклучена." if speak_mk
                 else NOT_ENABLED, success=False)
-        gd = request.match.groupdict() if request.match else {}
-        task = (request.args.get("task") or gd.get("task") or "").strip(" .?!")
-        if not task:
+        if not self._task_of(request):
             return SkillResult("Што да направам на страната?" if speak_mk
                                else "What should I do on the page?", success=False)
         if self._think is None:
             return SkillResult("My brain is offline, so I can't drive the page.",
                                success=False)
+        return None
+
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        task = self._task_of(request)
+        if mk.is_cyrillic(request.utterance):
+            return f"Ќе преземам контрола над страната за: {task}. Да продолжам?"
+        return f"I'll take control of the page to: {task}. Shall I go ahead?"
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        early = await self.preflight(request)
+        if early is not None:
+            return early
+        speak_mk = mk.is_cyrillic(request.utterance)
+        task = self._task_of(request)
         if not request.context.get("confirmed"):
-            return SkillResult(
-                f"Ќе преземам контрола над страната за: {task}. Да продолжам?"
-                if speak_mk else
-                f"I'll take control of the page to: {task}. Shall I go ahead?",
-                needs_confirmation=True)
+            # Belt to the router's braces — see QuitSkill.execute.
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
 
         history: list[str] = []
         try:

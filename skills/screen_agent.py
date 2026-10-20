@@ -153,16 +153,27 @@ class ScreenAgentSkill(Skill):
 
     # -- the agent loop -------------------------------------------------------
 
-    async def execute(self, request: SkillRequest) -> SkillResult:
+    async def preflight(self, request: SkillRequest) -> SkillResult | None:
+        """Answer now rather than asking to confirm a task that can't run."""
         if not self._settings.vision.agent_enabled:
             return SkillResult("The screen agent is disabled in config.", success=False)
-        task = self._task_from(request)
-        if not task:
+        if not self._task_from(request):
             return SkillResult("What would you like me to do on screen?", success=False)
+        return None
+
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return (f"I'll take control of the screen to: {self._task_from(request)}. "
+                f"Shall I go ahead?")
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        early = await self.preflight(request)
+        if early is not None:
+            return early
+        task = self._task_from(request)
         if not request.context.get("confirmed"):
-            return SkillResult(
-                f"I'll take control of the screen to: {task}. Shall I go ahead?",
-                needs_confirmation=True)
+            # Belt to the router's braces — see QuitSkill.execute.
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
 
         history: list[str] = []
         max_steps = self._settings.vision.agent_max_steps

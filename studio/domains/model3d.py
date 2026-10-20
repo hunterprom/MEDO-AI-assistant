@@ -7,11 +7,14 @@ honest "install cadquery" message when the library isn't present.
 from __future__ import annotations
 
 import importlib.util
+import logging
 from pathlib import Path
 from typing import List
 
 from studio.domain import Advisory, Brief, ExecOutcome
 from studio.domains.mesh import inspect_stl
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM = (
     "You are a mechanical CAD engineer. Write a COMPLETE CadQuery (Python) script "
@@ -62,15 +65,48 @@ class Model3DDomain:
         workdir = Path(workdir)
         result = await sandbox.run_python(workdir / self.filename, workdir)
         arts = [f for f in ("model.stl", "model.step") if (workdir / f).exists()]
-        if result.ok and arts:
+        salvaged = self._crashed_after_exporting(result, workdir)
+        if arts and (result.ok or salvaged):
             return ExecOutcome(ok=True, artifacts=arts, stdout=result.stdout,
-                               stderr=result.stderr,
+                               stderr=salvaged or result.stderr,
                                preview=("model.stl" if "model.stl" in arts
                                         else arts[0]))
         err = (result.stderr or ("the script ran but exported no STL/STEP"
                if result.ok else "the script failed to run"))
         return ExecOutcome(ok=False, artifacts=arts, stdout=result.stdout,
                            stderr=err)
+
+    @staticmethod
+    def _crashed_after_exporting(result, workdir: Path) -> str:
+        """Why a non-zero exit is still a success, or "" if it genuinely failed.
+
+        A non-zero return code does NOT mean the model failed. CadQuery's
+        OpenCascade bindings segfault while UNLOADING on some platforms: the
+        script runs to completion, both exports land, the interpreter prints
+        nothing on stderr — and then the process dies with an access violation
+        (0xC0000005 / rc 3221225477) on the way out. Measured on this machine
+        with cadquery 2.8.0 + OCP 7.9.3: reproducible on a bare
+        ``import cadquery`` with no geometry at all, so EVERY model would have
+        been declared a failure while a perfect mesh sat in the folder — and
+        the engine would then burn its whole retry budget re-generating code to
+        fix a script that was never broken.
+
+        The artifact is the product, so let the artifact settle it: an STL that
+        parses is complete (the binary reader demands the header's triangle
+        count match the file length exactly, so a half-written export is
+        rejected). Watertightness is deliberately NOT required here — that is a
+        printability question, and ``check`` already reports it as a hard 'fail'
+        advisory. A timeout or a policy refusal is never salvaged: those killed
+        the script rather than followed it.
+        """
+        if result.ok or result.timed_out or getattr(result, "denied", ""):
+            return ""
+        if inspect_stl(Path(workdir) / "model.stl") is None:
+            return ""
+        detail = (f"the interpreter exited {result.returncode} while shutting down, "
+                  f"after exporting a complete mesh — keeping the model")
+        logger.warning("studio 3D: %s", detail)
+        return detail
 
     def check(self, outcome: ExecOutcome, workdir: Path) -> List[Advisory]:
         stl = Path(workdir) / "model.stl"

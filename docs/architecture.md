@@ -4,7 +4,7 @@ Merged system: **v2's Python engine is the base**; v1's unique features
 (gesture mouse control, thinking-model handling, bilingual prompt, desktop
 tool catalog, long-term facts, screen vision) were ported into it. The whole
 Node stack from v1 is gone — the HUD is one static HTML file served by the
-Python app. See [[Decisions]] for the why.
+Python app. See [[decisions|Decisions]] for the why.
 
 ## Pipeline
 

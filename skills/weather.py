@@ -78,6 +78,41 @@ def _strip_time_words(city: str) -> str:
     return _TRAILING_TIME.sub("", city).strip()
 
 
+#: A conjunction that may start a NEW CLAUSE inside the greedy city capture.
+#: ``_CITY`` runs to end-of-line over ``[\w .'-]``, so a compound question —
+#: "the weather in skopje AND while telling me what should i do" — captured the
+#: entire rest of the sentence as the place name and answered "I couldn't find a
+#: place called skopje and while telling me…". Reported from a live session.
+_CLAUSE_BREAK = re.compile(
+    r"\s+\b(?:and|but|or|while|because|since|so|then|also|plus|if|when|"
+    r"и|но|или|додека|затоа|бидејќи|па|ако|кога)\b\s+(?P<rest>.+)$",
+    re.IGNORECASE)
+
+#: What proves the remainder really is a new clause rather than more of the
+#: place name. Without this check "bosnia AND herzegovina" and "trinidad AND
+#: tobago" would be cut in half — both are places people ask about. A pronoun,
+#: a modal or a question word is not part of any city's name.
+_NEW_CLAUSE = re.compile(
+    r"\b(?:i|i'?m|you|your|me|my|we|us|can|could|would|should|shall|will|"
+    r"what|how|why|who|where|tell|give|show|do|does|did|is|are|am|please|"
+    r"јас|ти|ми|ме|мене|ние|нас|дали|што|како|зошто|кој|каде|кажи|дај|"
+    r"покажи|можеш|треба|сум)\b", re.IGNORECASE)
+
+
+def _cut_at_clause(city: str) -> str:
+    """Trim a captured city at the point a second request begins.
+
+    Conservative on purpose: it cuts only when a conjunction is followed by
+    something no place name contains. A two-word place joined by "and" is left
+    whole, and so is a plain list ("skopje and london") — that one is a
+    different question, but answering the first city beats answering neither.
+    """
+    match = _CLAUSE_BREAK.search(city)
+    if match and _NEW_CLAUSE.search(match.group("rest")):
+        return city[: match.start()].strip()
+    return city
+
+
 #: A trailing "in/for/at <X>" that is plainly not a place, so the city fallback
 #: doesn't geocode "the moment" and report it can't find it.
 _NOT_A_CITY = {"the moment", "the minute", "now", "home", "work",
@@ -255,11 +290,11 @@ class WeatherSkill(Skill):
         import httpx
 
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
-        city = _strip_time_words(
+        speak_mk = mk.is_cyrillic(request.utterance)
+        city = _strip_time_words(_cut_at_clause(
             (request.args.get("city") or gd.get("city") or gd.get("cityb")
              or gd.get("city2") or gd.get("city3") or gd.get("city4")
-             or gd.get("city5") or "").strip(" ?.!"))
+             or gd.get("city5") or "").strip(" ?.!")))
         if city and not _looks_like_city(city, allow_article=True):
             # A pattern's greedy city group can capture a non-place ("weather at
             # work", "forecast for next quarter"); treat it as the default

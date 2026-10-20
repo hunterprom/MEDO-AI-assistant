@@ -1,0 +1,19 @@
+# A routine with no schedule at all — purely a phrase, and a parameter the LLM
+# can fill in ("start a focus session on the router bug").
+name: focus session
+description: >-
+  Start a block of focused work: note what you're working on and set a timer.
+  Say "focus session" or "start a focus session".
+trigger:
+  # "focus session" is deliberately NOT here: the window-focus skill already
+  # claims it on the fast path, and registration order means that skill wins.
+  # `python -m core.composer --check` warns about collisions like that.
+  phrase: ["start focusing", "deep work session", "почни да работам"]
+params:
+  topic: deep work
+  minutes: "25"
+steps:
+  - skill: notes
+    args:
+      text: "Focus session: {topic}"
+  - say: "Focusing on {topic} for {minutes} minutes."

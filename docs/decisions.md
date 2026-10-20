@@ -578,7 +578,7 @@ PyPI `packaging` lib (which would break the test run). A CI-ish test
 (`tests/test_packaging_manifest.py`) enforces the installer, specs, and manifest
 stay consistent, and that the mediapipe/numpy + signing/SmartScreen gotchas are
 documented. Real builds happen on a Windows machine (can't run PyInstaller/Inno in
-CI here) — `docs/Packaging.md` has the build steps + a manual install-test
+CI here) — `docs/packaging.md` has the build steps + a manual install-test
 checklist.
 
 **Intertec note:** packaged a multi-process, GPU-orchestrating local AI app into a
@@ -608,7 +608,7 @@ Any send/post action sets `requires_confirmation`; closing an app confirms too.
 The trust boundary: an instruction from `context["untrusted"]` / untrusted
 provenance is refused — only the user's own voice/text drives software. Three
 reference connectors (media, window, browser) + a documented template; adding an
-app is a new file, not a core edit. docs/Software Connectors.md has the ladder,
+app is a new file, not a core edit. docs/software-connectors.md has the ladder,
 template, and security rules.
 
 ## Security layer S3: prompt-injection trust boundary (2026-07-30)
@@ -645,7 +645,7 @@ as before).
 plugin skill can only use capabilities it DECLARED — the engine denies an
 undeclared one. Generated code is already safe: self_dev proposes in a git
 worktree, runs the test gate, and applies only on an explicit human call
-(`auto_apply=False`). HONEST LIMIT (docs/Security.md): once approved+imported, an
+(`auto_apply=False`). HONEST LIMIT (docs/security.md): once approved+imported, an
 in-process plugin can't be perfectly confined (`import httpx` can't be blocked in
 running code); strong third-party sandboxing needs a subprocess and is future work.
 The controls that hold: nothing runs unapproved, skills are capability-gated, and
@@ -682,7 +682,7 @@ records a POLICY_DENY / CONFIRM_GRANTED-DENIED / CLOUD_CALL when on.
 
 Security layer COMPLETE (S1–S6). Full trust model + honest threat limits (esp.
 in-process plugin confinement needing a subprocess sandbox) documented in
-docs/Security.md §8.
+docs/security.md §8.
 
 ## Security layer: YOLO / dev mode (2026-07-30)
 

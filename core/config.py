@@ -217,6 +217,15 @@ class FillerConfig(BaseModel):
     #: Speak a filler when the LLM has produced nothing after this long.
     delay_s: float = 8.0
     #: A big/complex question gets this quicker acknowledgement instead.
+    #:
+    #: KEPT AT 2.0. It was briefly raised to 3.5 on the theory that streaming had
+    #: made a 2 s filler arrive just before the answer it was covering for — but
+    #: that reasoning was wrong once the filler learned to stand down the instant
+    #: a sentence is queued (voice/loop.py). With that event in place the filler
+    #: can no longer talk over the reply at ANY delay, so a longer delay buys
+    #: nothing and costs 1.5 s of additional dead air on every slow answer, which
+    #: is precisely the silence this setting exists to fill. Tune against real
+    #: numbers if you want to move it: ``python -m core.metrics --first-audio``.
     big_delay_s: float = 2.0
     #: A question with at least this many words counts as "big".
     big_question_words: int = 12
@@ -248,6 +257,30 @@ class RemoteConfig(BaseModel):
     # reached over a name (mDNS "medo.local", a NetBIOS/computer name) needs its
     # origin listed here, e.g. ["http://medo.local:8730"].
     allowed_origins: list[str] = Field(default_factory=list)
+    # --- TLS (remote/tls.py) -------------------------------------------------
+    # Serve https:// instead of http://. Off by default because turning it on
+    # changes the URL every existing client uses — a watch paired over http
+    # stops connecting until it is re-pointed. On a shared network turn it ON:
+    # without it the bearer token crosses the LAN in cleartext on every request.
+    tls_enabled: bool = False
+    # Leave both empty and MEDO mints a self-signed certificate on first serve
+    # (data/tls/, git-ignored, covering localhost + this machine's addresses).
+    # Set them to use a real certificate from your own CA instead.
+    tls_certfile: str = ""
+    tls_keyfile: str = ""
+    # --- throttling (remote/ratelimit.py) ------------------------------------
+    # Sustained requests per minute per caller (per token, or per address for an
+    # unauthenticated one). 0 disables throttling. The default is sized for the
+    # HUD's polling (roughly 30-60/min) with room for a second device; a watch
+    # app needs a small fraction of it.
+    rate_limit_per_minute: int = 240
+    # Burst depth — how many requests a caller may fire back-to-back before the
+    # sustained rate starts to bite. A HUD tab opening fires ~10 at once.
+    rate_limit_burst: int = 60
+    # Requests from this machine skip the throttle. The HUD and the vision
+    # sidecar poll hard and are already auth-exempt; throttling them would only
+    # break the UI. Set False to throttle everything, loopback included.
+    rate_limit_local_exempt: bool = True
 
 
 class PointerConfig(BaseModel):
@@ -297,7 +330,7 @@ class PointerConfig(BaseModel):
     #: pose -> action overrides, e.g. {"open_palm": "switch_window"}. Actions:
     #: move, drag, scroll, zoom, right_click, volume_up, volume_down,
     #: next_tab, switch_window, taskbar, idle.
-    pose_actions: dict[str, str] = Field(default_factory=dict)  # how far off 90 deg an L (thumb+index) may be
+    pose_actions: dict[str, str] = Field(default_factory=dict)
 
 
 class GestureRecognitionConfig(BaseModel):
@@ -356,6 +389,14 @@ class VisionConfig(BaseModel):
     bench: BenchConfig = Field(default_factory=BenchConfig)
     # Screen agent (skills/screen_agent.py): max actions per task before it
     # stops itself. Gated by the PC-control switch + a spoken confirmation.
+    #
+    # WHY 6 — lower than the browser agent's 8, deliberately. This one drives the
+    # real desktop: a wrong click lands in whatever application happens to be
+    # under the cursor, with no page to go back to. The screen is also read from
+    # a screenshot by a 3B vision model, so its confidence degrades faster than
+    # the browser agent's structured element list. Six is enough for the tasks
+    # people actually ask for and short enough that a confused run is over
+    # quickly.
     agent_enabled: bool = True
     agent_max_steps: int = 6
     # Recognized gesture -> the utterance routed through the Intent Router.
@@ -659,7 +700,7 @@ class LanguagesConfig(BaseModel):
 
 
 class TTSConfig(BaseModel):
-    """MEDO's voice — see voice/providers.py and docs/Voice.md.
+    """MEDO's voice — see voice/providers.py and docs/voice.md.
 
     MEDO used to speak fifteen of its sixteen languages through Microsoft's
     cloud (``edge-tts``), which made its voice the one part of it that wasn't
@@ -815,7 +856,7 @@ class AudioConfig(BaseModel):
 class ModeConfig(BaseModel):
     """Expert PROFILES — presentation + which skills are surfaced. A profile
     is not a safety switch: none of these relax the confirmation gate, the
-    path whitelist, or the PC-control switch. See docs/Decisions.md.
+    path whitelist, or the PC-control switch. See docs/decisions.md.
     """
 
     # MEDO LION MODE — the defensive-security profile. Off by default; a
@@ -852,7 +893,7 @@ class SafetyConfig(BaseModel):
 
 
 class SecurityConfig(BaseModel):
-    """Central security-layer policy (see security/policy.py + docs/Security.md).
+    """Central security-layer policy (see security/policy.py + docs/security.md).
 
     S1 wires the actuation master-switch gate through the policy engine (behaviour
     identical to today's ``controls_pc`` check) and DEFINES the rest. The fields
@@ -907,7 +948,7 @@ class SoftwareConfig(BaseModel):
     """Controlling OTHER local apps by command (software/ connectors). Direct
     local control, NOT MCP. Off by default so it's purely additive — flipping it
     on registers the connector actions as skills (each gated by the policy
-    engine). See docs/Software Connectors.md."""
+    engine). See docs/software-connectors.md."""
 
     enabled: bool = False
     #: Per-connector opt-out: {app_id: false} hides that connector.
@@ -947,6 +988,13 @@ class BrowserConfig(BaseModel):
     #: session cookies, so it is git-ignored like any other secret.
     profile_dir: str = "browser-profile"
     #: Cap on autonomous actions in one "do X on the site" task.
+    #:
+    #: WHY 8. This is a runaway bound, not a capability estimate. Real tasks
+    #: ("open the first video and like it") finish in three to five actions;
+    #: eight leaves room for a mis-click and a retry. What it exists to stop is
+    #: a model that has lost the thread clicking around a live website
+    #: indefinitely — every step is a real action on a real page, and there is
+    #: no undo. Reaching the cap is reported, never silently treated as success.
     max_steps: int = 8
     timeout_s: float = 20.0
     #: Hosts MEDO must never drive. Substring match on the hostname, so
@@ -964,9 +1012,16 @@ class CouncilConfig(BaseModel):
     enabled: bool = True
     #: Who answers when a question matches no field.
     default_agent: str = "software"
-    #: Most specialists consulted for one "convene the council" question. Each
-    #: is a full model round-trip, so this is a latency dial as much as a
-    #: quality one.
+    #: Most specialists consulted for one "convene the council" question.
+    #:
+    #: WHY 3. Each member is a full model round-trip, and on the 30B local brain
+    #: that is several seconds apiece — the answers are gathered in parallel, but
+    #: the reply waits for the slowest. Three is where the curve flattens: one
+    #: expert is a single framing (the thing a council is meant to avoid), two
+    #: disagree with no tie-break, and beyond three the synthesis starts repeating
+    #: itself because most questions genuinely only touch two or three fields.
+    #: Raise it if you have a fast brain and patience; it is a latency dial as
+    #: much as a quality one.
     max_members: int = 3
     #: Specialist keys to switch off (HUD/config toggle).
     disabled: list[str] = Field(default_factory=list)
@@ -976,6 +1031,24 @@ class CouncilConfig(BaseModel):
     #: each claim and returning a deterministic, fail-safe confidence verdict.
     #: See skills/second_opinion.py. On by default; costs nothing until invoked.
     second_opinion: bool = True
+    #: Choose specialists by MEANING (embedding the role description) rather than
+    #: by their trigger-word lists — see core/council_index.py. Uses the
+    #: nomic-embed-text already loaded for facts and documents, so it adds no
+    #: model and no dependency. Falls back to the trigger words whenever the
+    #: embedder is unavailable or nothing clears the threshold, so switching it
+    #: off only ever returns you to the older behaviour.
+    semantic_selection: bool = True
+    #: Minimum cosine similarity for a specialist to be considered relevant.
+    #: Lower = a wider council (more experts pulled into a question, more model
+    #: round-trips); higher = only strong topical matches, falling back to the
+    #: word lists more often. 0.45 was chosen against nomic-embed-text, where a
+    #: question and a matching role description typically score 0.5-0.7 and an
+    #: unrelated pair sits near 0.3.
+    semantic_threshold: float = 0.45
+    #: Cosine scores within this of each other are treated as equal, and the
+    #: trigger-word count breaks the tie. Sized to be larger than the noise
+    #: between two genuinely similar roles and smaller than a real topical gap.
+    semantic_tie_band: float = 0.02
 
 
 class WeatherConfig(BaseModel):
@@ -1046,6 +1119,29 @@ class WebSearchConfig(BaseModel):
     max_results: int = 5
 
 
+class BugReportConfig(BaseModel):
+    """Saying "that was a bug" and getting a file — skills/bug_report.py.
+
+    A developer feature, on by default because its cost is one small local
+    markdown file and its value is a bug report written while the evidence is
+    still there rather than remembered wrongly a day later.
+    """
+
+    #: Off makes the skill decline out loud rather than disappear, so a user who
+    #: says "that was a bug" learns why nothing happened instead of wondering.
+    enabled: bool = True
+    #: Where the .md files land, relative to the project root. GITIGNORED by
+    #: default and it must stay that way: a report quotes what was said in the
+    #: room, and committing conversations is not a mistake you can take back.
+    directory: str = "bugs"
+    #: Turns of run-up included after the faulty one. A misroute is often set up
+    #: by the exchange before it; 0 keeps the report to the single bad turn.
+    context_turns: int = 3
+    #: Reports kept before the oldest are deleted. This is a drawer, not an
+    #: archive — and without a cap a stuck "that was a bug" fills the disk.
+    max_reports: int = 500
+
+
 class VisionLLMConfig(BaseModel):
     """Local vision model for 'what do you see' / 'read my screen'."""
 
@@ -1055,11 +1151,39 @@ class VisionLLMConfig(BaseModel):
 
 class MemoryConfig(BaseModel):
     db_path: str = "medo.db"
+    #: Conversation turns kept and replayed to the model.
+    #:
+    #: WHY 10. Context is the scarcest resource on the local brain: qwen3:30b runs
+    #: at num_ctx 4096 on a 12 GB card, and ten turns of spoken dialogue is
+    #: already a third of that before the system prompt, the facts and the tool
+    #: schemas. Ten also covers what follow-ups actually reach back for — "and
+    #: tomorrow?", "do that again" — which is two or three turns in practice.
     max_turns: int = 10
-    max_facts: int = 20                 # facts injected into the system prompt
+    #: Remembered facts injected into the system prompt each LLM turn.
+    #:
+    #: WHY 20. Same budget, different claimant. With an embed model the twenty
+    #: are the twenty most RELEVANT to the current utterance (not the newest), so
+    #: this is a precision setting rather than a memory size — the store can hold
+    #: thousands. Twenty short facts is roughly 300 tokens; going much past that
+    #: crowds out the conversation without improving recall, because the
+    #: twenty-first fact is by construction less relevant than the first.
+    max_facts: int = 20
     # Local Ollama embedding model for semantic fact recall ("dentist" finds
     # "my dentist is Dr. ..."). Empty string disables -> newest-N as before.
     embed_model: str = "nomic-embed-text"
+    #: EPISODIC MEMORY (core/episodes.py): at the end of a session the local
+    #: model writes a few sentences about what was discussed, embeds them, and
+    #: keeps THAT — not the transcript. "What did we talk about yesterday?" then
+    #: has an answer, and a verbatim record of everything said in this room does
+    #: not exist to be leaked.
+    episodes_enabled: bool = True
+    #: Forget episode summaries older than this. Pinned ones are kept regardless.
+    #: 0 disables the sweep — supported, but it means the summary of every
+    #: conversation ever held here stays on disk indefinitely.
+    episode_retention_days: int = 90
+    #: A session shorter than this is a command, not a conversation, and is not
+    #: worth a model call or a memory ("what time is it" -> nothing remembered).
+    episode_min_turns: int = 2
     # Where "import this file" copies documents and pictures. Under Documents
     # by default so it sits inside the whitelist AND inside the document
     # index's roots — imports stay searchable after a plain reindex.
@@ -1092,6 +1216,19 @@ class MCPConfig(BaseModel):
     connect_timeout_s: float = 15.0
     call_timeout_s: float = 60.0
     servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    # --- the other direction: MEDO AS an MCP server ---------------------------
+    # (mcp_servers/skills_server.py — run it with
+    #  `python -m mcp_servers.skills_server`, no flag needed; these settings only
+    #  govern WHAT it offers.)
+    #: Skills to expose in ADDITION to the read-only ones, named individually.
+    #: There is no wildcard on purpose: widening this is a decision about one
+    #: specific capability and one specific program on the other end of the pipe.
+    server_expose: list[str] = Field(default_factory=list)
+    #: Drop the read-only filter entirely. Everything MEDO can do — control the
+    #: screen, edit files, power the machine — becomes callable by whatever
+    #: model is driving the client. Never turn this on for a client you did not
+    #: write yourself.
+    server_allow_actuation: bool = False
 
 
 class RoutineItem(BaseModel):
@@ -1131,9 +1268,48 @@ class BriefingConfig(BaseModel):
     )
 
 
+class ProactiveConfig(BaseModel):
+    """MEDO speaking without being asked (core/proactive.py).
+
+    OFF by default, and that is not timidity: an assistant that starts
+    conversations is charming for a day and intolerable by Friday. Turning it on
+    is a decision about how much of the room MEDO gets to occupy.
+
+    Whatever is enabled here obeys the same three rules — never during a
+    conversation, never inside the quiet window, never twice inside a cooldown.
+    """
+
+    enabled: bool = False
+    #: Do-not-disturb, local time. The window wraps midnight, so the default
+    #: really is one window from ten at night to seven in the morning.
+    quiet_from: str = "22:00"
+    quiet_until: str = "07:00"
+    #: Say something when the battery crosses below `battery_threshold` percent.
+    #: Fires on the CROSSING, once, not on every poll while it is low.
+    battery_enabled: bool = True
+    battery_threshold: int = 15
+    #: Fixed-time nudges: [{at: "17:30", say: "Time to stop."}].
+    at: list[dict] = Field(default_factory=list)
+
+
 class LoggingConfig(BaseModel):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     routing_stats: bool = True
+    #: Record every FAST/SEMANTIC route, and whether the user took it back
+    #: seconds later (core/corrections.py). This is the ONLY way a fast-path
+    #: misfire becomes visible — a wrong regex route is fast, confident and
+    #: indistinguishable from a right one in the latency table. Read it with
+    #: ``python -m core.metrics --routing``.
+    #:
+    #: It stores the text of what was said, in the same local database the
+    #: conversation already lives in. Nothing leaves the machine; set this to
+    #: false to store nothing at all, and see ``MetricsStore.prune`` for the
+    #: retention knob.
+    route_telemetry: bool = True
+    #: How long after a route a follow-up can still be read as taking it back.
+    #: Long enough to hear a wrong answer out, short enough that an unrelated
+    #: request a minute later isn't blamed on it.
+    correction_window_s: float = 25.0
 
 
 class SelfDevConfig(BaseModel):
@@ -1175,8 +1351,35 @@ class SelfDevConfig(BaseModel):
     #: the agent never needs shell access.
     permission_mode: str = "acceptEdits"
     #: propose & wait: proposals are never auto-merged. Only flip this for the
-    #: 'auto-apply on green' autonomy level.
+    #: 'auto-apply on green' autonomy level. Even then the approval is WRITTEN
+    #: DOWN (core/selfdev_approval.py) with ``approved_by: auto_apply`` — turning
+    #: this on is the human decision, made in advance and recorded as such.
     auto_apply: bool = False
+    #: Cut outbound network access during the test+lint gate (core/gate_netblock.py).
+    #: The gate executes agent-written code at pytest collection time, so this
+    #: stops that code fetching a payload or posting anything out. Loopback stays
+    #: open — MEDO's own suite binds test servers on 127.0.0.1. This is an
+    #: in-process guard, not containment: use ``sandbox_cmd`` for that.
+    block_network_in_gate: bool = True
+    #: Refuse a proposal whose diff is larger than this. A self-change worth
+    #: reading is small; a 4 MB diff is not reviewable, and "the human approved
+    #: it" stops meaning anything at that size. Also bounds the damage from an
+    #: agent that decides to reformat the repository.
+    max_diff_bytes: int = 200_000
+    #: The same bound, in files. Twenty files is already a big change for one
+    #: request.
+    max_files_changed: int = 40
+    #: Keep the worktree of a proposal that FAILED its gate, for debugging. Off:
+    #: a failed proposal can never be applied, and the diff plus the gate output
+    #: are kept in the Proposal object regardless, so the tree is just litter.
+    keep_failed_worktree: bool = False
+    #: After merging an approved change, run the test suite against the MERGED
+    #: repository and roll the merge back if it fails. The gate proved the branch
+    #: was good in isolation; this proves the merge is good, which is a different
+    #: claim whenever the branch was cut from an older HEAD.
+    verify_after_apply: bool = True
+    #: Where approvals are recorded. Relative paths resolve against the repo root.
+    approvals_path: str = "data/selfdev/approvals.json"
     #: Repo-relative globs MEDO MAY change ("dir/**" = that whole subtree). A
     #: proposal that touches anything outside the safelist is refused. Broad by
     #: default (so it can fix bugs across the code), but the denylist always wins.
@@ -1227,7 +1430,7 @@ class StudioConfig(BaseModel):
     library code and EXECUTING it in a sandbox, with a self-correcting loop +
     parametric iteration. Off by default: it runs generated (untrusted) code on
     this machine — sandboxed — so turning it on opts into that. See
-    docs/Maker Studio.md."""
+    docs/maker-studio.md."""
 
     enabled: bool = False
     #: Where projects land — one folder each (code + artifacts + numbered versions).
@@ -1237,6 +1440,13 @@ class StudioConfig(BaseModel):
     model: str = ""
     #: Bounded self-correction: times an execution error is fed back for a retry.
     max_retries: int = 3
+    #: How long the brain gets to WRITE the code. Deliberately not
+    #: ``llm.cli_timeout_s`` / ``llm.request_timeout_s``: those bound a spoken
+    #: turn, where 180 s is already an eternity, while this is a build action
+    #: the user is told to expect to wait for. Measured on this machine, a
+    #: parametric phone stand took 195 s of real code writing — it would have
+    #: been killed at 180 s and reported as a failure, four times over.
+    generate_timeout_s: float = 600.0
     #: Hard cap on each sandboxed run of generated code.
     exec_timeout_s: float = 60.0
     #: Optional OS-isolation wrapper prefixed to the sandboxed command (e.g.
@@ -1245,6 +1455,44 @@ class StudioConfig(BaseModel):
     sandbox_cmd: list[str] = Field(default_factory=list)
     #: Keep at most this many versions per project (0 = unlimited).
     keep_versions: int = 20
+
+
+class CoworkConfig(BaseModel):
+    """MEDO Cowork — bounded, voice-driven orchestration of a multi-step task.
+
+    Deliberately NOT a general autonomous agent: it plans visibly, confirms the
+    risky steps, runs one step at a time and STOPS on failure instead of
+    improvising. Off by default because it acts across skills, connectors and
+    devices in one go; turning it on opts into that. See docs/cowork.md."""
+
+    enabled: bool = False
+    #: Hard cap on plan length. Past this MEDO says the task is too big and asks
+    #: for it to be split, rather than running a fragile fifteen-step chain on a
+    #: local brain — a failure halfway through is what people remember.
+    max_steps: int = 6
+    #: Let a plan run with nobody there to approve it (a routine, a webhook, a
+    #: schedule). Off, and it should stay off: the approval IS the safety model,
+    #: and on a timer the only thing that could answer the prompt is the
+    #: schedule itself.
+    allow_unattended: bool = False
+    #: Brain that PLANS. "" = the active default brain (local). A stronger or
+    #: cloud model may plan better; sending the task to one is an egress, so it
+    #: goes through the same privacy gate as any cloud brain.
+    model: str = ""
+    #: How long the brain gets to PLAN. Deliberately not ``llm.request_timeout_s``
+    #: (120 s, sized so nobody waits two minutes for a spoken answer): planning
+    #: reads a catalogue of every capability MEDO has and then writes JSON.
+    #: Measured on this machine, qwen3:30b takes 60-120 s for a two-step plan and
+    #: ran PAST 120 s on a long one — which arrived as "I couldn't work out a
+    #: plan" when the real answer was "it needs more time than you gave it".
+    plan_timeout_s: float = 300.0
+    #: Speak each step as it completes instead of only at the end.
+    narrate: bool = True
+    #: Never execute — always just say what the plan would be. For practice and
+    #: demos; a per-request "dry run" phrase does the same thing for one task.
+    dry_run: bool = False
+    #: Allow "save that as demo prep", which writes a routines/*.yaml.
+    save_routines: bool = True
 
 
 class Settings(BaseSettings):
@@ -1282,6 +1530,7 @@ class Settings(BaseSettings):
     news: NewsConfig = Field(default_factory=NewsConfig)
     web_fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
     web_search: WebSearchConfig = Field(default_factory=WebSearchConfig)
+    bug_reports: BugReportConfig = Field(default_factory=BugReportConfig)
     vision_llm: VisionLLMConfig = Field(default_factory=VisionLLMConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
@@ -1290,8 +1539,10 @@ class Settings(BaseSettings):
     self_dev: SelfDevConfig = Field(default_factory=SelfDevConfig)
     app_builder: AppBuilderConfig = Field(default_factory=AppBuilderConfig)
     studio: StudioConfig = Field(default_factory=StudioConfig)
+    cowork: CoworkConfig = Field(default_factory=CoworkConfig)
     briefing: BriefingConfig = Field(default_factory=BriefingConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
     # Raw per-platform app launch table; interpreted by skills/apps.py (M2).
     skills: dict = Field(default_factory=dict)
 
@@ -1338,23 +1589,38 @@ class Settings(BaseSettings):
         )
 
 
-def load_settings(config_path: str | Path | None = None) -> Settings:
+def load_settings(config_path: str | Path | None = None, *,
+                  validate: bool = True) -> Settings:
     """Load settings, optionally from a non-default YAML path (used by tests).
 
     ``yaml_file`` lives in ``model_config`` — a class-level value that the
     ``_yaml_file`` init kwarg silently fails to override on the installed
     pydantic-settings, so the alternate file was never actually read. A
     throwaway subclass with its own ``model_config`` is version-proof.
+
+    The loaded settings are then CHECKED (core/config_check.py) and a value MEDO
+    cannot run with raises :class:`~core.config_check.ConfigError` here, at
+    startup, naming the key and the fix. Pydantic catches a value of the wrong
+    type; this catches one of the right type that means nothing —
+    ``max_members: 0``, a port of 70000, a TLS certificate with no key. Those
+    used to load cleanly and fail hours later as an unexplained silence.
+    Warnings are logged and never raise. Pass ``validate=False`` to load a
+    known-bad file deliberately (the config-check CLI does).
     """
     if config_path is None:
-        return Settings()
+        settings = Settings()
+    else:
+        class _FileSettings(Settings):
+            model_config = SettingsConfigDict(
+                **{**Settings.model_config, "yaml_file": str(config_path)}
+            )
 
-    class _FileSettings(Settings):
-        model_config = SettingsConfigDict(
-            **{**Settings.model_config, "yaml_file": str(config_path)}
-        )
+        settings = _FileSettings()
+    if validate:
+        from core.config_check import validate_settings
 
-    return _FileSettings()
+        validate_settings(settings)
+    return settings
 
 
 # --- local overrides (online API key + chosen mic) --------------------------

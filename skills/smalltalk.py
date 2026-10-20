@@ -88,14 +88,28 @@ class SmallTalkSkill(Skill):
         self._rng = rng or random.Random()
 
     def _category(self, text: str) -> str:
+        """Which pleasantry this is — or "" when it is not one at all."""
         for cat, pats in self._CATEGORIES:
             if any(p.search(text) for p in pats):
                 return cat
-        return "greet"
+        return ""
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        cat = self._category(request.text)
-        lang = "mk" if mk.is_cyrillic(request.text) else "en"
+        spoken = request.utterance
+        cat = self._category(spoken)
+        if not cat:
+            # The fast path only arrives here after one of these patterns
+            # matched, so an unmatched utterance means the MODEL picked this
+            # tool (or the semantic tier did) for something that is not a
+            # pleasantry — routinely a garbled transcript. Defaulting to
+            # "greet" answered it with a canned hello: asked "Твоја бога.",
+            # MEDO said "At your service.", a reply to a greeting that never
+            # happened. Decline instead; the router treats an unsuccessful tool
+            # as needing synthesis, so the model answers what was really said.
+            return SkillResult(
+                "Not a greeting or a pleasantry — answer what the user "
+                "actually said.", success=False, data={"smalltalk": ""})
+        lang = "mk" if mk.is_cyrillic(spoken) else "en"
         options = self._REPLIES[cat].get(lang) or self._REPLIES[cat]["en"]
         return SkillResult(self._rng.choice(options), data={"smalltalk": cat})
 

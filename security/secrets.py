@@ -8,7 +8,7 @@ discipline. Secrets themselves keep living in git-ignored ``secrets.local.yaml``
 
 At-rest encryption of the most sensitive stored data (voiceprint, flagged memory)
 is an OPTIONAL future add (needs a crypto dep); left out of the default install on
-purpose. See docs/Security.md.
+purpose. See docs/security.md.
 """
 
 from __future__ import annotations

@@ -21,7 +21,7 @@ It still resets to off on restart, because it is a mode you enter for a task.
 
 (This replaced an earlier "stop asking me" bypass. An unrestricted mode is a
 liability; a defensive-security profile is a real, hireable specialty. See
-docs/Decisions.md.)
+docs/decisions.md.)
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ class LionModeSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         arg = request.args.get("state")
         if arg is not None:
             want_on = str(arg).lower() in ("on", "true", "enable", "1")

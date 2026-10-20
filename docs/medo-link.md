@@ -72,4 +72,4 @@ mechanism that serves built-in skills, plugins, and MCP tools serves devices.
 HTTP/WS over MQTT because the API already exists and a broker is one more
 always-on dependency; per-capability confirmation because the safety decision
 belongs to the device author who knows which commands move motors. See
-`docs/Decisions.md`.
+`docs/decisions.md`.

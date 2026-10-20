@@ -27,7 +27,7 @@ Three families cover fifteen of the sixteen:
 Piper has none, Kokoro has none, Chatterbox's 23 languages have none, and
 Meta's MMS is CC-BY-NC so it can't ship in something sold. mk therefore stays
 on edge-tts as a single, declared, config-gated cloud exception until a
-fine-tuned voice exists — see docs/Voice.md. Serbian (the nearest Cyrillic
+fine-tuned voice exists — see docs/voice.md. Serbian (the nearest Cyrillic
 Slavic voice Piper does have) is registered as ``fallback`` so the offline
 path is a documented choice rather than silence.
 """

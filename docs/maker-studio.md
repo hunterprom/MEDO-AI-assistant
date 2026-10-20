@@ -40,7 +40,15 @@ numbered versions.
   ground, or no power rail — reported, never silently "fixed". (KiCad netlist
   export is an optional follow-on; KiCad CLI is a separate system install.)
   - Say: *"design a circuit for an ESP32 blinking an LED"*, *"draw a schematic for
-    a 3.3V regulator"*, *"wire up a temperature sensor to an Arduino"*.
+    a 3.3V regulator"*, *"sketch a circuit for a motor driver"* — a **drafting
+    verb** (design / draw / sketch / generate) plus the noun.
+  - Wiring *questions* go to `circuit_help` instead, which explains the
+    connections and writes the Arduino sketch: *"how do I wire up an LED"*,
+    *"wiring diagram for an ultrasonic sensor"*, *"wire up a temperature sensor
+    to an Arduino"*. That skill registers first and would otherwise claim the
+    drafting phrases too, so it stands aside for an explicit request to **draw**
+    one — but only while `studio.enabled`, since with the Studio off an
+    explanation beats a phrase that routes nowhere.
 
 - **S3 — 3D models** (`studio/domains/model3d.py`): the brain writes **CadQuery**
   (Python code-CAD) → **STL + STEP**, parametric (key dimensions are named
@@ -91,12 +99,63 @@ SchemDraw and CadQuery are **optional** (`requirements-studio.txt`); each skill
 degrades with a spoken *"install X to enable this"* when its library is absent —
 nothing breaks at startup. CadQuery is large (pulls OpenCascade).
 
+```
+.venv\Scripts\pip install -r requirements-studio.txt
+```
+
+## Timing — a build is not a spoken turn
+
+Making something real takes **minutes**, nearly all of it the brain writing the
+library code. Measured here: a parametric phone stand was 195 s of code writing
+alone, ~510 s from the spoken sentence to a finished STL.
+
+Two consequences, both deliberate:
+
+- **The build runs in the background.** MEDO answers *"I'll model that now and
+  tell you when it's ready"* immediately and speaks the result when it lands, so
+  the assistant stays answerable while it works. A second request during a build
+  is declined rather than queued. (A skill constructed without an announcer —
+  the tests, the CLI — still builds synchronously.)
+- **Code generation gets `studio.generate_timeout_s` (600 s), not the
+  conversation timeout.** `llm.cli_timeout_s` is 180 s because nobody waits
+  three minutes for a *spoken* answer; that ceiling killed the 195 s phone stand
+  just short of finishing, four times over, and reported it as a failure.
+
+A clarifying question is still asked **in the turn that prompted it** — the
+brief is computed before anything slow starts, because a question arriving ten
+minutes later is no use.
+
+## Platform notes
+
+- **CadQuery's OpenCascade bindings can segfault while unloading** (Windows,
+  cadquery 2.8.0 + OCP 7.9.3: exit `0xC0000005`, reproducible on a bare
+  `import cadquery`). The script has already finished and both exports have
+  landed. `Model3DDomain.execute` therefore judges success on a **complete,
+  parseable STL** rather than the exit code, logs the crash, and keeps the
+  model. A timeout or a policy refusal is never salvaged this way — those
+  killed the script rather than followed it — and a truncated export fails the
+  STL reader, so it isn't "any file will do".
+- **Generated code runs headless** (`MPLBACKEND=Agg`, set in the sandbox
+  environment). schemdraw's matplotlib backend ends a drawing with
+  `fig.show()` + `plt.show()`, which starts the MPL event loop and blocks
+  forever in a subprocess with no display — every schematic used to run until
+  the sandbox timeout killed it.
+- **A CLI-agent brain is not asked for a spoken answer here.** `_flatten_for_cli`
+  normally ends the prompt with *"Reply with only your spoken answer, as plain
+  text"*; the Studio passes `for_speech=False`, because that trailer is the last
+  line the agent reads and it overrode *"Output ONLY the Python code"* — a
+  request for a phone stand came back as an English paragraph describing one,
+  which was then written to `model.py` and executed.
+
 ## Honest limits
 
 - **Quality scales with the brain.** A small local model produces simpler designs
   than a strong one. Set a stronger model for hard generation via `studio.model`
-  (a cloud brain honours the privacy gate). Never expect frontier-level CAD/EDA
-  from a 3B local model.
+  — but note it names a model of the **active provider**, not another provider:
+  the Brain builds its client from `settings.llm`, so with `llm.provider:
+  claude-code` a `studio.model` of `qwen3:30b` would be passed to the Claude CLI,
+  not to Ollama. To generate locally, switch the brain. Never expect
+  frontier-level CAD/EDA from a 3B local model.
 - MEDO **assists**; it does not replace an engineer's review. Complex or
   safety-critical designs need checking. The advisories are sanity checks, not a
   sign-off.
