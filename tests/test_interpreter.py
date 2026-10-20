@@ -70,7 +70,7 @@ def _loop(modes, router, stt_return):
     loop._stt = _STT()
     spoken = []
 
-    async def _fake_speak(text):
+    async def _fake_speak(text, language=None):
         spoken.append(text)
         return 0.0
 

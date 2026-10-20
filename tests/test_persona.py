@@ -93,9 +93,13 @@ class _DangerSkill(Skill):
     patterns = [re.compile(r"\bshut everything down\b", re.IGNORECASE)]
     requires_confirmation = True
 
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return "Are you sure?"
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         if not request.context.get("confirmed"):
-            return SkillResult("Are you sure?", needs_confirmation=True)
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
         return SkillResult("Done.")
 
 

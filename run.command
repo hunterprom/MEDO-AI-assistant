@@ -12,6 +12,26 @@ set -u
 
 say() { printf "\033[36m[medo]\033[0m %s\n" "$1"; }
 
+# The MEDO logo (the presence sphere), rendered for the terminal on every launch.
+banner() {
+  printf '\033]0;MEDO\007'                 # set the window/tab title
+  printf '\033[36m'                        # MEDO blue
+  cat <<'EOF'
+        .  *  .
+      *   (O)   *
+        .  *  .
+
+   __  __ ___ ___   ___
+  |  \/  | __|   \ / _ \
+  | |\/| | _|| |) | (_) |
+  |_|  |_|___|___/ \___/
+
+        local-first AI, on your hardware
+EOF
+  printf '\033[0m\n'
+}
+banner
+
 PYBIN="$(command -v python3.12 || command -v python3)"
 if [ -z "$PYBIN" ]; then echo "Python 3.12 not found. Install it first."; exit 1; fi
 
@@ -29,8 +49,15 @@ pull_model() {
 # Guarded by the .medo-setup-done marker; MEDO_FIRSTRUN also gates the model
 # pulls in section 1. The marker is only written once qwen3:30b has landed, so
 # an interrupted first run resumes next launch instead of being skipped.
+# The marker is VERSIONED (scripts/setup_marker.py): it records a hash of each
+# requirements file, so editing one reinstalls that venv on the next launch.
+# Provisioning and dependencies are asked SEPARATELY — a changed
+# requirements.txt must not re-trigger the 24 GB download, and a finished
+# download must not freeze the dependencies at whatever they were that day.
 FIRSTRUN=""
-[ -f .medo-setup-done ] || FIRSTRUN=1
+"$PYBIN" scripts/setup_marker.py --provisioned >/dev/null 2>&1 || FIRSTRUN=1
+STALE="$("$PYBIN" scripts/setup_marker.py --stale 2>/dev/null || echo "main-deps vision-deps")"
+[ -z "$STALE" ] || say "setup spec changed — will reinstall:$STALE"
 if [ -n "$FIRSTRUN" ]; then
   say "FIRST-RUN SETUP — installing Ollama, Obsidian and the local AI models (~24 GB, one-time)…"
   if ! command -v ollama >/dev/null 2>&1; then
@@ -64,11 +91,18 @@ else
 fi
 
 # 2. Main venv (voice + app) ------------------------------------------------
-if [ ! -d .venv ]; then
-  say "creating main venv + installing deps (one-time)…"
-  "$PYBIN" -m venv .venv && ./.venv/bin/pip install -q -r requirements.txt
+# The venv is created once; the DEPENDENCIES are reinstalled whenever
+# requirements.txt changes (pip is a fast no-op when nothing has). The old
+# "venv exists, so we're done" test meant a new dependency never reached
+# anyone's machine — it failed later, at import, looking like a code bug.
+[ -d .venv ] || { say "creating main venv (one-time)…"; "$PYBIN" -m venv .venv; }
+case " $STALE " in *" main-deps "*)
+  say "installing main dependencies…"
+  ./.venv/bin/pip install -q -r requirements.txt
   ./.venv/bin/python -c "import openwakeword.utils as u; u.download_models()" 2>/dev/null
-fi
+  "$PYBIN" scripts/setup_marker.py --write main-deps >/dev/null 2>&1
+  ;;
+esac
 
 # 2b. Piper voice model (spoken replies; --voice needs it) ------------------
 if [ ! -f models/piper/en_US-lessac-medium.onnx ]; then
@@ -79,19 +113,22 @@ if [ ! -f models/piper/en_US-lessac-medium.onnx ]; then
   curl -fL -o models/piper/en_US-lessac-medium.onnx.json "$base/en_US-lessac-medium.onnx.json"
 fi
 
-# 3. Vision venv (hand gestures — separate because MediaPipe pins numpy<2) ---
-if [ ! -d .venv-vision ]; then
-  say "creating vision venv + installing deps (one-time)…"
-  "$PYBIN" -m venv .venv-vision
+# 3. Vision venv (hand gestures — see requirements-vision.txt for why apart) -
+[ -d .venv-vision ] || { say "creating vision venv (one-time)…"; "$PYBIN" -m venv .venv-vision; }
+case " $STALE " in *" vision-deps "*)
+  say "installing vision dependencies…"
   ./.venv-vision/bin/pip install -q --only-binary=:all: -r requirements-vision.txt
-fi
+  "$PYBIN" scripts/setup_marker.py --write vision-deps >/dev/null 2>&1
+  ;;
+esac
 
 # 3b. Mark first-run setup complete — only once qwen3:30b has actually landed,
 #     so an interrupted 18 GB download resumes next launch. Don't want the big
 #     model? Run 'touch .medo-setup-done' yourself to skip it.
 if [ -n "$FIRSTRUN" ]; then
   if ollama list 2>/dev/null | grep -qi "qwen3:30b"; then
-    touch .medo-setup-done; say "first-run setup complete — later launches start straight up."
+    "$PYBIN" scripts/setup_marker.py --write --mark-provisioned >/dev/null 2>&1
+    say "first-run setup complete — later launches start straight up."
   else
     say "setup will finish downloading the 18 GB brain on the next launch (or: touch .medo-setup-done to skip it)."
   fi

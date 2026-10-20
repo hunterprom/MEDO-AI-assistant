@@ -29,7 +29,7 @@ from typing import Any
 
 from core import mk
 from core.config import Settings
-from core.council import Specialist, find_specialist, rank_specialists
+from core.council import Specialist, find_specialist
 from core.safety import is_affirmative
 from skills.base import SkillRequest, SkillResult
 from skills.council import _CouncilBase
@@ -151,7 +151,11 @@ def _verdict(claims: list[dict[str, str]]) -> str:
     if "UNSUPPORTED" in tags:
         return "shaky"
     if "SUPPORTED" in tags:
-        return "solid"
+        # "solid" ⇒ "you can rely on it", so it must NOT fire when most claims went
+        # unverified: 1 SUPPORTED + 4 CANNOT_VERIFY is not something to rely on.
+        supported = sum(1 for c in claims if c["tag"] == "SUPPORTED")
+        cannot = sum(1 for c in claims if c["tag"] == "CANNOT_VERIFY")
+        return "solid" if supported >= cannot else "mixed"
     return "unverified"                     # only CANNOT_VERIFY
 
 
@@ -225,7 +229,7 @@ class SecondOpinionSkill(_CouncilBase):
     # -- execute --------------------------------------------------------------
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         if request.context.get("captured_reply"):
             return self._breakdown(request, speak_mk)
 
@@ -237,8 +241,12 @@ class SecondOpinionSkill(_CouncilBase):
             return SkillResult(NO_BRAIN_MK if speak_mk else NO_BRAIN, success=False)
 
         council = self._council
-        picked = rank_specialists(question or answer, council,
-                                  self._settings.council.max_members)
+        # Pick who audits by the field the ANSWER (with the question for context)
+        # is closest to — an answer about low-voltage wiring goes to the electrical
+        # engineer, not a default. Rank the answer AND the question together so an
+        # incidental word in a short answer can't outvote the real topic.
+        picked = await self._select(f"{answer}\n{question}",
+                                    self._settings.council.max_members)
         if not picked:
             fallback = find_specialist(self._settings.council.default_agent, council)
             picked = [fallback] if fallback else list(council[:1])
@@ -267,7 +275,7 @@ class SecondOpinionSkill(_CouncilBase):
         # silently swallowed into the (empty) breakdown branch.
         offer = bool(claims) and status != "unverified"
         return SkillResult(
-            headline, success=True, await_reply=offer,
+            headline, success=True, await_reply=offer, reply_is_offer=offer,
             data={"second_opinion": status, "members": [m.key for m in answered],
                   "audit": claims})
 
@@ -310,6 +318,15 @@ class SecondOpinionSkill(_CouncilBase):
                 body += (f" ({n - 1} more like it.)" if not speak_mk
                          else f" (Уште {n - 1} слични.)")
             return body + tail
+        if status == "mixed":
+            # Some claims held up but most couldn't be verified — don't imply the
+            # whole answer is reliable.
+            return (f"Го проверив со {names} — дел се потврди, но поголемиот дел не "
+                    f"можеа да го потврдат, па третирај го остатокот како непотврден."
+                    if speak_mk else
+                    f"I had {names} check that — part of it held up, but most of it "
+                    f"they couldn't verify, so treat the rest as unconfirmed."
+                    ) + tail
         # unverified (or a defensive fallthrough): fail-safe, no false confidence.
         return (f"Го прашав {names}, но не можеа да го потврдат — третирај го "
                 f"одговорот како непотврден." if speak_mk else

@@ -30,6 +30,11 @@ llm:
   # stripped in llm/client.py. Falls back to the first installed model if absent.
   default_model: "qwen3:30b"
   fallback_model: "llama3.2:3b"
+  # Auto model tier (same brain): a simple/short question uses fast_model, a
+  # complex one keeps default_model. fast_model MUST match the active provider
+  # (qwen3:30b -> llama3.2:3b for Ollama; opus/sonnet -> a haiku for Anthropic).
+  auto_model: true
+  fast_model: "llama3.2:3b"
   # Auto tool-brain: the CLI brains (claude-code/codex) can't use MEDO's tools,
   # so a query needing live/online info is answered by this local Ollama model
   # for that ONE turn (it has web_search etc.), then MEDO reverts to your
@@ -38,6 +43,7 @@ llm:
   temperature: 0.6
   num_ctx: 4096                    # 8192 OOMs a 12 GB GPU with the 30B — keep 4096
   keep_alive: "30m"                # keep the model loaded between turns (no reload stalls)
+  think: false                     # qwen3 reasoning is STRIPPED anyway → off = far faster; true = deeper answers, slower
   request_timeout_s: 120
 
 router:
@@ -95,6 +101,12 @@ filler:                             # 'let me think' fillers on slow LLM answers
   # Code, which says nothing until it's wholly done). LLM path ONLY — the fast
   # path answers in milliseconds and never triggers this. Phrases are per
   # language in lang/filler_phrases/<code>.yaml and follow the active languages.
+  #
+  # Sentence-streaming TTS narrowed this layer's job: the wait is now only until
+  # the FIRST sentence (two to four seconds locally), not until the whole reply.
+  # The filler also stands down the instant a sentence is queued, so these are
+  # the delays before it fires at all. Tune them against real measurements:
+  #   python -m core.metrics --first-audio
   enabled: true
   delay_s: 8.0                      # speak a filler if still silent after this
   big_delay_s: 2.0                  # a big/complex question gets a quicker one
@@ -102,8 +114,8 @@ filler:                             # 'let me think' fillers on slow LLM answers
   followup_s: 12.0                  # one more "still working on it" after this
 
 remote:
-  # Companion API for the watch app (remote/server.py). LAN-only; there is no
-  # TLS — never forward this port beyond your local network.
+  # Companion API for the watch app (remote/server.py). LAN-only — never
+  # forward this port beyond your local network, with or without TLS.
   enabled: false                    # true = always serve; --serve flag also works
   host: "0.0.0.0"                   # bind address (0.0.0.0 = every interface)
   port: 8710
@@ -119,6 +131,23 @@ remote:
   # Answer "who is MEDO?" UDP broadcasts (same port) so the watch can find
   # this machine without anyone typing an IP. Reveals only name + port.
   discovery_enabled: true
+  # Serve the API over HTTPS (remote/tls.py), minting a self-signed certificate
+  # on first run that covers localhost and this machine's addresses. Without it
+  # the bearer token above crosses the LAN in cleartext on every request.
+  # OFF by default because turning it on changes the URL every existing client
+  # uses (http:// -> https://) and each has to trust the certificate:
+  # `python -m remote.tls` prints its SHA-256, and GET /tls serves the same
+  # fingerprint to an authenticated caller so a client can pin it.
+  tls_enabled: false
+  tls_certfile: ""                  # your own certificate instead of the
+  tls_keyfile: ""                   # self-signed one — set BOTH or neither
+  # Per-caller throttle (remote/ratelimit.py): a token bucket keyed by token,
+  # or by address for a caller that hasn't authenticated — so guessing tokens
+  # no longer buys a fresh quota per guess. per_minute is the sustained rate,
+  # burst the allowance for the several polls a HUD tab fires when it opens.
+  rate_limit_per_minute: 240        # 0 disables throttling entirely
+  rate_limit_burst: 60
+  rate_limit_local_exempt: true     # 127.0.0.1 is never throttled (the HUD polls)
 
 vision:                             # camera hand-gesture control (sidecar process)
   enabled: true                     # auto-serve the API so the gesture sidecar connects
@@ -221,10 +250,14 @@ vision:                             # camera hand-gesture control (sidecar proce
     # Rebind any pose. Actions: move, drag, scroll, zoom, right_click, volume_up,
     # volume_down, next_tab, switch_window, taskbar, idle. open_palm is unbound on
     # purpose (a hand passes through it while opening) — bind it if you want it.
+    # Defaults: point_up=move, victory=scroll, rock=zoom, three=right_click,
+    # thumbs_up=volume_up, pinky_up=volume_down, l_shape=next_tab, four=taskbar,
+    # fist=idle. A pinch is always drag and cannot be rebound — it is the click.
+    # An unknown action name is dropped with the rest of the map left intact, so
+    # a typo costs you one binding rather than the pointer.
     pose_actions: {}
-    #  open_palm: "switch_window"     # L pose (thumb + index): how far off a 90 deg corner
-                                    # is still an L. raise = easier to hit but bleeds into
-                                    # plain pointing; lower = stricter right angle
+    #  open_palm: "switch_window"
+    #  rock: "idle"
   bench:                            # M10: 2nd workbench camera (skills/bench.py)
     enabled: false                  # "what's on my bench" / "identify this part" /
                                     # "log this part" / "do i have any 10k resistors"
@@ -301,7 +334,7 @@ languages:                          # constrained two-language mode
   detection: "auto_pair"
   # NOTE: the WAKE WORD is a separate trained model (wakeword.phrase) — changing
   # the active languages here does NOT change the phrase MEDO wakes to. To wake
-  # in a different language, train a new wake model (see docs/Wake Word Training).
+  # in a different language, train a new wake model (see docs/wake-word-training.md).
 
 stt:                                # M1
   engine: "faster-whisper"
@@ -348,12 +381,68 @@ stt:                                # M1
   # language: "en", restore the example prompt from the README.
   initial_prompt: null
 
-tts:                                # M1
+tts:                                # voice/providers.py — see docs/voice.md
+  # MEDO used to speak 15 of its 16 languages through Microsoft's cloud, which
+  # made its VOICE the one part of it that wasn't local. Those 15 now run
+  # on-device (sherpa-onnx, Apache-2.0) on the CPU — measured RTF 0.056-0.089,
+  # i.e. ~15x faster than real time, and ZERO VRAM, which matters because the
+  # GPU is already shared with the LLM and the vision sidecar.
+  #
+  # Macedonian is the exception and the only one: no permissively-licensed
+  # local neural mk voice exists yet (not in Piper, Kokoro, Chatterbox, and
+  # Meta's MMS is non-commercial). It stays on the cloud voice until a
+  # fine-tuned one exists — see docs/voice.md for that plan.
   engine: "piper"
   voice_model: "models/piper/en_US-lessac-medium.onnx"   # relative to project root
   speed: 1.0
-  multilingual: true                # Cyrillic replies -> Macedonian neural voice (edge-tts, online)
+  multilingual: true                # allow the cloud voice at all (mk today)
   mk_voice: "mk-MK-MarijaNeural"    # or mk-MK-AleksandarNeural (male)
+
+  local_voices: true                # use the on-device voices. false = the old
+                                    # behaviour (English Piper + cloud for the rest).
+  voices_dir: "models/tts"          # where voices are cached; project-root relative
+  auto_download: true               # fetch a language's voice the first time it is
+                                    # spoken (~30-70 MB each, once). Set false on an
+                                    # air-gapped box and pre-fetch the ones you need.
+  max_loaded_voices: 3              # voice models held in RAM at once (~60 MB each).
+                                    # 3 covers ordinary bilingual use without reloading.
+  num_threads: 2                    # ONNX threads per synthesis. More is faster but
+                                    # takes cores Whisper wants for the next utterance.
+  allow_cloud: true                 # permit the cloud voice for a language with NO
+                                    # local voice — today that is Macedonian alone.
+                                    # false => those replies are shown, not spoken.
+                                    # This is the single declared exception to MEDO
+                                    # being local; everything else ignores it.
+  # Per-language voice overrides. Changing how MEDO sounds is an edit HERE,
+  # never a code edit. Anything not listed keeps the built-in choice
+  # (voice/voices.py). A bad entry is skipped with a warning, so one typo
+  # costs that language its override and nothing else.
+  #
+  #   engine: kokoro   voice: a Kokoro speaker NAME. Prefixes are language +
+  #                    gender: af_/am_ American, bf_/bm_ British, ef_/em_
+  #                    Spanish, ff_ French, hf_/hm_ Hindi, if_/im_ Italian,
+  #                    jf_/jm_ Japanese, pf_/pm_ Brazilian Portuguese,
+  #                    zf_/zm_ Chinese. Full list in voice/voices.py.
+  #                    Natural but ~8x the synthesis time of Piper.
+  #   engine: piper    voice: a Piper voice name, e.g. de_DE-thorsten-high.
+  #                    Fast and light; flatter delivery.
+  #   engine: edge     voice: a Microsoft voice. ONLINE — only sensible for a
+  #                    language with no local voice (mk).
+  #
+  # Hear them before choosing:  python -m voice.tts --demo en
+  voices:
+    en: {engine: kokoro, voice: bf_emma}    # British female. The Piper voice
+                                            # that used to be here sounded
+                                            # robotic; this is the fix.
+    # de: {engine: kokoro, voice: af_heart} # NB: Kokoro has NO German voice.
+    # ja: {engine: kokoro, voice: jf_alpha} # already the default
+    # mk: {engine: edge,   voice: mk-MK-AleksandarNeural}   # male
+
+  offline_fallback_voices: false    # let a language with no voice borrow a related
+                                    # one's — Macedonian read by the Serbian voice.
+                                    # Fully offline and understandable, but audibly
+                                    # Serbian, so you opt in. With this AND
+                                    # allow_cloud off, mk replies are shown, not spoken.
 
 wakeword:                           # M1
   engine: "openwakeword"
@@ -363,7 +452,7 @@ wakeword:                           # M1
   #   1) generate a diverse sample set (edge-tts + Piper):
   #        .venv\Scripts\python -m voice.train_wakeword --generate
   #   2) train it (~1 h on a free Colab GPU) — the script prints the steps;
-  #      see docs/Wake Word Training.md for the full runbook.
+  #      see docs/wake-word-training.md for the full runbook.
   #   3) drop hey_medo.onnx in models/wakeword/ and set phrase to it below.
   phrase: "models/wakeword/hey_medo.onnx"   # custom model, fires on BOTH "medo"
                                     # and "hey medo". Retrained 2026-07-24 on the
@@ -427,7 +516,7 @@ wakeword:                           # M1
   stt_confirm: true
   # Still too many false wakes after tuning? The model itself can be retrained
   # with HARD NEGATIVES (your room's loud sounds), NOT just more epochs — see
-  # docs/Wake Word Training.md. More training time != fewer loud-noise triggers;
+  # docs/wake-word-training.md. More training time != fewer loud-noise triggers;
   # better negatives do.
 
 audio:                              # M1
@@ -524,6 +613,98 @@ app_builder:
   # this machine (writing files only, no shell), so this is opt-in.
   enabled: true
   apps_dir: "~/MEDO-apps"
+
+studio:
+  # MEDO Maker Studio — REAL engineering artifacts, not pictures of them. The
+  # brain writes code in a genuine library and MEDO EXECUTES it in the sandbox:
+  # CadQuery -> a printable STL + STEP, SchemDraw -> a schematic SVG + PNG, or a
+  # self-contained script that must pass its own self-tests. See
+  # docs/maker-studio.md.
+  #
+  #   "3D print a phone stand"        "design a circuit for an ESP32 and an LED"
+  #   "model a bracket for a motor"   "3д модел на држач за телефон"
+  #
+  # This is what registers model_3d / design_circuit / build_code /
+  # studio_projects — with it off they don't exist, and MEDO answers a request
+  # to model something by saying it has no tool for it, because it hasn't.
+  #
+  # It runs generated (untrusted) code on this machine, sandboxed — a scrubbed
+  # environment, a throwaway HOME/TEMP, its own working directory, a hard
+  # timeout and a deny-by-default policy check. Turning it on opts into that.
+  # The engineering libraries are a separate, optional install:
+  #   .venv\Scripts\pip install -r requirements-studio.txt
+  # Without them each skill says "install cadquery/schemdraw" instead of failing.
+  enabled: true
+  # One folder per creation: the code, the artifacts, and numbered versions, so
+  # "make the wall 3 mm" edits the code and re-runs it as v2 with v1 kept.
+  projects_dir: "~/MEDO-studio"
+  # Brain for writing the library code. "" = the active default brain. A harder
+  # part is worth a stronger model — this is code generation, not chat.
+  model: ""
+  # How many times an execution error is fed back for a bounded self-correction.
+  max_retries: 3
+  # How long the brain gets to WRITE the code. Not the conversation timeout —
+  # that one is sized so nobody waits three minutes for a spoken answer, and it
+  # killed a real 195-second parametric phone stand just short of finishing.
+  # Building is a wait-for-it action; this is its budget.
+  generate_timeout_s: 600.0
+  # Hard cap on each sandboxed run of generated code. CadQuery's first import is
+  # slow (OpenCascade), so don't cut this much below 60.
+  exec_timeout_s: 60.0
+  # Optional OS-isolation wrapper prefixed to the sandboxed command, e.g.
+  # ["firejail", "--net=none"] on Linux. Empty = process + env + cwd isolation
+  # only, which is strong for the filesystem and secrets but does NOT hard-block
+  # network access.
+  sandbox_cmd: []
+  # Versions kept per project (0 = unlimited).
+  keep_versions: 20
+
+cowork:
+  # MEDO Cowork — hand over a multi-step task and MEDO orchestrates its OWN
+  # capabilities to finish it: skills, software connectors, MEDO Link devices.
+  #
+  #   "cowork: open OBS, start recording, then tell me the weather"
+  #   "испланирај и направи: отвори го извештајот и прати ми го"
+  #
+  # BOUNDED, not autonomous, and the difference is the whole design:
+  #   1. it PLANS first and says the plan out loud — nothing runs before you
+  #      approve it, and you can edit it by voice ("skip step 3");
+  #   2. side effects are re-checked at the policy gate at execution time and
+  #      the high-impact ones (power, run_command, write_files, devices) ask
+  #      again, even inside an approved plan;
+  #   3. it runs ONE step at a time and narrates each;
+  #   4. when a step fails it STOPS and offers retry / skip / stop. It never
+  #      invents a different way to finish the task.
+  #
+  # Off by default: it acts across several subsystems in one go. See
+  # docs/cowork.md for the honest limits.
+  enabled: true
+  # Hard cap on plan length. A longer task is refused with "split it up" rather
+  # than run as a fragile chain — on a local brain, a failure at step eleven in
+  # front of people is what they remember.
+  max_steps: 6
+  # Let a plan run unattended (from a routine, webhook or schedule). Leave off:
+  # the approval IS the safety model, and on a timer the only thing that could
+  # answer the prompt is the schedule itself.
+  allow_unattended: false
+  # Brain that PLANS. "" = the active default brain. A stronger model plans
+  # better; a cloud one goes through the same privacy gate as any cloud brain.
+  model: ""
+  # How long the brain gets to PLAN — NOT llm.request_timeout_s (120 s, sized
+  # so nobody waits two minutes for a spoken answer). Measured here: qwen3:30b
+  # takes 60-120 s to plan against the 69-capability catalogue, and a long task
+  # ran past 120 s, which arrived as "I couldn't work out a plan" when the true
+  # answer was "you didn't give me long enough".
+  plan_timeout_s: 300.0
+  # Speak each step as it finishes, rather than only reporting at the end.
+  narrate: true
+  # Never execute — always just say what the plan would be (practice/demo). A
+  # spoken "dry run" does the same for one task without changing this.
+  dry_run: false
+  # Allow "save that as demo prep", which writes a routines/*.yaml you can then
+  # trigger by phrase. A plan containing a step that needs confirmation is
+  # refused — routines may not contain one (see core/composer.py).
+  save_routines: true
 
 skills:
   # Your own wording for any skill, without touching Python. Each phrase below
@@ -667,7 +848,7 @@ web_fetch:                          # skills/webfetch.py — READ a page, not ju
   # SAFETY: only a URL YOU supplied is fetched silently. A link that arrived
   # from an imported document or from tool output is untrusted third-party
   # text, so MEDO names the host and asks first; file://, javascript: and
-  # data: links are refused outright, never offered. See docs/Decisions.md.
+  # data: links are refused outright, never offered. See docs/decisions.md.
   enabled: true                     # false removes the skill entirely — no patterns,
                                     # no tool the model can call. Turn it off if MEDO
                                     # must never make outbound requests you didn't
@@ -687,6 +868,63 @@ web_fetch:                          # skills/webfetch.py — READ a page, not ju
   # is a lie that also breaks the moment their fingerprinting tightens.
   user_agent: "Mozilla/5.0 (compatible; MEDO/2.0; local voice assistant)"
 
+web_search:                         # skills/websearch.py — where a search ENDS UP
+  # Two utterances wear the same verb. "Search up the Mazda RX-7" is a COMMAND:
+  # the answer is the results page, in front of you, clickable. "What's the
+  # latest on X", a bare factual question, and the model's own web_search tool
+  # call are QUESTIONS: they want text. This section is the dial between them.
+  #
+  # It opens in the browser configured under `browser:` above — the SAME window
+  # "open youtube" uses — so a following "click the first result" still works.
+  open_in_browser: true             # false = summarize everything aloud, as MEDO
+                                    # did before (~20 s per search on the 30B model,
+                                    # and the paragraph isn't clickable).
+  browser_scope: "commands"         # commands = only an explicit search verb
+                                    #   ("search up X", "google X", "look up X",
+                                    #   "барај X") opens the browser; questions and
+                                    #   the model's tool calls still get spoken text.
+                                    # always  = every web lookup opens the browser.
+                                    #   Tool calls ALSO still return the snippets, so
+                                    #   the model can never answer from nothing.
+  engine: "google"                  # any name from the site table below/built-in
+                                    #   (google, wikipedia, youtube, github, amazon,
+                                    #   your own skills.sites entries — Cyrillic
+                                    #   aliases included), one of duckduckgo, bing,
+                                    #   brave, startpage, ecosia, yandex, perplexity,
+                                    #   or your own URL template containing "{q}",
+                                    #   e.g. "https://searx.example/?q={q}".
+                                    # An unknown name falls back to Google rather
+                                    # than costing you the ability to search.
+  max_results: 5                    # snippets fetched on the SUMMARIZE path only.
+                                    # More costs latency on a path whose whole job
+                                    # is to be read aloud in two sentences.
+
+bug_reports:                        # skills/bug_report.py — "that was a bug"
+  # A developer feature. Say "that was a bug" (or "тоа беше баг") right after
+  # MEDO gets something wrong and it writes the PREVIOUS turn up as a markdown
+  # file: what you asked, what it answered, which tier routed it, which skill
+  # it picked, how much of the sentence the pattern matched, and how long it
+  # took. Add the reason in the same breath if you have one —
+  # "that was a bug, it should have opened the browser" — and it goes in too.
+  #
+  #   python -m core.bugreports              # list what has been saved
+  #   python -m core.bugreports --collect    # all of them as ONE document
+  #
+  # The trigger word is mandatory ("bug" / "баг" / an anchored "грешка"):
+  # "that's wrong" and "no, I meant..." belong to the correction detector that
+  # measures fast-path misfires (core/corrections.py), and claiming them here
+  # would corrupt that statistic to file a duplicate of what it already logs.
+  enabled: true                     # false = MEDO says so out loud rather than
+                                    #   silently ignoring you
+  directory: "bugs"                 # relative to the project root. GITIGNORED,
+                                    #   and it must stay that way: a report
+                                    #   quotes what was said in the room.
+  context_turns: 3                  # turns of run-up included after the faulty
+                                    #   one — a misroute is often set up by the
+                                    #   exchange before it. 0 = the bad turn only.
+  max_reports: 500                  # oldest pruned past this. A drawer, not an
+                                    #   archive.
+
 vision_llm:                         # "what do you see" / "read my screen" / bench
   # qwen2.5vl:3b replaced moondream (2026-07-20): the re-published moondream
   # decodes to 2-token garbage on every runtime/endpoint (fresh pull, GPU and
@@ -701,6 +939,13 @@ memory:                             # M4
   max_facts: 20                     # remembered facts injected into the system prompt
   embed_model: "nomic-embed-text"   # semantic fact recall via local Ollama embeddings
                                     # ("" disables -> newest-N only)
+  # Episodic memory (core/episodes.py): at the end of a session the local model
+  # writes a few sentences about what was discussed and MEDO keeps those, not the
+  # transcript — so "what did we talk about yesterday?" has an answer without a
+  # verbatim record of the room existing on disk.
+  episodes_enabled: true
+  episode_retention_days: 90        # forget summaries older than this (0 = never)
+  episode_min_turns: 2              # shorter sessions are commands, not conversations
 
 mcp:                                # Model Context Protocol client (core/mcp.py)
   # Connect ANY application that exposes an MCP server: its tools automatically
@@ -752,7 +997,7 @@ mcp:                                # Model Context Protocol client (core/mcp.py
       args: ["-y", "@modelcontextprotocol/server-google-maps"]
 
     # Google Drive — search + read your Drive files. Needs a Google OAuth app
-    # (one-time consent, then it caches a token) — see docs/Decisions.md.
+    # (one-time consent, then it caches a token) — see docs/decisions.md.
     gdrive:
       enabled: false
       command: "npx"

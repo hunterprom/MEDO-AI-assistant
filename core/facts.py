@@ -16,6 +16,8 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from core import db
+
 #: Embeds a batch of texts to vectors; None when the backend is unavailable.
 Embedder = Callable[[Sequence[str]], "list | None"]
 
@@ -46,7 +48,7 @@ class FactsStore:
         self._embedder = embedder
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=5.0)
+        conn = db.connect(self._db_path, timeout=5.0)
         conn.execute(_SCHEMA)
         # Older databases predate the embedding column; add it in place.
         try:
@@ -119,6 +121,45 @@ class FactsStore:
                 break
             chosen.add(row[0])
         return [r[1] for r in rows if r[0] in chosen]
+
+    def search(self, query: str, limit: int = 5,
+               min_score: float = 0.55) -> list[str]:
+        """Facts that genuinely MATCH ``query``, or nothing.
+
+        Unlike :meth:`relevant` — which deliberately pads with recent facts so
+        the LLM prompt always carries some memory — this answers a question and
+        is allowed to answer "none". The briefing's "upcoming plans" section
+        needs that: with a single fact stored, ``relevant`` returned it whatever
+        was asked, and MEDO announced "Worth remembering: I don't drink coffee"
+        as though it were the day's schedule.
+        """
+        query = (query or "").strip()
+        if self._embedder is None or not query:
+            return []
+        self._backfill_embeddings()
+        import numpy as np
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT fact, embedding FROM facts "
+                "WHERE embedding IS NOT NULL ORDER BY id"
+            ).fetchall()
+        if not rows:
+            return []
+        qvec = self._embedder([query])
+        if not qvec:
+            return []
+        q = np.asarray(qvec[0], dtype=np.float32)
+        q = q / (float(np.linalg.norm(q)) or 1.0)
+        scored: list[tuple[float, str]] = []
+        for fact, blob in rows:
+            v = np.frombuffer(blob, dtype=np.float32)
+            v = v / (float(np.linalg.norm(v)) or 1.0)
+            score = float(v @ q)
+            if score >= min_score:
+                scored.append((score, fact))
+        scored.sort(key=lambda pair: -pair[0])
+        return [fact for _, fact in scored[:limit]]
 
     def _backfill_embeddings(self, batch: int = 32) -> None:
         """Embed facts that don't have vectors yet (best-effort, never raises)."""

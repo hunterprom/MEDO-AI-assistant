@@ -57,3 +57,20 @@ logs/
 
 # real captured wake-word audio = the user's own voice; keep it local
 models/wakeword/real/
+
+# Learned app UI maps — per-install, machine-specific (software/knowledge.py).
+data/software_maps/
+# Self-dev approvals + the self-signed TLS material: runtime state, per machine,
+# and in the TLS case a PRIVATE KEY that must never be committed.
+data/selfdev/
+data/tls/
+
+# Bug reports written by "that was a bug" (core/bugreports.py). Each one quotes
+# what was actually said in the room, so these are conversation content, not
+# code — never committed. Hand one to a developer deliberately instead:
+# python -m core.bugreports --collect
+bugs/
+
+# SQLite WAL side-files of medo.db, and local voice A/B listening samples.
+medo.db-*
+voice-ab/

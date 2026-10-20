@@ -74,6 +74,9 @@ class SelfDevSkill(Skill):
         self._pending: Proposal | None = None
         self._task: asyncio.Task | None = None
         self._busy = False
+        # True only between "apply the change" and its yes/no — so an injected
+        # `confirmed` (dev mode) can't turn an unrelated utterance into a merge.
+        self._awaiting_apply = False
 
     def match(self, text: str):
         # A Lion-mode capability: surfaced only while lion mode is on. Out of it
@@ -84,18 +87,25 @@ class SelfDevSkill(Skill):
         return super().match(text)
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        # The "yes" confirming an apply comes back through here with confirmed set.
-        if request.context.get("confirmed"):
+        text = request.text
+        # An explicit DISCARD always wins over an injected `confirmed`. Dev mode
+        # (security.yolo) injects confirmed=True on EVERY utterance to auto-accept
+        # the "are you sure?" gates; here `confirmed` also selects WHICH branch
+        # runs, so without this "discard that proposal" merged it instead.
+        if _DISCARD.search(text):
+            return await self._discard()
+        # The "yes" confirming an apply comes back through here with confirmed
+        # set — but only honour it when an apply is what we actually asked about.
+        if request.context.get("confirmed") and (self._awaiting_apply
+                                                 or _APPLY.search(text)):
+            self._awaiting_apply = False
             return await self._apply_now()
         # A follow-up answering "what should I fix?" — the whole utterance is the
         # task (no trigger phrase to strip).
         if request.context.get("captured_reply"):
             return self._begin(request.text)
-        text = request.text
         if _APPLY.search(text):
             return self._apply_prompt()
-        if _DISCARD.search(text):
-            return await self._discard()
         return self._begin(_strip_trigger(text))
 
     # -- start a proposal (background) --------------------------------------
@@ -153,16 +163,23 @@ class SelfDevSkill(Skill):
         if self._pending is None:
             return SkillResult("I don't have a proposal ready to apply.", success=False)
         p = self._pending
+        self._awaiting_apply = True
         return SkillResult(
             f"Apply my proposed change to {len(p.files_changed)} file(s)? It passed "
             "all the tests. Say yes to merge it.",
             needs_confirmation=True)
 
-    async def _apply_now(self) -> SkillResult:
+    async def _apply_now(self, approved_by: str = "human") -> SkillResult:
+        self._awaiting_apply = False
         if self._pending is None:
             return SkillResult("There's nothing to apply.", success=False)
         p = self._pending
         try:
+            # Reaching here means a person said yes — out loud, or with the HUD's
+            # APPLY button. Write that down before merging: the engine refuses to
+            # apply anything without a recorded approval for this exact diff, and
+            # the record is what makes the decision auditable after a restart.
+            self._engine.approve(p, approved_by=approved_by)
             await self._engine.apply(p)
         except SelfDevError as exc:
             return SkillResult(f"I couldn't merge it: {exc}", success=False)
@@ -172,6 +189,7 @@ class SelfDevSkill(Skill):
             "Restart me to run the new code.")
 
     async def _discard(self) -> SkillResult:
+        self._awaiting_apply = False
         if self._pending is None:
             return SkillResult("There's no pending proposal to discard.", success=False)
         p, self._pending = self._pending, None
@@ -198,7 +216,7 @@ class SelfDevSkill(Skill):
 
     async def apply_pending(self) -> dict:
         """Apply the pending proposal (the HUD's APPLY button is the approval)."""
-        result = await self._apply_now()
+        result = await self._apply_now(approved_by="hud")
         return {"ok": result.success, "message": result.speech}
 
     async def discard_pending(self) -> dict:

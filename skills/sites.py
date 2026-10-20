@@ -462,11 +462,11 @@ class SiteSearchSkill(Skill):
         # user wanted the home page — so ask instead of silently opening it.
         if raw_query.strip() and not query:
             return SkillResult(
-                "Што да пребарам таму?" if mk.is_cyrillic(request.text)
+                "Што да пребарам таму?" if mk.is_cyrillic(request.utterance)
                 else "What should I search for there?", success=False)
         # Answer in the language we were asked in — the same bilingual rule the
         # briefing and bench skills follow.
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
 
         site = resolve_site(spoken, self._sites)
         if site is None:
@@ -644,7 +644,7 @@ class PlaySkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         spoken = (request.args.get("site") or gd.get("site")
                   or gd.get("sitem") or "")
         query = clean_query(request.args.get("query") or gd.get("q")
@@ -695,7 +695,15 @@ class PlaySkill(Skill):
             # results in the system browser and say what actually happened.
             logger.warning("play: controlled browser failed (%s) — system browser",
                            exc)
-            await open_with(self._opener, url)
+            # The fallback opener is the SAME session that just failed, so it can
+            # fail too (a blocked domain returns False). Check it — otherwise we
+            # claim to have opened results that never appeared.
+            ok = await open_with(self._opener, url)
+            if ok is False:
+                return SkillResult(
+                    f"Не можев да го отворам {site.label} за {query}." if speak_mk
+                    else f"I couldn't open {site.label} for {query}.",
+                    success=False, data={"url": url, "played": False})
             return SkillResult(
                 f"Не можев да го управувам мојот прелистувач, па ги отворив "
                 f"резултатите за {query} — избери еден." if speak_mk else

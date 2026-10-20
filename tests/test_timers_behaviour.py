@@ -64,6 +64,13 @@ async def test_a_labelled_reminder_keeps_its_label(skill):
     assert "check the oven" in result.speech
 
 
+@pytest.mark.asyncio
+async def test_set_an_alarm_matches_and_arms(skill):
+    # "an"/"the" article — not just "a" — must still route to the timer skill.
+    result = await _say(skill, "set an alarm for 10 minutes")
+    assert result.success and result.data["seconds"] == 600
+
+
 @pytest.mark.parametrize("seconds,expected", [
     (30, "30 seconds"),
     (60, "1 minute"),
@@ -109,6 +116,23 @@ async def test_cancelling_stops_the_background_tasks(skill):
 async def test_cancelling_with_nothing_armed_is_not_an_error(skill):
     result = await _say(skill, "cancel all timers")
     assert result.success and "0 timers" in result.speech
+
+
+@pytest.mark.asyncio
+async def test_reminder_label_containing_cancel_is_not_hijacked(skill):
+    # "cancel" inside a reminder LABEL must not divert into the cancel branch and
+    # wipe every active timer — it should arm the reminder like any other.
+    await _say(skill, "set a timer for 5 minutes")
+    result = await _say(skill, "remind me to cancel my dentist appointment in 2 hours")
+    assert "cancel my dentist appointment" in result.speech
+    assert len(skill._timers) == 2
+
+
+@pytest.mark.asyncio
+async def test_reminder_label_containing_list_is_not_hijacked(skill):
+    result = await _say(skill, "remind me to list the shopping items in 10 minutes")
+    assert "list the shopping items" in result.speech
+    assert len(skill._timers) == 1
 
 
 # --- firing --------------------------------------------------------------------

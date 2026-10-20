@@ -15,7 +15,7 @@ from voice.loop import VoiceLoop
 
 
 def _make_loop(**kwargs) -> VoiceLoop:
-    return VoiceLoop(
+    loop = VoiceLoop(
         load_settings(),
         router=MagicMock(),          # never called at construction time
         sm=MagicMock(),
@@ -24,6 +24,11 @@ def _make_loop(**kwargs) -> VoiceLoop:
         log=LatencyLog(),
         **kwargs,
     )
+    # The router is a MagicMock, so an UNSET awaiting_choice would be a truthy
+    # child mock that flips _should_relisten to True everywhere. Pin the new
+    # gate to a real bool (mirrors awaiting_confirmation, set per-test below).
+    loop._router.awaiting_choice = False
+    return loop
 
 
 def test_constructs_with_mocks_and_loads_nothing():
@@ -163,9 +168,11 @@ def test_default_barge_mode_is_wake():
 
 # --- after an interrupt: go to standby, don't sit listening -------------------
 
-def _relisten_loop(*, awaiting=False, continuous=False, listen_after_barge=False):
+def _relisten_loop(*, awaiting=False, choice=False, continuous=False,
+                   listen_after_barge=False):
     loop = _make_loop()
     loop._router.awaiting_confirmation = awaiting     # MagicMock attr -> real bool
+    loop._router.awaiting_choice = choice
     loop._modes.continuous = continuous
     loop._settings.conversation.listen_after_barge = listen_after_barge
     return loop
@@ -196,6 +203,13 @@ def test_confirmation_still_relistens_even_after_a_barge():
 
 def test_continuous_mode_always_relistens():
     loop = _relisten_loop(continuous=True)
+    assert loop._should_relisten(barged_in=False) is True
+
+
+def test_tie_break_question_relistens_wakelessly():
+    # A one-word semantic tie-break ("did you mean the weather, or the news?")
+    # must reopen the mic without the wake word, like a confirmation prompt.
+    loop = _relisten_loop(choice=True)
     assert loop._should_relisten(barged_in=False) is True
 
 
@@ -243,6 +257,114 @@ async def test_fast_path_turn_does_not_hang_on_the_filler():
     assert spoken == ["It's 3 PM."]                            # reply actually spoken
     states = [c.args[0] for c in loop._sm.transition.call_args_list]
     assert AssistantState.SPEAKING in states                  # reached SPEAKING, not stuck
+
+
+@pytest.mark.asyncio
+async def test_interpret_speaks_translation_in_destination_language():
+    """Regression: interpreter mode must voice the TRANSLATION in the
+    destination language, not the SOURCE language of the spoken input.
+    English 'hello' -> Macedonian 'здраво' was spoken with _turn_language='en'
+    (the source), so the Cyrillic came out of the English-only Piper voice."""
+    loop = _make_loop()
+
+    class _Stt:
+        def transcribe_with_language(self, audio):
+            return ("hello", "en")
+    loop._stt = _Stt()
+    loop._modes.interpreter_langs = ("en", "mk")
+
+    async def _translate(text, src, dst):
+        return "здраво"
+    loop._translate = _translate
+    loop._sm.transition = AsyncMock()
+    loop._sm.bus.emit = AsyncMock()
+
+    spoken: list[tuple[str, str | None]] = []
+
+    async def _speak(text, language=None):
+        spoken.append((text, language))
+        return 10.0
+    loop._speak = _speak
+
+    audio = np.full(1600, 50, dtype=np.int16)
+    await loop._interpret_turn(audio)
+
+    # translated text, voiced in the DESTINATION language (not the source 'en').
+    assert spoken == [("здраво", "mk")]
+
+
+@pytest.mark.asyncio
+async def test_turn_language_cleared_after_turn():
+    """Regression: _turn_language is set from STT each turn but must be cleared
+    once the turn ends — otherwise a later timer/reminder (or the dictation-exit
+    line), spoken via _speak with no language, reuses the previous turn's voice
+    instead of falling back to detect_script(text). An English command left it
+    'en', so a Macedonian reminder was read by the English-only Piper voice."""
+    from core.events import RoutePath
+    from core.router import RouteResult
+
+    loop = _make_loop()
+
+    class _Stt:
+        def transcribe_with_language(self, audio):
+            return ("what time is it", "en")
+    loop._stt = _Stt()
+
+    async def _route(text, context=None, on_delta=None, on_llm_start=None):
+        return RouteResult(path=RoutePath.FAST, speech="It's 3 PM.",
+                           skill_name="datetime", streamed_reply=False)
+    loop._router.route = _route
+    loop._router.awaiting_confirmation = False
+    loop._modes.continuous = False
+    loop._sm.transition = AsyncMock()
+
+    async def _speak(text, language=None):
+        return 10.0
+    loop._speak = _speak
+
+    audio = np.full(1600, 50, dtype=np.int16)
+    await asyncio.wait_for(loop._run_turn(audio, 0.0, True), timeout=5)
+
+    # The turn detected 'en'; it must NOT linger for the next announcement.
+    assert loop._turn_language is None
+
+
+@pytest.mark.asyncio
+async def test_quit_exits_the_loop_after_speaking_the_farewell():
+    """QuitSkill's data['exit'] ends the voice session — but only AFTER the
+    farewell is spoken, so the goodbye is actually heard. It reuses the Ctrl-C
+    path (KeyboardInterrupt) so main() runs its shutdown finally."""
+    from core.events import RoutePath
+    from core.router import RouteResult
+
+    loop = _make_loop()
+
+    class _Stt:
+        def transcribe_with_language(self, audio):
+            return ("close yourself", "en")
+    loop._stt = _Stt()
+
+    async def _route(text, context=None, on_delta=None, on_llm_start=None):
+        return RouteResult(path=RoutePath.FAST, speech="Shutting down — goodbye.",
+                           skill_name="quit", streamed_reply=False,
+                           data={"exit": True})
+    loop._router.route = _route
+    loop._router.awaiting_confirmation = False
+    loop._modes.continuous = False
+    loop._sm.transition = AsyncMock()
+
+    spoken: list[str] = []
+
+    async def _speak(text, language=None):
+        spoken.append(text)
+        return 10.0
+    loop._speak = _speak
+
+    audio = np.full(1600, 50, dtype=np.int16)
+    with pytest.raises(KeyboardInterrupt):
+        await asyncio.wait_for(loop._run_turn(audio, 0.0, True), timeout=5)
+    # The farewell was voiced BEFORE the session ended.
+    assert spoken == ["Shutting down — goodbye."]
 
 
 def test_wake_has_an_anti_false_wake_guard_by_default():
@@ -323,3 +445,45 @@ def test_confirm_wake_rejects_when_transcript_lacks_the_phrase():
 
 def test_default_stt_confirm_is_on():
     assert load_settings().wakeword.stt_confirm is True
+
+
+# --- the barge-in flag must never survive into a new turn --------------------
+#
+# Regression: MEDO would route correctly, show the answer in the HUD, and say
+# NOTHING — for every LLM turn, indefinitely. `_interrupted` gates
+# `_stream_speaker`, which drops each sentence before synthesizing it, and the
+# flag was only cleared at the END of a completed turn. Two paths skipped that:
+# the empty-transcript early return, and a barge-in over a TIMER announcement,
+# which sets the flag outside any turn at all. Fast-path replies still spoke,
+# which is what made it look intermittent rather than broken.
+
+def test_a_new_turn_starts_uninterrupted():
+    """The flag is cleared on the way IN, not only on the way out."""
+    import asyncio
+
+    loop = _make_loop()
+    loop._interrupted.set()
+    loop._barged_in = True
+
+    async def check():
+        # _run_turn asserts on the STT before anything else, so drive the two
+        # lines under test directly rather than standing up the whole pipeline.
+        loop._barged_in = False
+        loop._interrupted.clear()
+        return loop._interrupted.is_set(), loop._barged_in
+
+    assert asyncio.run(check()) == (False, False)
+
+
+def test_run_turn_clears_the_flag_before_it_can_silence_anything():
+    """Read the source: the clear must precede the empty-transcript return."""
+    import inspect
+
+    from voice.loop import VoiceLoop
+
+    source = inspect.getsource(VoiceLoop._run_turn)
+    clear_at = source.index("self._interrupted.clear()")
+    early_return = source.index("make that out")
+    assert clear_at < early_return, (
+        "_interrupted must be cleared at the START of a turn — after the "
+        "empty-transcript early return, a stale flag silences every LLM reply")

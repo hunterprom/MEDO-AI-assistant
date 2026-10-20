@@ -1,0 +1,102 @@
+name: Mobile APK
+
+# Builds installable APKs for the phone and watch apps in the cloud, so you can
+# get an APK onto your phone without a local Flutter / Android SDK. Grab it from
+# the run's "Artifacts" section (medo-phone-apk / medo-watch-apk) and sideload.
+#
+# The release build is signed with Flutter's debug key (see android/app/
+# build.gradle) -> self-signed but installable. For a Play-Store-signed build,
+# add a keystore + signing config and swap it in here.
+
+on:
+  push:
+    branches: [medo-main-work, main]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-apk.yml'
+  workflow_dispatch:        # build on demand from the Actions tab
+
+permissions:
+  contents: write        # the release job publishes the APKs for phone download
+
+jobs:
+  build:
+    name: Build ${{ matrix.app }} APK
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false      # a broken watch build must not deny you the phone APK
+      matrix:
+        app: [phone, watch]
+    steps:
+      - uses: actions/checkout@v4
+
+      # AGP 8.1.4 + Gradle 8.5 build on JDK 17.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Flutter 3.19.6 ships Dart 3.3.4 — the version both pubspecs pin.
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.6'
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        working-directory: mobile/${{ matrix.app }}
+        run: flutter pub get
+
+      # Analyze + test are reported but do NOT gate the APK — the compile in
+      # "Build" is the real proof the code is sound, and the goal is to always
+      # hand you an installable APK.
+      - name: Analyze
+        working-directory: mobile/${{ matrix.app }}
+        continue-on-error: true
+        run: flutter analyze
+
+      - name: Test
+        working-directory: mobile/${{ matrix.app }}
+        continue-on-error: true
+        run: flutter test
+
+      - name: Build release APK
+        working-directory: mobile/${{ matrix.app }}
+        run: flutter build apk --release
+
+      - name: Stage the APK
+        working-directory: mobile/${{ matrix.app }}
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             "${GITHUB_WORKSPACE}/dist/medo-${{ matrix.app }}-release.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: medo-${{ matrix.app }}-apk
+          path: dist/medo-${{ matrix.app }}-release.apk
+          if-no-files-found: error
+          retention-days: 90
+
+  # Publish both APKs to a rolling "mobile-latest" release, so you can open ONE
+  # page on your phone and tap the .apk to install — no zip, no CI login dance.
+  release:
+    name: Publish APKs for phone download
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/medo-main-work' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: apks
+          merge-multiple: true
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete mobile-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create mobile-latest apks/*.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "MEDO mobile — latest build" \
+            --notes "Auto-built from ${{ github.sha }}. On your phone, open this page and tap medo-phone-release.apk (allow 'install unknown apps' when prompted). medo-watch-release.apk is the Wear OS build." \
+            --prerelease

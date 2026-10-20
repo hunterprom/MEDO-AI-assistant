@@ -451,7 +451,7 @@ class BrowserControlSkill(Skill):
         return super().match(text)
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         if not self._config.enabled:
             return SkillResult(
                 "Контролата на прелистувачот е исклучена во конфигурацијата."
@@ -609,11 +609,13 @@ AGENT_PROMPT = (
     "it. Choose the SINGLE next action and reply with ONLY a JSON object — no "
     "prose, no markdown. Schema:\n"
     '{"action": "click|type|scroll|back|goto|done", "index": int, '
-    '"text": str, "url": str, "say": str}\n'
+    '"text": str, "url": str, "success": bool, "say": str}\n'
     "index is the [n] of the element to act on. For type, index must be an "
     "(input) element and text is what to type. For goto, url is an absolute "
-    "URL. When the task is finished — or you cannot do it — use \"done\" and "
-    "put a short spoken result in say. Never guess a login or payment."
+    "URL. When you have actually COMPLETED the task, use \"done\" with success "
+    "true and a short spoken result in say. If you cannot do it, use \"done\" "
+    "with success FALSE and say why — never claim success for something you did "
+    "not finish. Never guess a login or payment."
 )
 
 
@@ -642,26 +644,41 @@ class BrowserAgentSkill(Skill):
         self._session = session or BrowserSession(config)
         self._think = think          # async (prompt: str) -> str
 
-    async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+    def _task_of(self, request: SkillRequest) -> str:
+        gd = request.match.groupdict() if request.match else {}
+        return (request.args.get("task") or gd.get("task") or "").strip(" .?!")
+
+    async def preflight(self, request: SkillRequest) -> SkillResult | None:
+        """Say what's actually wrong instead of asking to confirm nothing."""
+        speak_mk = mk.is_cyrillic(request.utterance)
         if not self._config.enabled:
             return SkillResult(
                 "Контролата на прелистувачот е исклучена." if speak_mk
                 else NOT_ENABLED, success=False)
-        gd = request.match.groupdict() if request.match else {}
-        task = (request.args.get("task") or gd.get("task") or "").strip(" .?!")
-        if not task:
+        if not self._task_of(request):
             return SkillResult("Што да направам на страната?" if speak_mk
                                else "What should I do on the page?", success=False)
         if self._think is None:
             return SkillResult("My brain is offline, so I can't drive the page.",
                                success=False)
+        return None
+
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        task = self._task_of(request)
+        if mk.is_cyrillic(request.utterance):
+            return f"Ќе преземам контрола над страната за: {task}. Да продолжам?"
+        return f"I'll take control of the page to: {task}. Shall I go ahead?"
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        early = await self.preflight(request)
+        if early is not None:
+            return early
+        speak_mk = mk.is_cyrillic(request.utterance)
+        task = self._task_of(request)
         if not request.context.get("confirmed"):
-            return SkillResult(
-                f"Ќе преземам контрола над страната за: {task}. Да продолжам?"
-                if speak_mk else
-                f"I'll take control of the page to: {task}. Shall I go ahead?",
-                needs_confirmation=True)
+            # Belt to the router's braces — see QuitSkill.execute.
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
 
         history: list[str] = []
         try:
@@ -682,9 +699,17 @@ class BrowserAgentSkill(Skill):
                         success=False)
                 kind = str(action.get("action", "")).lower()
                 if kind == "done":
-                    return SkillResult(action.get("say") or (
-                        f"Готово: {task}." if speak_mk else f"Done: {task}."),
-                        data={"steps": step})
+                    # 'done' means finished OR impossible — honour success (and a
+                    # give-up `say` when the flag is missing) so a gave-up run
+                    # isn't announced as a completed one.
+                    from skills.screen_agent import done_succeeded
+
+                    ok = done_succeeded(action)
+                    say = action.get("say") or (
+                        ("Готово." if speak_mk else "Done.") if ok else
+                        ("Не можев да го завршам тоа." if speak_mk
+                         else "I couldn't finish that on the page."))
+                    return SkillResult(say, success=ok, data={"steps": step})
                 history.append(await self._apply(action, kind, elements))
             return SkillResult(
                 f"Направив {self._config.max_steps} чекори и застанав на лимитот."

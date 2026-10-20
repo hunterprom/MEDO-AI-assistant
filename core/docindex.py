@@ -24,6 +24,8 @@ import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from core import db
+
 logger = logging.getLogger(__name__)
 
 #: Embeds a batch of texts; None when the backend is unavailable.
@@ -96,7 +98,7 @@ class DocumentIndex:
         self._roots = [Path(r) for r in roots]
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=10.0)
+        conn = db.connect(self._db_path, timeout=10.0)
         conn.executescript(_SCHEMA)
         return conn
 

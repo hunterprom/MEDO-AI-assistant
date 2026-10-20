@@ -29,7 +29,10 @@ class MemorySkill extends Skill {
       if (facts.isEmpty) return const SkillResult("I don't remember anything about that yet.");
       return SkillResult(facts.take(4).join('. '));
     }
-    final fact = (m.namedGroup('fact') ?? '').trim();
+    // Guard like every other branch: a recall pattern (group 'q', no 'fact')
+    // can reach here when the text doesn't start with "what do you remember",
+    // and namedGroup('fact') would throw ArgumentError on that match.
+    final fact = (m.groupNames.contains('fact') ? m.namedGroup('fact') : null)?.trim() ?? '';
     if (fact.isEmpty) return const SkillResult('Remember what?', success: false);
     final added = await Store.I.addFact(fact);
     return SkillResult(added ? "Got it — I'll remember that." : 'I already knew that.');

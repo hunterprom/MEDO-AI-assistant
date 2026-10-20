@@ -30,13 +30,14 @@ from collections.abc import Awaitable
 from core.config import PROJECT_ROOT, Settings, apply_local_secrets, load_settings
 from core.events import AssistantState, EventBus, RoutePath, StateMachine
 from core.facts import FactsStore
+from core.grounding import ground_summary
 from core.memory import NoteStore, ReminderStore
 from core.metrics import LatencyLog, TurnTimings
 from core.router import Router
 from core.safety import PathWhitelist
 from ui.console import ConsoleUI
 from ui.hud import HudServer
-from llm.client import LLMUnavailableError, OllamaClient
+from llm.client import CLI_PROVIDERS, LLMUnavailableError, OllamaClient
 from remote.server import RemoteServer
 from voice.loop import VoiceLoop
 from skills.apps import AppsSkill
@@ -57,6 +58,7 @@ from skills.notes import NotesSkill
 from skills.system import (
     PointerControlSkill,
     PowerSkill,
+    QuitSkill,
     ScreenshotSkill,
     SystemInfoSkill,
     VolumeSkill,
@@ -197,10 +199,12 @@ def build_registry(
     briefing_rewrite=None,
     modes=None,
     browser_think=None,
+    cowork_think=None,
     expert=None,
     synthesize_council=None,
     compose=None,
     plan=None,
+    episodes=None,
 ) -> SkillRegistry:
     """Register every skill. Order sets fast-path precedence on overlaps.
 
@@ -212,6 +216,8 @@ def build_registry(
     flowing spoken paragraph; None => the briefing speaks its raw sections.
     ``browser_think`` is the LLM pass that picks the next action in a
     multi-step web task; None => that skill declines instead of guessing.
+    ``cowork_think`` is the pass that decomposes a delegated task into a
+    plan; None => Cowork says it has no brain rather than guessing one.
     """
     registry = SkillRegistry()
     apps_table = settings.skills.get("apps", {})
@@ -232,6 +238,33 @@ def build_registry(
     from skills.repeat_skill import RepeatSkill
 
     registry.register(RepeatSkill())
+
+    # "That was a bug" — write the PREVIOUS turn up as a markdown file you can
+    # hand to whoever is fixing MEDO (core/bugreports.py). Registered here for
+    # the same reason as RepeatSkill: it reads the prior turn out of the
+    # context the router supplies, and its phrases must not be stolen by a
+    # broader pattern later in the list. The registry is passed to itself on
+    # purpose — by the time the skill RUNS it is fully populated, and it is what
+    # turns a recorded skill name into the source file to go and look at.
+    if settings.bug_reports.enabled:
+        from core.bugreports import BugReportStore
+        from core.metrics import MetricsStore
+        from skills.bug_report import BugReportSkill
+
+        registry.register(BugReportSkill(
+            BugReportStore(
+                PROJECT_ROOT / settings.bug_reports.directory,
+                metrics=MetricsStore(settings.memory.db_path),
+                registry=registry, root=PROJECT_ROOT,
+                context_turns=settings.bug_reports.context_turns,
+                max_reports=settings.bug_reports.max_reports),
+            config=settings.bug_reports))
+
+    # "Close yourself" / "quit MEDO": actually end the assistant session (the LLM
+    # used to just narrate a shutdown that never happened). Registered early so
+    # its self-directed phrases beat PowerSkill's bare "shut down" (the machine)
+    # and the window/app-close skills.
+    registry.register(QuitSkill())
 
     # Self-programming: MEDO proposes changes to its OWN code (core/self_dev.py),
     # built in an isolated worktree and gated by the tests. Registered ONLY when
@@ -319,6 +352,13 @@ def build_registry(
     registry.register(RecallFactsSkill(facts, settings.memory.max_facts))
     registry.register(ForgetFactSkill(facts))
     registry.register(RememberFactSkill(facts))
+    # Past CONVERSATIONS (core/episodes.py), distinct from remembered facts:
+    # "what did we talk about yesterday". Registered before the fact skills'
+    # broader "what do you remember" would claim it.
+    if settings.memory.episodes_enabled:
+        from skills.episode_recall import EpisodeRecallSkill
+
+        registry.register(EpisodeRecallSkill(settings, episodes))
     # Window actions before apps: "close the window" is not "close <app>".
     registry.register(WindowActionSkill())
     # "open notepad AND type this in notepad" has to beat AppsSkill, which
@@ -464,13 +504,19 @@ def build_registry(
     # "search obsidian for …". A broken plugin is skipped, never fatal.
     from core.plugins import load_plugins
 
+    _plugin_store = None
+    if settings.security.plugin_approval:
+        from security.plugins import PluginApprovalStore
+
+        _plugin_store = PluginApprovalStore()
     load_plugins(registry, {
         "settings": settings,
         "announcer": announcer,
         "summarize": summarize,
         "reminders": reminder_store,
         "doc_index": doc_index,
-    })
+    }, require_approval=settings.security.plugin_approval,
+       approval_store=_plugin_store)
 
     # "open <anything installed>" — deliberately last of the openers: its
     # pattern is broad by necessity, so it only ever sees what the configured
@@ -486,7 +532,109 @@ def build_registry(
     # "summarize <url>" must not be read as a search for the word "summarize".
     if settings.web_fetch.enabled:
         registry.register(WebFetchSkill(settings.web_fetch, summarize))
-    registry.register(WebSearchSkill(summarize))
+    # Same opener as the site/website skills, so "search up the Mazda RX-7"
+    # lands in the SAME window a following "click the first result" acts on —
+    # that shared session is what makes the merged skill worth having.
+    registry.register(WebSearchSkill(summarize, config=settings.web_search,
+                                     opener=site_opener, safety=settings.safety,
+                                     extra_sites=settings.skills.get("sites")))
+
+    # Greetings + pleasantries answer instantly here instead of on the 15s LLM
+    # path. Registered LATE so a real skill (a morning briefing on "good morning")
+    # still wins first; only leftover small talk reaches it.
+    from skills.smalltalk import SmallTalkSkill
+
+    registry.register(SmallTalkSkill())
+
+    # Software connectors (control local apps by command; NOT MCP). Off by
+    # default — flipping software.enabled on registers each connector action as a
+    # skill, gated by the policy engine like everything else. Guarded so a missing
+    # desktop dep never breaks startup.
+    if settings.software.enabled:
+        try:
+            from security.policy import PolicyEngine
+            from software.mechanisms import Mechanisms
+            from software.registry import register_software
+            from software.win32_backend import Win32Backend
+
+            # PathWhitelist is already imported at module scope (used above).
+            policy = PolicyEngine(settings.security, settings.safety,
+                                  PathWhitelist(settings.safety.whitelist_dirs))
+            mech = Mechanisms(Win32Backend(), policy,
+                              exe_paths=settings.software.exe_paths)
+            n = register_software(registry, settings, mech)
+            logging.getLogger(__name__).info("software connectors: %d actions", n)
+            # Learning: scan an app's UI ("learn CapCut") and later find / go to
+            # its controls. Foundation — locate + single-step navigate.
+            from skills.software_learn import (
+                AppLocateSkill,
+                AppNavigateSkill,
+                LearnAppSkill,
+            )
+            from software.ui_scan import UiaWalker
+
+            walker = UiaWalker()
+            # Vision backup for thin/Electron UIA trees (e.g. CapCut), if enabled.
+            vision = None
+            if settings.software.vision_scan:
+                from software.vision_probe import VisionProbe
+
+                vision = VisionProbe(settings, mechanisms=mech)
+            # Shared app-context so "open the tools menu" / "find me tools"
+            # resolve to the app in focus (or the one just named).
+            from core.app_context import SessionAppContext
+
+            app_ctx = SessionAppContext()
+            registry.register(LearnAppSkill(mech, walker, vision=vision,
+                                            ctx=app_ctx))
+            registry.register(AppLocateSkill(mech, ctx=app_ctx))
+            registry.register(AppNavigateSkill(mech, ctx=app_ctx))
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "software connectors failed to load", exc_info=True)
+
+    # Maker Studio (S2/S3): design real electrical schematics + printable 3D
+    # models by having the brain write library code (SchemDraw / CadQuery) and
+    # EXECUTING it in the sandbox. Off unless studio.enabled; the engineering
+    # libraries are optional (each skill degrades with an "install X" message).
+    if settings.studio.enabled:
+        try:
+            from skills.maker_studio import (
+                CodeBuildSkill,
+                DesignCircuitSkill,
+                Model3DSkill,
+                StudioProjectsSkill,
+            )
+
+            # The announcer makes these builds asynchronous: a real model is
+            # minutes of code writing, and MEDO must stay answerable while it
+            # happens. Same shape as MakeAppSkill above.
+            registry.register(DesignCircuitSkill(settings, announcer=announcer))
+            registry.register(Model3DSkill(settings, announcer=announcer))
+            registry.register(CodeBuildSkill(settings, announcer=announcer))
+            registry.register(StudioProjectsSkill(settings))
+            logging.getLogger(__name__).info(
+                "Maker Studio: schematic + 3D + code + projects skills registered")
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Maker Studio skills failed to load", exc_info=True)
+
+    # MEDO Cowork: hand over a multi-step task, hear a plan, approve it, watch
+    # it run one step at a time. Registered LAST so its patterns can never take
+    # a phrase another skill owns, and given the registry itself — a plan is
+    # resolved against whatever is registered at the moment it is made, which
+    # includes connectors, devices and routines loaded after this point.
+    if settings.cowork.enabled:
+        from security.policy import PolicyEngine
+        from skills.cowork_skill import CoworkSkill
+
+        registry.register(CoworkSkill(
+            settings.cowork, registry, think=cowork_think,
+            policy=PolicyEngine(settings.security, settings.safety,
+                                PathWhitelist(settings.safety.whitelist_dirs)),
+            announce=announcer))
+        logging.getLogger(__name__).info(
+            "cowork: enabled (max %d steps)", settings.cowork.max_steps)
 
     # Last, once every skill exists: the user's own trigger phrases from
     # config.yaml (skills.triggers). They are appended to the very same
@@ -658,20 +806,48 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
     llm = OllamaClient(settings.llm)
 
     async def summarize(query: str, results_text: str) -> str:
-        """Summarize web results into a couple of spoken sentences (fast path)."""
+        """Summarize web results into a couple of spoken sentences (fast path).
+
+        The summary is checked against the results before it is spoken. Asked
+        for "Mazda RX-7", this path returned "Over 800,000 units were produced
+        during its lifetime" — a figure in none of the five snippets, from the
+        model's weights rather than the page, wrapped in three otherwise
+        accurate sentences. The instruction below did not stop it on its own
+        (tested), so core/grounding.py checks the figures mechanically.
+        """
         if not router.model:
             return "I found some results, but I can't summarize them offline."
         prompt = [
             {"role": "system", "content": (
                 "Summarize these web search results into two or three spoken "
-                "sentences. Plain text, no markdown, no lists.")},
+                "sentences. Plain text, no markdown, no lists.\n"
+                "Use ONLY what the results say. Never add a figure, date or "
+                "name you know from elsewhere, and never attach a number from "
+                "one result to a subject or timespan from another. One "
+                "for-sale listing is not a general fact. If the results don't "
+                "answer the query, say so in one sentence instead of "
+                "assembling an answer out of what happens to be there.")},
             {"role": "user", "content": f"Query: {query}\n\nResults:\n{results_text}"},
         ]
         try:
             message = await llm.chat(router.model, prompt)
         except LLMUnavailableError:
             return "I found results, but my summarizer is offline."
-        return (message.get("content") or "").strip() or "I couldn't summarize that."
+        summary = (message.get("content") or "").strip()
+
+        async def _reask(demand: str) -> str:
+            try:
+                second = await llm.chat(router.model, [
+                    *prompt,
+                    {"role": "assistant", "content": summary},
+                    {"role": "user", "content": demand},
+                ])
+            except LLMUnavailableError:
+                return ""
+            return (second.get("content") or "").strip()
+
+        summary = await ground_summary(summary, results_text, _reask)
+        return summary or "I couldn't summarize that."
 
     async def compose(instruction: str) -> str:
         """Write document/presentation content as Markdown (for MakeDocumentSkill).
@@ -765,6 +941,48 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             return ""
         return (message.get("content") or "").strip()
 
+    _cowork_client: list = []
+
+    def _cowork_brain():
+        """The planner's own client: same provider, a longer allowance.
+
+        Planning is a build, not a spoken turn — it reads the whole capability
+        catalogue and writes JSON, and the conversation's 120 s budget (sized so
+        nobody waits two minutes for an answer out loud) cut a long plan off
+        mid-generation. Same trick Maker Studio uses for code writing.
+        """
+        if not _cowork_client:
+            cfg = settings.llm.model_copy()
+            budget = float(getattr(settings.cowork, "plan_timeout_s", 0) or 0)
+            if budget > 0:
+                cfg.request_timeout_s = max(cfg.request_timeout_s, budget)
+                cfg.cli_timeout_s = max(cfg.cli_timeout_s, budget)
+            _cowork_client.append(OllamaClient(cfg))
+        return _cowork_client[0]
+
+    async def cowork_think(prompt: str) -> str:
+        """One LLM pass: a delegated task + the capability catalogue -> a plan.
+
+        Uses ``cowork.model`` when set, else the active brain. Planning is the
+        one part of Cowork worth spending a stronger model on: everything after
+        it is deterministic, and a plan built by a model that misread the task
+        is a plan the user then approves.
+        """
+        model = settings.cowork.model or router.model
+        if not model:
+            return ""
+        try:
+            message = await _cowork_brain().chat(
+                model, [{"role": "user", "content": prompt}], for_speech=False)
+        except LLMUnavailableError:
+            return ""
+        # strip_think FIRST: a reasoning model works the problem out loud, and
+        # its chain of thought is full of draft JSON. Handing that to the plan
+        # parser means parsing the model's second thoughts instead of its answer.
+        from llm.client import strip_think
+
+        return strip_think(message.get("content") or "").strip()
+
     async def briefing_rewrite(macedonian: bool, raw_sections: str) -> str:
         """One LLM pass: briefing sections -> a flowing spoken paragraph (M8).
 
@@ -783,11 +1001,20 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
                 f"Rewrite the user's briefing sections into ONE flowing spoken "
                 f"morning briefing in {language}, 30 to 60 seconds when read "
                 f"aloud. Plain text only — no markdown, no lists, no headings. "
-                f"Keep every fact; invent nothing.")},
+                f"Keep every fact; invent nothing. Start with the briefing "
+                f"itself — do not introduce yourself or announce what you are "
+                f"about to do.")},
             {"role": "user", "content": raw_sections},
         ]
+        # Stitching ready-made sentences together needs no reasoning, so this
+        # runs on the light tier. On the 30B thinking model the SAME rewrite
+        # measured 72 s of the ~115 s a "morning brief" was taking; llama3.2:3b
+        # does it in ~9 s, and the facts it is given are already final.
+        model = settings.llm.fast_model or router.model
+        if settings.llm.provider in CLI_PROVIDERS:
+            model = router.model      # CLI agents have no swappable model tier
         try:
-            message = await llm.chat(router.model, prompt)
+            message = await llm.chat(model, prompt)
         except LLMUnavailableError:
             return ""
         return (message.get("content") or "").strip()
@@ -819,11 +1046,51 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
     modes = SessionModes(continuous=settings.conversation.continuous)
 
+    # Episodic memory: past sessions, summarised and embedded. Shares the
+    # assistant database and the embed model everything else here uses.
+    episodes = None
+    if settings.memory.episodes_enabled:
+        from core.episodes import EpisodeStore
+
+        _ep_model = settings.memory.embed_model
+        episodes = EpisodeStore(
+            settings.memory.db_path,
+            (lambda texts: embed_texts(texts, _ep_model, settings.llm.host))
+            if _ep_model else None,
+            _ep_model or "none")
+        # Retention runs at STARTUP rather than at shutdown: shutdown is the one
+        # moment that must stay fast and unfailable, and a sweep that is a day
+        # late costs nothing.
+        dropped = episodes.prune(settings.memory.episode_retention_days)
+        if dropped:
+            logging.getLogger(__name__).info(
+                "pruned %d episode summary(ies) past the retention window", dropped)
+
     registry = build_registry(settings, announcer, summarize, reminders, doc_index,
                               briefing_rewrite=briefing_rewrite, modes=modes,
-                              browser_think=browser_think, expert=expert,
+                              browser_think=browser_think,
+                              cowork_think=cowork_think, expert=expert,
                               synthesize_council=synthesize_council, compose=compose,
-                              plan=plan)
+                              plan=plan, episodes=episodes)
+
+    # Routines (routines/*.yaml): user-defined chains of skills, registered as
+    # ordinary skills so they route on the fast path, appear as LLM tools and
+    # pass through the same policy gate as anything else. A malformed routine is
+    # reported and skipped, never fatal.
+    from core.composer import ROUTINES_DIRNAME, load_routine_files, register_routines
+
+    yaml_routines, routine_errors = load_routine_files(
+        PROJECT_ROOT / ROUTINES_DIRNAME)
+    if yaml_routines or routine_errors:
+        n_routines, refused, warnings = register_routines(registry, yaml_routines)
+        routine_errors += refused
+        if n_routines:
+            console.print(f"[dim]routines: {n_routines} loaded from "
+                          f"{ROUTINES_DIRNAME}/.[/dim]")
+        for problem in routine_errors:
+            console.print(f"[yellow]routine refused:[/yellow] {problem}")
+        for warning in warnings:
+            console.print(f"[yellow]routine warning:[/yellow] {warning}")
 
     # MCP: connect configured servers and register their tools as skills, so
     # any application that speaks the Model Context Protocol becomes callable
@@ -882,10 +1149,37 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
 
         _spawn(RoutineScheduler(settings.routines, router, announcer).run_forever(),
                "routine scheduler")
+    # A YAML routine with a `trigger.at` is scheduled through the SAME scheduler,
+    # by routing its trigger phrase — so the timed path and the spoken path run
+    # exactly the same skill, and there is no second execution engine to keep in
+    # step with the first.
+    _scheduled = [r for r in yaml_routines
+                  if r.trigger.scheduled and r.trigger.phrases]
+    if _scheduled:
+        from core.routines import RoutineScheduler as _Scheduler
+
+        _items = [type("_R", (), {
+            "name": r.name, "enabled": True, "at": r.trigger.at,
+            "days": list(r.trigger.days), "ask": [r.trigger.phrases[0]],
+        })() for r in _scheduled]
+        _spawn(_Scheduler(_items, router, announcer).run_forever(),
+               "yaml routine scheduler")
+
+    # Proactive layer: MEDO speaking without being asked (battery, time-of-day,
+    # a long task finishing). Off by default; when on it never fires mid-turn or
+    # inside the quiet-hours window — see core/proactive.py.
+    if settings.proactive.enabled:
+        from core.proactive import ProactiveService, build_triggers
+
+        _triggers = build_triggers(settings.proactive)
+        if _triggers:
+            _spawn(ProactiveService(settings.proactive, sm, announcer, bus,
+                                    _triggers, router.metrics).run_forever(),
+                   "proactive layer")
 
     # Manual-wake signal: POST /wake sets it and the voice loop's wake-word wait
     # returns immediately — so you can start a turn from the HUD without saying
-    # the "hey jarvis" phrase (fixes being stuck in STANDING BY). Only handed to
+    # the "hey medo" wake word (fixes being stuck in STANDING BY). Only handed to
     # the server when voice mode will actually consume it, so /wake correctly
     # 409s in text-only sessions instead of pretending to listen.
     wake_event = threading.Event()
@@ -980,6 +1274,32 @@ async def async_main(once: str | None, serve: bool, voice: bool, hud: bool) -> N
             await run_repl(router, sm, llm, ui, log)
     finally:
         _slog = logging.getLogger(__name__)
+
+        # Episodic memory: write down what this session was about, before the
+        # conversation window dies with the process. Deliberately the FIRST
+        # shutdown step — it needs the LLM, which the steps below are about to
+        # tear down — and deliberately bounded and swallowed: a summary is a
+        # nicety, and nothing here may turn a clean exit into a traceback or a
+        # hang. A session too short to be a conversation is skipped inside
+        # summarize_session, so this usually costs nothing at all.
+        if episodes is not None and expert is not None:
+            try:
+                from core.episodes import summarize_session
+
+                _turns = list(router.conversation._turns)
+                _summary = await asyncio.wait_for(
+                    summarize_session(
+                        _turns, expert,
+                        min_turns=settings.memory.episode_min_turns),
+                    timeout=60.0)
+                if _summary:
+                    await asyncio.to_thread(
+                        episodes.add, _summary, turns=len(_turns),
+                        language=settings.primary_language())
+                    _slog.info("remembered this session in %d character(s)",
+                               len(_summary))
+            except Exception:
+                _slog.warning("could not remember this session", exc_info=True)
 
         async def _quietly(what: str, coro) -> None:
             # Each shutdown step guarded on its own: one failing (e.g. aiohttp

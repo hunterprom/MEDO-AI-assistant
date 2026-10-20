@@ -23,7 +23,10 @@ class MedoServer {
 
 class MedoDiscovery {
   static const _probe = 'MEDO_DISCOVER_V1';
-  static const _port = 8710; // companion API port (UDP twin)
+  // Fixed, well-known discovery port — the server always answers here regardless
+  // of its (configurable) API port. The real API port comes from the reply's
+  // 'port' field below, so this constant must NOT be confused with the API port.
+  static const _port = 8710;
 
   /// Broadcast and wait for the first MEDO to answer; null when none does.
   ///

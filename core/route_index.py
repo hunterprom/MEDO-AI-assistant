@@ -38,14 +38,22 @@ from pathlib import Path
 
 import numpy as np
 
+from core import db
+
 logger = logging.getLogger(__name__)
 
 #: Embeds a batch of strings; None when the backend is unavailable (mirrors
 #: core.embeddings.embed_texts / core.docindex.Embedder).
 Embedder = Callable[[Sequence[str]], "list[np.ndarray] | None"]
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS skill_route_vectors (
+#: The default table. Parameterised because the council reuses this whole
+#: machinery for a DIFFERENT population (specialists, not skills) and the two
+#: must not share a keyspace — a specialist named "weather" and a skill named
+#: "weather" would otherwise overwrite each other's vector.
+DEFAULT_TABLE = "skill_route_vectors"
+
+_SCHEMA_TEMPLATE = """
+CREATE TABLE IF NOT EXISTS {table} (
     skill        TEXT PRIMARY KEY,
     key          TEXT NOT NULL,          -- hash(skill + routing_text + embedder)
     routing_text TEXT NOT NULL,
@@ -110,18 +118,23 @@ class SkillRouteIndex:
     """Builds + caches per-skill routing vectors; holds them for the matcher."""
 
     def __init__(self, db_path: str | Path, embedder: Embedder | None,
-                 embedder_id: str) -> None:
+                 embedder_id: str, table: str = DEFAULT_TABLE) -> None:
         self._db_path = str(db_path)
         self._embedder = embedder
         #: Identifies the embedding SPACE; part of every cache key so a model
         #: swap invalidates cleanly rather than mixing incompatible vectors.
         self._embedder_id = embedder_id or "none"
+        # Identifier, not data: it is interpolated into SQL, so anything other
+        # than a plain name is refused rather than escaped.
+        if not table.replace("_", "").isalnum():
+            raise ValueError(f"not a valid table name: {table!r}")
+        self._table = table
         self._entries: list[RouteEntry] = []
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, timeout=10.0)
+        conn = db.connect(self._db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
-        conn.executescript(_SCHEMA)
+        conn.executescript(_SCHEMA_TEMPLATE.format(table=self._table))
         return conn
 
     # -- build ----------------------------------------------------------------
@@ -140,7 +153,7 @@ class SkillRouteIndex:
         with self._connect() as conn:
             cached = {r["skill"]: r for r in conn.execute(
                 "SELECT skill, key, routing_text, dim, embedding "
-                "FROM skill_route_vectors").fetchall()}
+                f"FROM {self._table}").fetchall()}
 
         entries: list[RouteEntry] = []
         to_embed: list[tuple[str, str, str, int]] = []   # skill, text, key, count
@@ -165,7 +178,7 @@ class SkillRouteIndex:
                     for (name, text, key, count), vec in zip(to_embed, vectors, strict=True):
                         v = np.asarray(vec, dtype=np.float32)
                         conn.execute(
-                            "INSERT INTO skill_route_vectors "
+                            f"INSERT INTO {self._table} "  # noqa: S608 - validated identifier
                             "(skill, key, routing_text, dim, embedding) "
                             "VALUES (?,?,?,?,?) "
                             "ON CONFLICT(skill) DO UPDATE SET "
@@ -196,18 +209,16 @@ class SkillRouteIndex:
         """In-memory routing vectors (empty until :meth:`build`)."""
         return list(self._entries)
 
-    def match(self, query_vector: "np.ndarray | None",
-              threshold: float = 0.6, margin: float = 0.04
-              ) -> "tuple[str, float] | None":
-        """Best-matching skill for a query embedding, or None.
+    def _scored(self, query_vector: "np.ndarray | None"
+                ) -> "list[tuple[str, float]]":
+        """Cosine score of every indexed skill vs the query, sorted desc.
 
-        Cosine similarity against every indexed skill; the winner must clear
-        ``threshold`` AND beat the runner-up by ``margin`` — an ambiguous match
-        (two skills nearly tied) is deliberately declined so it falls through to
-        the LLM rather than guess. Pure + unit-testable (no embedder call here).
+        The pure, embedder-free core shared by :meth:`match` and
+        :meth:`top_pair`. Empty list for an empty index, a None/degenerate
+        query, or when nothing scored finitely.
         """
         if not self._entries or query_vector is None:
-            return None
+            return []
         q = np.asarray(query_vector, dtype=np.float32).ravel()
         qn = float(np.linalg.norm(q))
         # A non-finite norm (NaN/inf from a degenerate embedding) would slip past
@@ -215,7 +226,7 @@ class SkillRouteIndex:
         # NaN comparison is False, so a NaN could sort ahead of a real match and
         # be handed back. Reject it outright instead.
         if not np.isfinite(qn) or qn == 0.0:
-            return None
+            return []
         q = q / qn
         scored: list[tuple[str, float]] = []
         for e in self._entries:
@@ -226,14 +237,48 @@ class SkillRouteIndex:
             score = float(q @ (v / vn))
             if np.isfinite(score):
                 scored.append((e.skill, score))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored
+
+    def match(self, query_vector: "np.ndarray | None",
+              threshold: float = 0.6, margin: float = 0.04
+              ) -> "tuple[str, float] | None":
+        """Best-matching skill for a query embedding, or None.
+
+        Cosine similarity against every indexed skill; the winner must clear
+        ``threshold`` AND beat the runner-up by ``margin`` — an ambiguous match
+        (two skills nearly tied) is deliberately declined so it falls through to
+        the LLM rather than guess. Pure + unit-testable (no embedder call here).
+        """
+        scored = self._scored(query_vector)
         if not scored:
             return None
-        scored.sort(key=lambda x: x[1], reverse=True)
         best_skill, best = scored[0]
         runner_up = scored[1][1] if len(scored) > 1 else -1.0
         if best >= threshold and (best - runner_up) >= margin:
             return best_skill, best
         return None
+
+    def top_pair(self, query_vector: "np.ndarray | None",
+                 threshold: float = 0.6, margin: float = 0.04
+                 ) -> "list[tuple[str, float]]":
+        """The top TWO skills, ONLY when they are a genuine, clarifiable tie.
+
+        Returns the first two ``(skill, score)`` pairs when BOTH clear
+        ``threshold`` and their gap is below ``margin`` — exactly the ambiguous
+        case :meth:`match` declines to the LLM. Otherwise ``[]`` (a clear
+        winner, a weak best, or fewer than two entries). Requiring both
+        candidates over ``threshold`` guarantees we only ever offer two
+        genuinely-plausible skills. Pure + unit-testable, no embedder call.
+        """
+        scored = self._scored(query_vector)
+        if len(scored) < 2:
+            return []
+        best = scored[0][1]
+        runner_up = scored[1][1]
+        if best >= threshold and runner_up >= threshold and (best - runner_up) < margin:
+            return scored[:2]
+        return []
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -243,8 +288,9 @@ class SkillRouteIndex:
         keep = set(live_names)
         with self._connect() as conn:
             rows = [r["skill"] for r in conn.execute(
-                "SELECT skill FROM skill_route_vectors").fetchall()]
+                f"SELECT skill FROM {self._table}").fetchall()]  # noqa: S608
             gone = [s for s in rows if s not in keep]
             for s in gone:
-                conn.execute("DELETE FROM skill_route_vectors WHERE skill = ?", (s,))
+                conn.execute(
+                    f"DELETE FROM {self._table} WHERE skill = ?", (s,))  # noqa: S608
         return len(gone)

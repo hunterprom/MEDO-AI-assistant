@@ -40,29 +40,52 @@ KEY_MAP: dict[str, str] = {
 }
 
 
+#: Words that are glue, not a dropped instruction — never reported as ignored.
+_FILLER = {"", "and", "then", "the", "a", "an", "please", "key", "keys",
+           "button", "on", "my", "keyboard"}
+
+
+def parse_key_request(raw: str | list[str]) -> tuple[list[str], list[str], bool]:
+    """``(keys, ignored_words, sequential)``.
+
+    ``ignored_words`` is what wasn't understood as a key, so the caller can SAY
+    so — "press control s and close the window" used to save the file and
+    silently drop the rest. ``sequential`` is True when the user said "then",
+    which means press the keys one after another rather than as a chord
+    ("press a and then b" was being sent as a simultaneous a+b).
+    """
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        parts = re.split(r"[\s+,]+", text)
+    else:
+        parts = [str(p).strip().lower() for p in raw]
+        text = " ".join(parts)
+    sequential = bool(re.search(r"\bthen\b", text))
+    keys: list[str] = []
+    ignored: list[str] = []
+    i = 0
+    while i < len(parts):
+        pair = " ".join(parts[i : i + 2])
+        if i + 1 < len(parts) and pair in KEY_MAP:
+            keys.append(KEY_MAP[pair])
+            i += 2
+        elif parts[i] in KEY_MAP:
+            keys.append(KEY_MAP[parts[i]])
+            i += 1
+        else:
+            if parts[i] not in _FILLER:
+                ignored.append(parts[i])
+            i += 1
+    return keys, ignored, sequential
+
+
 def resolve_keys(raw: str | list[str]) -> list[str]:
     """'control shift a' or ['ctrl','a'] -> pyautogui names; unknowns dropped.
 
     Two-word aliases ("page down", "volume up") are matched greedily before
     single tokens, so "press page down" means PageDown, not the down arrow.
     """
-    if isinstance(raw, str):
-        parts = re.split(r"[\s+,]+", raw.strip().lower())
-    else:
-        parts = [str(p).strip().lower() for p in raw]
-    out: list[str] = []
-    i = 0
-    while i < len(parts):
-        pair = " ".join(parts[i : i + 2])
-        if i + 1 < len(parts) and pair in KEY_MAP:
-            out.append(KEY_MAP[pair])
-            i += 2
-        elif parts[i] in KEY_MAP:
-            out.append(KEY_MAP[parts[i]])
-            i += 1
-        else:
-            i += 1
-    return out
+    return parse_key_request(raw)[0]
 
 
 def _pyautogui():
@@ -179,7 +202,7 @@ class PressKeysSkill(Skill):
         raw = request.args.get("keys") or (
             request.match.groupdict().get("keys", "") if request.match else ""
         )
-        keys = resolve_keys(raw)
+        keys, ignored, sequential = parse_key_request(raw)
         if not keys:
             return SkillResult(
                 "I don't know those keys — try something like 'press control s'.",
@@ -189,11 +212,21 @@ class PressKeysSkill(Skill):
             gui = _pyautogui()
             if len(keys) == 1:
                 await asyncio.to_thread(gui.press, keys[0])
+            elif sequential:
+                # "press a and then b" is a SEQUENCE, not a chord.
+                for key in keys:
+                    await asyncio.to_thread(gui.press, key)
             else:
                 await asyncio.to_thread(gui.hotkey, *keys)
         except Exception as exc:
             return SkillResult(f"I couldn't press that: {exc}", success=False)
-        return SkillResult(f"Pressed {' '.join(keys)}.")
+        pressed = (", then ".join(keys) if sequential and len(keys) > 1
+                   else " ".join(keys))
+        # Say what was dropped: silently swallowing the rest of the sentence
+        # ("...and close the window") looked like the whole request had run.
+        tail = (f" I ignored '{' '.join(ignored)}' — say that separately."
+                if ignored else "")
+        return SkillResult(f"Pressed {pressed}.{tail}")
 
     def tool_schema(self) -> dict[str, Any]:
         return {

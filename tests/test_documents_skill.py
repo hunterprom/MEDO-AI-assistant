@@ -92,6 +92,16 @@ async def test_adjective_before_kind_still_routes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_kind_word_in_topic_does_not_override_the_ask(tmp_path):
+    # A subject containing "table"/"deck" must not flip the artifact kind: the
+    # kind is sniffed from the KIND phrase, not the whole utterance.
+    essay = await _run(_skill(tmp_path), "write an essay about the periodic table")
+    assert essay.success and essay.data["kind"] == "document"
+    report = await _run(_skill(tmp_path), "make a report about deck construction")
+    assert report.success and report.data["kind"] == "document"
+
+
+@pytest.mark.asyncio
 async def test_no_topic_asks_what_about(tmp_path):
     result = await _run(_skill(tmp_path), "make a report")
     assert result.success is False and "about" in result.speech.lower()

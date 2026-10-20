@@ -139,10 +139,12 @@ class MakeDocumentSkill(Skill):
 
         kind_word = str(args.get("kind") or gd.get("kind") or "").lower()
         low = request.text.lower()
-        if any(w in kind_word or w in low for w in _SHEET_WORDS):
+        # Sniff the KIND phrase only — not the whole utterance — so a subject that
+        # happens to contain "table"/"deck"/"slide" doesn't override the ask.
+        if any(w in kind_word for w in _SHEET_WORDS):
             kind = "spreadsheet"
         elif (args.get("kind") == "presentation"
-              or any(w in kind_word or w in low for w in _PRES_WORDS)):
+              or any(w in kind_word for w in _PRES_WORDS)):
             kind = "presentation"
         else:
             kind = "document"

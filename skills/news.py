@@ -78,7 +78,7 @@ class NewsSkill(Skill):
         import feedparser
         import httpx
 
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         feeds = self._pick_feeds(speak_mk)
         if not feeds:
             return SkillResult(

@@ -91,7 +91,7 @@ class TimerSkill(Skill):
     patterns = [
         re.compile(r"\bcancel\s+(?:all\s+)?(?:timers?|reminders?|alarms?)\b", re.IGNORECASE),
         re.compile(r"\b(?:list|show)\s+(?:my\s+)?(?:timers?|reminders?|alarms?)\b", re.IGNORECASE),
-        re.compile(r"\b(?:set|start)\s+(?:a\s+)?(?:timer|alarm|countdown)\b.*", re.IGNORECASE),
+        re.compile(r"\b(?:set|start)\s+(?:(?:a|an|the)\s+)?(?:timer|alarm|countdown)\b.*", re.IGNORECASE),
         re.compile(r"\bremind\s+me\b.*", re.IGNORECASE),
         re.compile(r"\btimer\s+for\b.*", re.IGNORECASE),
         # Everyday alarm/timer phrasings (duration is parsed from the whole text).
@@ -165,7 +165,10 @@ class TimerSkill(Skill):
         args = request.args or {}
         action = str(args.get("action") or "").strip().lower()
 
-        if action == "cancel" or re.search(r"\bcancel\b", text, re.IGNORECASE):
+        # Gate on the intent the router actually matched (the cancel pattern), not
+        # a bare-word scan of the whole utterance — otherwise "remind me to cancel
+        # my dentist appointment" would wipe every active timer.
+        if action == "cancel" or (request.match is not None and request.match.re is self.patterns[0]):
             count = len(self._timers)
             for timer in list(self._timers.values()):
                 timer.task.cancel()
@@ -174,7 +177,7 @@ class TimerSkill(Skill):
             self._timers.clear()
             return SkillResult(f"Cancelled {count} timer{'s' if count != 1 else ''}.")
 
-        if action == "list" or re.search(r"\b(list|show)\b", text, re.IGNORECASE):
+        if action == "list" or (request.match is not None and request.match.re is self.patterns[1]):
             if not self._timers:
                 return SkillResult("You have no active timers.")
             desc = "; ".join(

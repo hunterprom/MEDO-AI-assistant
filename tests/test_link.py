@@ -56,6 +56,21 @@ def test_invalid_manifests_report_every_problem():
         {"device_id": "x1", "name": "x", "capabilities": []}))
 
 
+def test_redos_alternation_and_optional_patterns_are_rejected():
+    # Beyond (a+)+, the heuristic must also reject optional- and alternation-
+    # based catastrophic backtracking; search()'d against every utterance these
+    # would hang the single-threaded router (e.g. "aaaaaaaaaaaaaaaa!" vs
+    # "(a|a|a)+$"). They compile fine, so re.compile alone won't stop them.
+    for evil in ["(a|a|a)+$", "(a?)+", "(a?)*", "([a-z]|[a-z])+"]:
+        cap = {"name": "go", "description": "do it", "fast_patterns": [evil]}
+        errors = validate_manifest({**LAMP, "capabilities": [cap]})
+        assert any("catastrophic-backtracking" in e for e in errors), evil
+    # A quantified *safe* alternation (no overlap, followed by \b) still passes.
+    ok = {"name": "go", "description": "do it",
+          "fast_patterns": [r"\bdog,?\s+(stand|up)\b"]}
+    assert validate_manifest({**LAMP, "capabilities": [ok]}) == []
+
+
 # --- registration -> tools + fast patterns ----------------------------------
 
 
@@ -231,3 +246,24 @@ async def test_poll_result_and_device_list_contract(lan: TestClient):
     assert devices[0]["name"] == "the desk lamp"
     assert devices[0]["online"] is True             # it polled a moment ago
     assert devices[0]["capabilities"] == 2
+
+
+def test_two_devices_colliding_on_a_skill_name_do_not_500(tmp_path):
+    """"robo"+"dog_sit" and "robo_dog"+"sit" both build the skill name
+    robo_dog_sit. register() raised mid-loop, which surfaced as an HTTP 500 and
+    left the second device half-installed but "known"."""
+    from skills.base import SkillRegistry
+
+    reg = SkillRegistry()
+    link = LinkRegistry(reg, tmp_path / "link.db")
+    a = {"device_id": "robo", "name": "Robo", "capabilities": [
+        {"name": "dog_sit", "description": "sit"}]}
+    b = {"device_id": "robo_dog", "name": "Robo Dog", "capabilities": [
+        {"name": "sit", "description": "sit"},
+        {"name": "stand", "description": "stand"}]}
+    link._install(a)
+    link._install(b)                       # must not raise
+    names = {s.name for s in reg.all()}
+    assert "robo_dog_sit" in names         # kept by its first owner
+    assert "robo_dog_stand" in names       # the rest of device B still installed
+    assert link.known("robo_dog")

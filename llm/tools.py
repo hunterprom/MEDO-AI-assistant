@@ -64,6 +64,9 @@ async def dispatch_tool(
     # Reconstruct a natural utterance so pattern-driven skills still behave, and
     # pass the structured args the LLM chose. ``via=tool`` lets a skill know it's
     # being called by the model (e.g. web search returns raw results to summarize).
+    # NOTE the reconstruction is always ENGLISH ("weather Skopje"), so it must
+    # never be sniffed for the user's language — the router puts the real words
+    # in ``context['utterance']`` and skills read ``request.utterance``.
     request = SkillRequest(
         text=_synthesize_text(name, arguments),
         args=arguments,

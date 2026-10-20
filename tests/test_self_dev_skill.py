@@ -24,11 +24,17 @@ class _FakeEngine:
         self._raise = raise_exc
         self.applied: list = []
         self.discarded: list = []
+        self.approvals: list = []
 
     async def propose(self, request):
         if self._raise is not None:
             raise self._raise
         return self._proposal
+
+    def approve(self, proposal, approved_by="human"):
+        # The real engine records the human's yes on disk before merging; the
+        # fake just remembers who said it, so the skill's call is asserted.
+        self.approvals.append(approved_by)
 
     async def apply(self, proposal):
         self.applied.append(proposal)
@@ -172,3 +178,51 @@ async def test_discard_drops_the_pending_proposal():
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
+
+
+# -- dev mode must not turn "discard" into "merge" ---------------------------
+
+@pytest.mark.asyncio
+async def test_discard_still_discards_when_confirmed_is_injected():
+    """Dev mode (security.yolo) injects confirmed=True on EVERY utterance. Here
+    `confirmed` also picked WHICH branch ran, so "discard that proposal" merged
+    the change into the live repo instead of throwing it away."""
+    engine = _FakeEngine(proposal=_proposal(ok=True))
+    skill = SelfDevSkill(engine, None)
+    await skill.execute(SkillRequest(text="fix your code so the light turns on"))
+    await skill._task
+
+    result = await skill.execute(SkillRequest(
+        text="discard that proposal", context={"confirmed": True}))
+    assert engine.discarded and not engine.applied      # thrown away, NOT merged
+    assert skill._pending is None
+    assert "discard" in result.speech.lower()
+
+
+@pytest.mark.asyncio
+async def test_injected_confirm_does_not_merge_an_unrelated_request():
+    """A brand-new self-dev request while dev mode injects confirmed must start a
+    proposal, not silently apply the pending one."""
+    engine = _FakeEngine(proposal=_proposal(ok=True))
+    skill = SelfDevSkill(engine, None)
+    await skill.execute(SkillRequest(text="fix your code so the light turns on"))
+    await skill._task
+    assert skill._pending is not None
+
+    await skill.execute(SkillRequest(text="fix your code so the fan spins",
+                                     context={"confirmed": True}))
+    if skill._task:
+        await skill._task
+    assert not engine.applied                            # nothing was merged
+
+
+@pytest.mark.asyncio
+async def test_explicit_apply_with_injected_confirm_still_merges():
+    """Dev mode should still auto-accept the gate for an ACTUAL apply request."""
+    engine = _FakeEngine(proposal=_proposal(ok=True))
+    skill = SelfDevSkill(engine, None)
+    await skill.execute(SkillRequest(text="fix your code so the light turns on"))
+    await skill._task
+    done = await skill.execute(SkillRequest(text="apply your change",
+                                            context={"confirmed": True}))
+    assert engine.applied and "merged" in done.speech.lower()

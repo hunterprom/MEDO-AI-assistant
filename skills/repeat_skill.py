@@ -47,7 +47,7 @@ class RepeatSkill(Skill):
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         last = request.context.get("last_reply")
         if not last or not str(last).strip():
             return SkillResult(NOTHING_MK if speak_mk else NOTHING, success=False)

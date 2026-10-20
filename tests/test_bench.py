@@ -139,3 +139,23 @@ async def test_empty_inventory_says_so(tmp_path):
     match = skill.match("do i have any op amps")
     r = await skill.execute(SkillRequest(text="do i have any op amps", match=match))
     assert "Nothing in the bench inventory" in r.speech
+
+
+def test_do_i_have_any_non_part_questions_do_not_hijack_bench(tmp_path):
+    # "do I have any meetings/emails/..." must NOT be claimed by the bench —
+    # they aren't parts, and LocateAppSkill declines an "any"-led name, so a
+    # too-broad guard sent them here and searched electronics for "meetings".
+    skill, _, _ = _skill(tmp_path)
+    for text in (
+        "do i have any meetings today",
+        "do i have any unread emails",
+        "do i have any new messages",
+        "do i have any money in my account",
+        "do i have any appointments tomorrow",
+        "do i have any notifications",
+    ):
+        assert skill.match(text) is None, text
+    # …but genuine part questions still route to the inventory.
+    for text in ("do i have any 10k resistors", "do i have any LEDs",
+                 "do i have any op amps"):
+        assert skill.match(text) is not None, text

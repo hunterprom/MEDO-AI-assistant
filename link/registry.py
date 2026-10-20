@@ -39,10 +39,11 @@ logger = logging.getLogger(__name__)
 
 _DEVICE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
 _CAP_NAME = re.compile(r"^[a-z0-9][a-z0-9_]{0,31}$")
-#: Heuristic for a catastrophic-backtracking regex: a quantifier INSIDE a group
-#: that is itself quantified — (a+)+, (a*)*, (.+)*. Not exhaustive, but it
-#: rejects the classic ReDoS shapes a device manifest could smuggle in.
-_REDOS = re.compile(r"\([^()]*[+*][^()]*\)[+*]")
+#: Heuristic for a catastrophic-backtracking regex: a quantified group whose
+#: body holds a quantifier, optional, or alternation — (a+)+, (a*)*, (.+)*,
+#: (a?)+, (a|a)+. Not exhaustive, but it rejects the classic ReDoS shapes a
+#: device manifest could smuggle in.
+_REDOS = re.compile(r"\([^()]*[+*?|][^()]*\)[+*]")
 TRANSPORTS = ("http_poll", "websocket")
 
 #: A device is offline when it hasn't polled/connected for this long.
@@ -174,14 +175,17 @@ class DeviceCapabilitySkill(Skill):
             },
         }
 
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return (f"This will make {self._device_name} "
+                f"{self._cap['name'].replace('_', ' ')}. Are you sure?")
+
     async def execute(self, request: SkillRequest) -> SkillResult:
         # Same protocol as built-in destructive skills: ask once, act on yes.
+        # The router holds a confirming capability at _preconfirm, so this is
+        # the guard for a direct execute() rather than the live path.
         if self.requires_confirmation and not request.context.get("confirmed"):
-            return SkillResult(
-                f"This will make {self._device_name} {self._cap['name'].replace('_', ' ')}. "
-                f"Are you sure?",
-                needs_confirmation=True,
-            )
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
         return await self._link.dispatch(
             self._device_id, self._cap["name"], request.args or {}
         )
@@ -249,8 +253,20 @@ class LinkRegistry:
         self._manifests[device_id] = manifest
         self._state.setdefault(device_id, _DeviceState())
         for cap in manifest["capabilities"]:
-            self._skills.register(
-                DeviceCapabilitySkill(self, device_id, manifest["name"], cap))
+            skill = DeviceCapabilitySkill(self, device_id, manifest["name"], cap)
+            try:
+                self._skills.register(skill)
+            except ValueError:
+                # Two devices can build the SAME skill name across the id/cap
+                # boundary ("robo"+"dog_sit" and "robo_dog"+"sit" both give
+                # robo_dog_sit). Registering raised mid-loop, which surfaced as
+                # an HTTP 500 and left the device half-installed but "known".
+                # Skip the clashing capability loudly instead — the rest of the
+                # device still works, and the name keeps routing to its owner.
+                logger.warning(
+                    "link device %r capability %r skipped: the skill name %r is "
+                    "already taken by another device — rename one of them",
+                    device_id, cap.get("name"), skill.name)
 
     # -- liveness + transport -------------------------------------------------
 

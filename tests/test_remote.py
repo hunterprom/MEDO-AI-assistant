@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 
 import pytest
@@ -12,7 +13,13 @@ from core.config import load_settings
 from core.events import EventBus, StateMachine
 from core.router import Router
 from llm.client import OllamaClient
-from remote.server import MAX_TEXT_CHARS, PAIR_MAX_PENDING, RemoteServer
+from remote.server import (
+    MAX_TEXT_CHARS,
+    PAIR_MAX_PENDING,
+    PAIR_MAX_PENDING_PER_PEER,
+    PAIR_REQUEST_TTL_S,
+    RemoteServer,
+)
 from skills.base import SkillRegistry
 from skills.datetime_skill import DateTimeSkill
 
@@ -389,6 +396,39 @@ async def test_pending_requests_are_capped(server_client):
 
 
 @pytest.mark.asyncio
+async def test_a_single_lan_peer_cannot_flood_the_pending_queue(lan_client: TestClient):
+    # One LAN peer is capped well below the global PAIR_MAX_PENDING, so it can no
+    # longer occupy every slot and deny pairing to every other device.
+    accepted = 0
+    for _ in range(PAIR_MAX_PENDING_PER_PEER + 3):
+        if (await lan_client.post("/pair/request", json={"name": "flood"})).status == 200:
+            accepted += 1
+    assert accepted == PAIR_MAX_PENDING_PER_PEER
+    assert accepted < PAIR_MAX_PENDING          # only a slice of the shared queue
+    # A loopback/local peer (the HUD flows) stays governed by the global cap only.
+    lan_client.medo_server._is_local = lambda request: True
+    assert (await lan_client.post("/pair/request", json={"name": "hud"})).status == 200
+
+
+@pytest.mark.asyncio
+async def test_late_approval_stays_claimable_past_original_ttl(server_client):
+    # A human approves a request that is a heartbeat from its TTL; approval must
+    # refresh its lifetime, or the just-minted token is pruned and lost before
+    # the device can poll for it.
+    client, server = server_client
+    server._settings.remote.token = "the-token"
+    rid = (await (await client.post(
+        "/pair/request", json={"name": "d"})).json())["request_id"]
+    server._pair_requests[rid]["created"] = time.monotonic() - (PAIR_REQUEST_TTL_S - 1)
+    assert (await client.post("/pair/approve", json={"request_id": rid})).status == 200
+    # ~2s later the device polls. On the OLD creation time this entry would now
+    # be past its TTL and pruned -> "expired"; the refresh keeps it claimable.
+    server._pair_requests[rid]["created"] -= 2.0
+    body = await (await client.get(f"/pair/poll?request_id={rid}")).json()
+    assert body["status"] == "approved" and body["token"] == "the-token"
+
+
+@pytest.mark.asyncio
 async def test_expired_request_is_pruned(server_client):
     client, server = server_client
     rid = (await (await client.post(
@@ -417,7 +457,11 @@ def test_discovery_protocol_answers_probe():
     import json
 
     payload = json.loads(sent[0][0])
-    assert payload == {"service": "medo", "name": "MEDO", "port": 8710}
+    # `scheme` tells a discovering client whether to build an http:// or an
+    # https:// URL — guessing wrong against a TLS listener is a bare connection
+    # reset with no explanation.
+    assert payload == {"service": "medo", "name": "MEDO", "port": 8710,
+                       "scheme": "http"}
     assert sent[0][1] == ("10.0.0.9", 5000)
 
 
@@ -495,3 +539,36 @@ async def test_lion_mode_toggles_and_is_reported_in_status(server_client):
 async def test_lion_mode_rejects_a_malformed_body(server_client):
     client, _ = server_client
     assert (await client.post("/control/lion", data="not json")).status == 400
+
+
+def test_discovery_port_is_fixed_and_matches_the_client_probe():
+    # The watch/phone hardcode udp/8710 (medo_link discovery.dart _port); the
+    # server must answer there regardless of the configurable API port, or LAN
+    # discovery silently fails on any non-default remote.port.
+    from remote.server import DISCOVERY_PORT
+    assert DISCOVERY_PORT == 8710
+
+
+def test_discovery_reply_advertises_the_api_port_not_the_discovery_port():
+    import json as _json
+    from remote.server import DISCOVERY_PROBE, DISCOVERY_PORT, _DiscoveryProtocol
+
+    sent: list[tuple[bytes, object]] = []
+
+    class _FakeTransport:
+        def sendto(self, data, addr):
+            sent.append((data, addr))
+
+    proto = _DiscoveryProtocol("MEDO", 8711)  # API bound to a custom port
+    proto.connection_made(_FakeTransport())
+    proto.datagram_received(DISCOVERY_PROBE, ("192.168.1.5", 5000))
+
+    assert sent, "a valid probe must be answered"
+    body = _json.loads(sent[0][0].decode())
+    assert body["service"] == "medo"
+    assert body["port"] == 8711            # advertises the REAL api port
+    assert body["port"] != DISCOVERY_PORT  # which differs from the fixed probe port
+    # A non-probe datagram is ignored.
+    sent.clear()
+    proto.datagram_received(b"nope", ("192.168.1.5", 5000))
+    assert not sent

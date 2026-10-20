@@ -1,0 +1,14 @@
+# The end-of-day counterpart. No weather — at eleven at night you want to know
+# what is still outstanding, not whether it is raining.
+name: wind down
+description: >-
+  The end-of-day round-up: what is still on the list, and a reminder set for
+  the morning. Say "wind down" or "I'm going to bed".
+trigger:
+  phrase: ["wind down", "i'm going to bed", "одам да спијам"]
+steps:
+  - say: "Right, winding down."
+  - skill: projects
+    args:
+      action: status
+  - say: "That's everything outstanding."

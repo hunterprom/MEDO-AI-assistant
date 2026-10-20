@@ -185,8 +185,12 @@ class BenchSkill(Skill):
         # questions ("do I have any games installed") — those aren't bench parts
         # and LocateAppSkill declines an "any"-led name, so without this guard
         # they fell through to the bench and searched electronics for "games".
+        # The lookahead also excludes calendar/mail/message/money nouns so
+        # "do I have any meetings/emails/messages/money" reach the LLM, not here.
         re.compile(r"\bdo\s+i\s+have\s+any\s+(?!.*\b(?:installed|apps?|programs?|"
-                   r"browsers?|antivirus)\b)(?P<query>.+)", re.IGNORECASE),
+                   r"browsers?|antivirus|emails?|messages?|texts?|calls?|mail|"
+                   r"meetings?|appointments?|events?|reminders?|plans?|"
+                   r"notifications?|money)\b)(?P<query>.+)", re.IGNORECASE),
     ]
 
     def __init__(self, settings: Settings, inventory: BenchInventory,

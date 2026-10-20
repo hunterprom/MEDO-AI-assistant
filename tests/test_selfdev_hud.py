@@ -26,6 +26,12 @@ class _FakeEngine:
     def __init__(self):
         self.applied: list = []
         self.discarded: list = []
+        self.approvals: list = []
+
+    def approve(self, proposal, approved_by="human"):
+        # The real engine records the human's yes on disk before merging; the
+        # fake just remembers who said it, so the skill's call is asserted.
+        self.approvals.append(approved_by)
 
     async def apply(self, proposal):
         self.applied.append(proposal)

@@ -67,9 +67,22 @@ class MediaSkill(Skill):
         re.compile(r"^\s*(?:previous(?:\s+track)?|go\s+back\s+a\s+track)\s*[.!?]*$",
                    re.IGNORECASE),
         re.compile(r"^\s*(?:pause|resume|unpause)(?:\s+it)?\s*[.!?]*$", re.IGNORECASE),
+        # …and the same bare verbs in Macedonian, which had no equivalent: the
+        # MK pattern below needs a following noun, so a bare "Паузирај." matched
+        # nothing, fell to the LLM and came back as media_volume_down — a pause
+        # that turned the volume down instead. "запри"/"стопирај" are left out
+        # on purpose: bare, they are as likely to mean "stop talking".
+        re.compile(r"^\s*(?:паузирај|продолжи)(?:\s+(?:ја|го|тоа))?\s*[.!?]*$",
+                   re.IGNORECASE),
+        re.compile(r"^\s*(?:следна|претходна)\s*[.!?]*$", re.IGNORECASE),
         # MK: "пушти музика", "паузирај ја песната", "следна песна"
+        # The bare "а" is not a typo: Whisper renders the clitic "ја" as a plain
+        # "а" often enough that "паузирај а музиката" — a plain "pause the
+        # music" — matched nothing and reached the LLM, which offered to put the
+        # machine to sleep. It still has to be followed by the music noun.
         re.compile(r"\b(?:пушти|пуштиј|паузирај|запри|стопирај|продолжи)\s+"
-                   r"(?:ја\s+|го\s+)?(?:музика(?:та)?|песна(?:та)?|нумера(?:та)?)\b",
+                   r"(?:ја\s+|го\s+|а\s+)?"
+                   r"(?:музика(?:та)?|песна(?:та)?|нумера(?:та)?)\b",
                    re.IGNORECASE),
         re.compile(r"\bследна\s+(?:песна|нумера)\b|\bпретходна\s+(?:песна|нумера)\b",
                    re.IGNORECASE),

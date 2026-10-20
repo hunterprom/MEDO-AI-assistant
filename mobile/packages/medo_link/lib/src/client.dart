@@ -172,7 +172,15 @@ class MedoClient {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(pollEvery);
-      final r = await pairPoll(id);
+      final PairResult r;
+      try {
+        r = await pairPoll(id);
+      } on MedoException {
+        // A single slow/dropped poll (server busy, Wi-Fi blip) must not kill the
+        // whole 2-minute wait — the user may be about to tap Approve. Keep
+        // polling until the deadline; real denial/expiry arrive as a status.
+        continue;
+      }
       if (r.status == 'approved') {
         if (r.token.isEmpty) {
           throw const MedoException('Approved, but no token came back.');

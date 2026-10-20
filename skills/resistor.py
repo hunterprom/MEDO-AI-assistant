@@ -255,7 +255,7 @@ class ResistorSkill(Skill):
             success=False)
 
     async def execute(self, request: SkillRequest) -> SkillResult:
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         # LLM tool path may pass explicit args; otherwise read the utterance
         # (the same text also carries the colours on the semantic path).
         band_src = str(request.args.get("bands") or "") or request.text

@@ -1,0 +1,441 @@
+"""Maker Studio skills — turn "design a circuit for …" / "model a …" into a REAL
+artifact by driving the shared engine (studio.engine): the brain writes library
+code, MEDO executes it in the sandbox into a schematic / STL+STEP, checks it, and
+saves a versioned project. Off unless ``studio.enabled``.
+
+Generation runs the LLM + a sandboxed execution, so it isn't instant; it's a
+deliberate build action, gated by the policy engine like any PC control.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import re
+
+from core import mk
+from security.capabilities import Capability
+from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).strip(" .?!,")
+
+
+def _truthy(value) -> bool:
+    """A JSON-ish flag from a model. ``bool("false")`` is True, and small models
+    routinely send booleans as strings — so decide on the TEXT."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "y", "1", "on")
+    return bool(value)
+
+
+#: "never mind" — drops a pending clarifying question instead of building.
+_CANCEL = re.compile(
+    r"^\s*(?:never\s*mind|nevermind|cancel|forget\s+it|stop|nothing|no)\s*[.!]*$",
+    re.IGNORECASE)
+
+#: A determiner ends the run — "a schematic of THE amplifier" is describing
+#: something that already exists, "an RC ALTERNATING CURRENT circuit" is the
+#: thing to draw. Same test the app builder uses, for the same reason.
+_DET = (r"(?:the|a|an|my|your|our|their|its|this|that|these|those|"
+        r"every|each|all|any|some|no)")
+
+#: What may sit between the article and the noun being made. English puts the
+#: description in FRONT of it — "an RC alternating current CIRCUIT", "a simple
+#: low-pass FILTER circuit" — and with no slot for that, the whole request
+#: missed and fell to the LLM, which answered "Could you design an RC
+#: alternating current circuit?" with the sentence "Detailed design and
+#: explanations for an RC alternating current circuit." and nothing else.
+_MODS = rf"(?P<mods>(?:(?!{_DET}\b)[\w-]+\s+){{0,4}})"
+
+
+class _StudioSkill(Skill):
+    """Shared drive-the-engine flow for a domain."""
+
+    controls_pc = True
+    capabilities = frozenset({Capability.RUN_COMMAND, Capability.WRITE_FILES})
+    _verb = "build"
+    _noun = "the design"
+    _ask = "What should I make?"
+
+    def __init__(self, settings, domain, *, engine=None, announcer=None) -> None:
+        self._settings = settings
+        self._domain = domain
+        self._engine = engine
+        # Where to speak the result when the build runs in the background. None
+        # keeps the whole thing synchronous — which is what the tests want, and
+        # what a caller with nowhere to announce to needs.
+        self._announce = announcer
+        self._task: asyncio.Task | None = None
+        self._busy = False
+        # What we were asked to make when we posed a clarifying question, so the
+        # captured reply extends the brief instead of replacing it.
+        self._pending_desc = ""
+
+    def _get_engine(self):
+        if self._engine is None:
+            from studio.engine import StudioEngine
+
+            self._engine = StudioEngine(self._settings)
+        return self._engine
+
+    def _description(self, request: SkillRequest) -> str:
+        """The brief, from whichever half of the sentence carries it.
+
+        ``desc`` is what follows the noun ("a circuit FOR an ESP32"); ``mods``
+        is what precedes it ("an RC ALTERNATING CURRENT circuit"). English uses
+        both, so a pattern that only reads one throws away half the requests.
+        """
+        gd = request.match.groupdict() if request.match else {}
+        return _clean(gd.get("desc") or gd.get("mods")
+                      or str((request.args or {}).get("description") or ""))
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        if not self._settings.studio.enabled:
+            return SkillResult(
+                "Maker Studio is off — enable studio.enabled in config so I can "
+                "build that.", success=False, data={"reason": "disabled"})
+        # The answer to our OWN clarifying question arrives as free text — without
+        # this the reply was parsed as a fresh request, found no description, and
+        # the exchange dead-ended.
+        if (request.context or {}).get("captured_reply"):
+            answer = _clean(request.text)
+            pending, self._pending_desc = self._pending_desc, ""
+            if not answer or _CANCEL.match(answer):
+                return SkillResult("Okay, never mind.")
+            # Only carry a SUBSTANTIAL brief forward. A domain asks its question
+            # when the description was a fragment ("it", "a"), and prepending
+            # that produced briefs like "it — a phone stand", which then became
+            # the project name.
+            desc = f"{pending} — {answer}" if len(pending) > 3 else answer
+        else:
+            # A fresh request supersedes any question the user walked away from,
+            # so an abandoned brief can never attach itself to a later reply.
+            self._pending_desc = ""
+            desc = self._description(request)
+        if not desc:
+            self._pending_desc = ""
+            return SkillResult(self._ask, await_reply=True, reply_is_open=True)
+        # Ask for a missing critical spec BEFORE going anywhere near the brain:
+        # the brief is pure and instant, and a question has to be asked in the
+        # turn that prompted it, not announced ten minutes later.
+        question = self._domain.build_brief(desc, {}).question
+        if question:
+            self._pending_desc = desc          # keep the brief for the reply
+            return SkillResult(question, await_reply=True, reply_is_open=True)
+        if self._announce is not None:
+            return self._begin(desc, speak_mk=mk.is_cyrillic(request.utterance))
+        return await self._build(desc)
+
+    def _begin(self, desc: str, *, speak_mk: bool) -> SkillResult:
+        """Start the build and get out of the way.
+
+        A real one is minutes of work — a phone stand measured 514 s from the
+        spoken sentence to the finished STL, nearly all of it the brain writing
+        CadQuery. Awaiting that inside the turn left MEDO mute and unable to
+        take another word for eight minutes: the assistant went away to do the
+        job. ``make_app`` already had the answer, so this borrows it — say it's
+        started, build off to the side, speak when it's done.
+        """
+        if self._busy:
+            return SkillResult(
+                "Веќе градам едно — да го завршам прво него." if speak_mk else
+                "I'm already working on one — let me finish it first.",
+                success=False)
+        self._busy = True
+        self._task = asyncio.ensure_future(self._work(desc, speak_mk))
+        return SkillResult(
+            "Добро — ќе го направам тоа и ќе ти јавам кога е готово."
+            if speak_mk else
+            f"Okay — I'll {self._verb} that now and tell you when it's ready. "
+            f"It takes a few minutes.",
+            data={"studio": "started", "domain": self._domain.name,
+                  "description": desc})
+
+    async def _work(self, desc: str, speak_mk: bool) -> None:
+        try:
+            result = await self._build(desc)
+        finally:
+            self._busy = False
+        logger.info("studio %s: %s", self._domain.name, result.speech)
+        with contextlib.suppress(Exception):
+            await self._announce(result.speech)
+
+    async def _build(self, desc: str) -> SkillResult:
+        try:
+            result = await self._get_engine().create(self._domain, desc)
+        except Exception as exc:                # never crash the turn
+            logger.warning("studio %s failed", self._domain.name, exc_info=True)
+            return SkillResult(f"I couldn't {self._verb} that: {exc}",
+                               success=False)
+        if result.question:
+            self._pending_desc = desc          # keep the brief for the reply
+            return SkillResult(result.question, await_reply=True,
+                               reply_is_open=True)
+        return self._report(result)
+
+    def _report(self, result) -> SkillResult:
+        fails = "; ".join(a.message for a in result.advisories
+                          if a.level == "fail")
+        if not result.ok:
+            why = fails or result.error or "it didn't produce a usable artifact"
+            return SkillResult(f"I tried to {self._verb} that but couldn't — {why}.",
+                               success=False,
+                               data={"error": result.error,
+                                     "attempts": result.attempts})
+        path = result.project.root if result.project is not None else None
+        if path is not None:
+            from core.platform import open_path
+            try:
+                open_path(str(path))
+            except Exception:
+                pass
+        notes = "; ".join(a.message for a in result.advisories
+                          if a.level in ("warn", "fail", "info"))
+        extra = f" ({notes})" if notes else ""
+        arts = ", ".join(result.artifacts) or "the files"
+        return SkillResult(
+            f"Done — {self._noun} is in {path} as {arts}.{extra}",
+            data={"path": str(path) if path else "",
+                  "artifacts": result.artifacts, "version": result.version})
+
+    def tool_schema(self) -> dict:
+        return {"type": "function", "function": {
+            "name": self.name, "description": self.description,
+            "parameters": {"type": "object", "properties": {
+                "description": {"type": "string",
+                                "description": "what to make, in plain words"}},
+                "required": ["description"]}}}
+
+
+#: Nouns that essentially only ever name a physical part — safe with any making
+#: verb ("design a bracket", "make me a gear").
+_PART_NOUNS = (r"bracket|enclosure|mount|holder|clip|adapter|spacer|gear|knob|"
+               r"tray|grommet|screw|bolt|nut|washer")
+#: Idiom-prone words — "make a CASE for hiring", "make a STAND against X", "get a
+#: HANDLE on it", "make a git HOOK", "a text BOX". No blocklist of modifiers can
+#: separate "a case for my phone" from "a case for my promotion", so these reach
+#: the FAST path only after a fabrication verb (print/model); with the softer
+#: verbs they go to the LLM, which has the tool and can judge from meaning.
+_AMBIG_NOUNS = r"case|stand|box|hook|handle"
+#: Compounds whose head noun is a part word but which are never a physical part.
+_NOT_A_PART = re.compile(
+    r"\b(?:case\s+stud(?:y|ies)|use\s+case|test\s+case|edge\s+case|corner\s+case|"
+    r"stand[-\s]?alone|stand[-\s]?in|stand[-\s]?up|box\s+office|"
+    r"git\s+hook|web\s*hook)\b", re.IGNORECASE)
+#: The Macedonian part nouns. Stems end in \w* so the definite article and
+#: plural ("држачОТ", "заврткИ") come along without listing every form.
+_PART_NOUNS_MK = (r"држач\w*|носач\w*|куќишт\w*|завртк\w*|навртк\w*|подлошк\w*|"
+                  r"запч[еа]ник\w*|адаптер\w*|капак\w*|капач\w*|штипк\w*|"
+                  r"лежишт\w*|распорник\w*|копч\w*")
+
+
+class Model3DSkill(_StudioSkill):
+    name = "model_3d"
+    description = ("Create a real, printable 3D model (STL + STEP) of a part from "
+                   "a description — a bracket, enclosure, mount, screw, gear, etc. "
+                   "Use when the user asks to model / 3D-print something.")
+    _verb = "model"
+    _noun = "the 3D model"
+    _ask = "What should I model?"
+    routing_phrases = ["3d print a phone stand", "model a bracket for a motor",
+                       "design an enclosure for an ESP32", "make me a gear"]
+
+    patterns = [
+        re.compile(r"\b(?:3-?d|three-?d)\s*(?:model|print)\s+(?:of|for|me)?\s*(?:a\s+|an\s+)?(?P<desc>.+)", re.IGNORECASE),
+        re.compile(r"\bmodel\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>.+?)\s+in\s+3-?d\b", re.IGNORECASE),
+        # A FABRICATION verb (print/model) is itself the physical cue, so any part
+        # noun counts — and a modifier may precede it ("print a wall mount",
+        # "model a battery holder", "print a case for my ESP32").
+        re.compile(rf"\b(?:print|model)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:(?!(?:a|an|the|my|your)\s)\w+\s+)?(?:{_PART_NOUNS}|{_AMBIG_NOUNS})(?![\w-]).*)", re.IGNORECASE),
+        # Softer verbs (design/make/create) are ambiguous in English, so they only
+        # fast-path an UNAMBIGUOUS part noun, with no modifier slot — "make a
+        # video clip", "design a data adapter" are not print jobs.
+        re.compile(rf"\b(?:design|make|create)\s+(?:me\s+)?(?:a\s+|an\s+)?(?P<desc>(?:{_PART_NOUNS})(?![\w-]).*)", re.IGNORECASE),
+        # MK. "3д модел" is the physical cue by itself, so no verb is required —
+        # which matters because Macedonian conjugates the verb ("може да ми
+        # НАПРАВИШ 3D модел"), and a verb list can't anticipate every person.
+        # Without this the request reached the LLM, which flatly denied being
+        # able to make 3D models while the Studio sat right there behind it.
+        re.compile(r"\b(?:3-?[dд]|три-?д|тродимензионал\w*)\s*модел\w*\s*"
+                   r"(?:на|од|за|ми)?\s*(?P<desc>.+)", re.IGNORECASE),
+        re.compile(rf"\b(?:испечат[иe]|печат[иe]|моделирај|изработи|направи|"
+                   rf"дизајнирај){mk.CLITICS}\s+(?:едн?[аoо]\w*\s+)?"
+                   rf"(?P<desc>(?:{_PART_NOUNS_MK})(?![\w-]).*)", re.IGNORECASE),
+    ]
+
+    def match(self, text: str):
+        found = super().match(text)
+        if found is None:
+            return None
+        # A part word inside a fixed non-physical compound ("case study",
+        # "stand-alone", "git hook") is not a print job.
+        if _NOT_A_PART.search(found.groupdict().get("desc") or ""):
+            return None
+        return found
+
+    def __init__(self, settings, *, engine=None, announcer=None) -> None:
+        from studio.domains.model3d import Model3DDomain
+
+        super().__init__(settings, Model3DDomain(), engine=engine,
+                         announcer=announcer)
+
+
+class DesignCircuitSkill(_StudioSkill):
+    name = "design_circuit"
+    description = ("Design a real electrical schematic / wiring diagram (SVG) from "
+                   "a description — components, a microcontroller, sensors, power. "
+                   "Use when the user asks to design a circuit / schematic / wiring.")
+    _verb = "design"
+    _noun = "the schematic"
+    _ask = "What circuit should I design?"
+    routing_phrases = ["design a circuit to blink an LED with an ESP32",
+                       "draw a schematic for a 3.3V regulator",
+                       "wire up a temperature sensor to an Arduino"]
+
+    patterns = [
+        # The noun may come after the description ("design an RC alternating
+        # current CIRCUIT") or before it ("design a circuit FOR an ESP32"), so
+        # both halves are optional and either one can supply the brief.
+        re.compile(r"\b(?:design|draw|make|create|build|sketch)\s+(?:me\s+)?(?:a\s+|an\s+)?"
+                   + _MODS
+                   + r"(?:circuit|schematic|wiring(?:\s+diagram)?)\b"
+                   r"(?:\s+(?:for\s+|of\s+|to\s+|that\s+)?(?P<desc>.+))?", re.IGNORECASE),
+        re.compile(r"\b(?:schematic|circuit|wiring)\s+(?:for|of)\s+(?P<desc>.+)", re.IGNORECASE),
+        re.compile(r"\bwire\s+up\s+(?P<desc>.+)", re.IGNORECASE),
+        # MK — "нацртај ми шема за …", "струјно коло за …".
+        re.compile(rf"\b(?:{mk.MAKE}){mk.CLITICS}\s+(?:едн?[аoо]\w*\s+)?"
+                   r"(?:електричн\w*\s+|струјн\w*\s+)?"
+                   r"(?:шем[аи]\w*|кол[оа]\w*|дијаграм\w*)\s*"
+                   r"(?:за|на|со|што|да)?\s*(?P<desc>.+)", re.IGNORECASE),
+        re.compile(r"\b(?:електрична\s+шема|струјно\s+коло|шема|коло)\s+"
+                   r"(?:за|на)\s+(?P<desc>.+)", re.IGNORECASE),
+    ]
+
+    def __init__(self, settings, *, engine=None, announcer=None) -> None:
+        from studio.domains.schematic import SchematicDomain
+
+        super().__init__(settings, SchematicDomain(), engine=engine,
+                         announcer=announcer)
+
+
+class CodeBuildSkill(_StudioSkill):
+    name = "build_code"
+    description = ("Build a small self-contained script/tool from a description, "
+                   "then RUN it in the sandbox to verify it works (its own "
+                   "self-tests must pass). Use for 'write me a script/tool that…'.")
+    _verb = "build"
+    _noun = "the script"
+    _ask = "What should the script do?"
+    routing_phrases = ["write me a script that renames files by date",
+                       "build a tool to convert csv to json",
+                       "make a python function that validates an IBAN"]
+
+    # NOTE: narrower than app_builder's MakeAppSkill (script/tool/utility, not
+    # app/website/game); both are off by default and are alternative approaches.
+    patterns = [
+        re.compile(r"\b(?:build|write|make|create|code|scaffold|generate)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:python\s+)?(?:script|tool|utility|cli|function|parser|converter)\b(?:\s+(?:that|to|which|for)\s+)?(?P<desc>.+)", re.IGNORECASE),
+        # MK — the same nouns as the English pattern above, so the two languages
+        # claim exactly the same ground (no new overlap with make_app).
+        re.compile(rf"\b(?:{mk.MAKE}){mk.CLITICS}\s+(?:едн?[аoо]\w*\s+)?"
+                   r"(?:пајтон\s+|python\s+)?"
+                   r"(?:скрипт\w*|алатк\w*|функциј\w*|парсер\w*|конвертор\w*)\b"
+                   r"(?:\s+(?:за|што|шо|да|кој[аао]?))?\s*(?P<desc>.+)",
+                   re.IGNORECASE),
+    ]
+
+    def __init__(self, settings, *, engine=None, announcer=None) -> None:
+        from studio.domains.code import CodeDomain
+
+        super().__init__(settings, CodeDomain(), engine=engine,
+                         announcer=announcer)
+
+
+class StudioProjectsSkill(Skill):
+    """S5 — 'show my studio projects' / 'open my last model/schematic'."""
+
+    name = "studio_projects"
+    # Listing is pure sensing, so the skill itself isn't PC control; the ONE
+    # actuating branch (opening the folder) checks the switch itself below.
+    controls_pc = False
+    description = ("List your Maker Studio projects, or open the most recent one "
+                   "(schematic / 3D model / script).")
+    routing_phrases = ["show my studio projects", "open my last 3d model",
+                       "open my last schematic", "what have I made in studio"]
+    patterns = [
+        re.compile(r"\b(?:show|list|what are|what)\s+(?:my\s+)?(?:maker\s+)?studio\s+projects\b", re.IGNORECASE),
+        re.compile(r"\b(?:open|show)\s+my\s+(?:last|latest|recent)\s+(?:studio\s+)?(?P<kind>schematic|circuit|3-?d\s*model|model|script|project)\b", re.IGNORECASE),
+    ]
+
+    _KIND = {"schematic": "schematic", "circuit": "schematic", "model": "model3d",
+             "3d model": "model3d", "3dmodel": "model3d", "script": "code"}
+
+    def __init__(self, settings) -> None:
+        self._settings = settings
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        from studio.projects import list_projects
+
+        projects = list_projects(self._settings.studio.projects_dir)
+        gd = request.match.groupdict() if request.match else {}
+        kind = (gd.get("kind") or "").lower().replace(" ", "")
+        want = self._KIND.get(kind, self._KIND.get(kind.replace("3-d", "3d"), ""))
+        if want:
+            projects = [p for p in projects if p.get("domain") == want] or projects
+        if not projects:
+            return SkillResult("You don't have any Maker Studio projects yet.",
+                               success=False, data={"count": 0})
+        # The LLM tool path has no regex match, so it needs its own way to ask
+        # for "open" — otherwise the model could only ever list. Small models
+        # emit JSON booleans as STRINGS, and bool("false") is True, so coerce.
+        wants_open = _truthy((request.args or {}).get("open"))
+        if request.match is not None and "open" in request.text.lower():
+            wants_open = True
+        if wants_open:
+            # Opening is the one actuating branch — an instruction derived from
+            # untrusted content must not reach it (the skill declares no
+            # capabilities, so the router's provenance gate sees nothing to gate).
+            ctx = request.context or {}
+            if ctx.get("untrusted") or ctx.get("provenance") == "untrusted":
+                return SkillResult(
+                    "I only open things when you ask me directly.",
+                    success=False, data={"refused": "untrusted"})
+            newest = projects[0]
+            label = newest.get("description") or ""
+            where = f"{label}, at {newest['path']}" if label else newest["path"]
+            if not self._settings.safety.pc_control_enabled:
+                return SkillResult(
+                    f"Your last one is {where} — turn PC control on and I'll "
+                    f"open it.",
+                    data={"path": newest["path"], "opened": False})
+            from core.platform import open_path
+            try:
+                open_path(newest["path"])
+            except Exception:
+                logger.warning("could not open studio project %s",
+                               newest["path"], exc_info=True)
+                return SkillResult(
+                    f"Your last one is at {newest['path']}, but I couldn't open "
+                    f"the folder.", success=False,
+                    data={"path": newest["path"], "opened": False})
+            return SkillResult(
+                f"Opening your last one — {label or newest['path']}.",
+                data={"path": newest["path"], "opened": True})
+        names = ", ".join(p.get("description") or p["domain"] for p in projects[:6])
+        return SkillResult(
+            f"You have {len(projects)} Studio project"
+            f"{'s' if len(projects) != 1 else ''}: {names}.",
+            data={"count": len(projects)})
+
+    def tool_schema(self) -> dict:
+        return {"type": "function", "function": {
+            "name": self.name, "description": self.description,
+            "parameters": {"type": "object", "properties": {
+                "open": {"type": "boolean",
+                         "description": "true to OPEN the most recent project's "
+                                        "folder; omit/false to just list them"}},
+                "required": []}}}

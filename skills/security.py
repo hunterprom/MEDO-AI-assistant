@@ -85,7 +85,8 @@ _LOCAL_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "this", "my", "local
 # computer for connections to facebook.com") is a subject, not a target — that
 # is a legitimate local audit, not an out-of-bounds remote scan.
 _LOCAL_SCOPE = re.compile(
-    r"\b(?:my|this)\s+(?:pc|computer|machine|laptop|system|ports?|network|box)\b"
+    r"\b(?:my|this)\s+(?:pc|computer|machine|laptop|system|ports?|network|box|"
+    r"hard\s+drive|drive|disk|phone|device|files?|folder|usb)\b"
     r"|\blocalhost\b|\bthis\s+device\b|\bmy\s+own\b", re.IGNORECASE)
 # Suffixes _HOSTISH mistakes for a TLD ("report.pdf" -> host "report.pdf").
 _FILE_SUFFIX = re.compile(
@@ -123,8 +124,52 @@ _DEFENSIVE_VERB = re.compile(
 #: "write a keylogger" into an allowed request).
 _OFFENSIVE_ACTION = re.compile(
     r"\b(?:write|create|build|make|generate|develop|code|install|deploy|plant|"
-    r"run|use|launch|execute|craft|напиши|создад\w*|направи|инсталира\w*)\b",
+    r"run|use|launch|execute|craft|download|compile|set\s*up|"
+    r"напиши|создад\w*|направи|инсталира\w*)\b",
     re.IGNORECASE)
+#: A real clause boundary between the producing verb and the keyword means the
+#: verb governs a DIFFERENT clause ("scan for malware, then write a report").
+#: "sure" is here for the "make sure no rootkit" idiom. Plain modifiers
+#: (a/simple/two/new) and relative markers (that/which) are NOT breaks — the
+#: keyword can still be the object ("build a program that is a keylogger").
+_CLAUSE_BREAK = re.compile(
+    r"[,;.]|\b(?:and|then|or|but|so|after|before|while|because|sure)\b",
+    re.IGNORECASE)
+#: The keyword is the oblique object of a REPORT-style noun, not the verb's
+#: direct object ("generate a report ON a keylogger", "a summary OF malware") —
+#: then the verb produces the report, not the malware. A bare on/of is NOT a
+#: break (so "make use OF a keylogger" / "install ON it a rootkit" stay refused).
+_REPORT_OBLIQUE = re.compile(
+    r"\b(?:report|summary|write[- ]?up|analysis|overview|assessment|note|log|"
+    r"breakdown|list)\b.*\b(?:on|of|about|for)\b", re.IGNORECASE)
+#: A defensive noun the offensive word can MODIFY ("malware scan", "keylogger
+#: detector", "rootkit removal") — then it's the audit's subject, not the object
+#: being made.
+_DEFENSIVE_HEAD = re.compile(
+    r"\s+(?:scan\w*|check\w*|audit\w*|detect\w*|remov\w*|cleanup|sweep|"
+    r"protection|defen\w*)\b", re.IGNORECASE)
+
+
+def _offensive_action_produces(text: str) -> bool:
+    """True only when an offensive-action verb actually GOVERNS the offensive
+    keyword — "write a keylogger", "install a rootkit" — as opposed to a generic
+    verb that merely co-occurs ("scan for malware and make sure it's clean") or
+    the keyword used as a modifier of a defensive noun ("run a malware scan")."""
+    for m in _OFFENSIVE.finditer(text):
+        if _DEFENSIVE_HEAD.match(text[m.end():]):
+            continue                       # "malware scan" — the audit's subject
+        for a in _OFFENSIVE_ACTION.finditer(text[:m.start()]):
+            span = text[a.end():m.start()]
+            # The verb governs the keyword as its DIRECT object when no clause
+            # boundary and no report-oblique construction sit between them, and
+            # they're close — "write a simple keylogger" / "build a program that
+            # is a keylogger" produce it; "generate a report on a keylogger" /
+            # "make sure no rootkit" do not.
+            if (not _CLAUSE_BREAK.search(span)
+                    and not _REPORT_OBLIQUE.search(span)
+                    and len(span) <= 40):
+                return True                # verb produces the keyword
+    return False
 
 
 def is_offensive(text: str) -> bool:
@@ -139,7 +184,7 @@ def is_offensive(text: str) -> bool:
         return True
     if _OFFENSIVE.search(text):
         defensive_local = (_LOCAL_SCOPE.search(text) and _DEFENSIVE_VERB.search(text)
-                           and not _OFFENSIVE_ACTION.search(text))
+                           and not _offensive_action_produces(text))
         return not defensive_local
     return False
 
@@ -180,7 +225,7 @@ class _LionSkill(Skill):
 
     def _preamble(self, request: SkillRequest) -> SkillResult | None:
         """Shared gate: off -> say so; offensive -> refuse. None -> proceed."""
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         if not self._settings.mode.lion:
             return SkillResult(OFF_REPLY_MK if speak_mk else OFF_REPLY,
                                success=False, data={"lion": False})
@@ -269,7 +314,7 @@ class SecurityCheckSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         import asyncio
         try:
             ports = await asyncio.to_thread(self._list_ports)
@@ -370,7 +415,7 @@ class ExplainProcessSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         gd = request.match.groupdict() if request.match else {}
         query = (request.args.get("process") or gd.get("q") or gd.get("q2")
                  or gd.get("qm") or "").strip()
@@ -470,7 +515,7 @@ class FirewallAuditSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         import asyncio
         try:
             raw = await asyncio.to_thread(self._read)
@@ -565,7 +610,7 @@ class UpdateCheckSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         import asyncio
         try:
             updates = await asyncio.to_thread(self._list_updates)
@@ -625,7 +670,7 @@ class ExplainPermissionsSkill(_LionSkill):
         blocked = self._preamble(request)
         if blocked is not None:
             return blocked
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         gd = request.match.groupdict() if request.match else {}
         raw = (request.args.get("path") or gd.get("p") or gd.get("p2")
                or gd.get("pm") or "").strip().strip("\"'` ")

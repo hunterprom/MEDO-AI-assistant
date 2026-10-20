@@ -151,7 +151,7 @@ class OpenWebsiteSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         shortcut = gd.get("shortcut") or gd.get("shortcut_mk")
         target = (request.args.get("url") or request.args.get("query")
                   or gd.get("url") or gd.get("url_mk")

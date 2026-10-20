@@ -231,5 +231,19 @@ def test_system_prompt_states_commands_are_commands():
     assert "not a topic to explain" in text
 
 
+def test_system_prompt_forbids_fabricating_a_shutdown():
+    """The "close yourself -> the LLM narrates 'Shutting down — goodbye, sir'
+    while nothing closes" transcript: the anti-fabrication rule must cover
+    CLOSING/quitting/shutting-down (not just opening/typing/volume), forbid the
+    'already shutting down / already gone' follow-up fiction, and point the model
+    at the quit tool instead of role-playing its own exit."""
+    from llm.prompts import system_prompt
+    text = system_prompt(_settings().personality).lower()
+    assert "quit tool" in text                     # a real path to actually close
+    assert "closing" in text or "shut yourself down" in text
+    assert "already shutting down" in text         # the exact fabrication is named
+    assert "role-play" in text or "a false 'done'" in text
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])

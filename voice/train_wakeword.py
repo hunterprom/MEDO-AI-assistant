@@ -13,7 +13,7 @@ one step.
     #    - locally IF the openWakeWord training extras + background data exist:
     .venv\\Scripts\\python -m voice.train_wakeword --train
     #    - otherwise upload the samples to the openWakeWord Colab notebook
-    #      (the script prints the exact steps; see docs/Wake Word Training.md).
+    #      (the script prints the exact steps; see docs/wake-word-training.md).
 
     # 3) drop hey_medo.onnx in models/wakeword/ and flip config.yaml:
     #      wakeword.phrase: "models/wakeword/hey_medo.onnx"
@@ -155,7 +155,7 @@ def _training_hint(samples: Path) -> None:
         "  * export hey_medo.onnx, drop it in models/wakeword/, then set\n"
         "    wakeword.phrase: \"models/wakeword/hey_medo.onnx\" in config.yaml\n"
         "  * re-tune wakeword.threshold with:  python -m voice.wakeword\n"
-        "See docs/Wake Word Training.md for the full runbook.\n"
+        "See docs/wake-word-training.md for the full runbook.\n"
     )
 
 

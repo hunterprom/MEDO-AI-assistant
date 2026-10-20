@@ -189,7 +189,7 @@ def test_prompt_forbids_fake_actions():
     from llm.prompts import system_prompt
 
     prompt = system_prompt(PersonalityConfig())
-    assert "NEVER claim you performed an action" in prompt
+    assert "NEVER claim you performed" in prompt      # ...are performing, or already performed
     assert "open_website" in prompt
 
 

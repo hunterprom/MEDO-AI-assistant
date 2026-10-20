@@ -37,13 +37,15 @@ SYSTEM_PROMPT = (
     "ONLY a JSON object — no prose, no markdown. Schema:\n"
     '{"action": "click|double_click|type|scroll|key|done", '
     '"x": int 0-1000, "y": int 0-1000, "text": str, '
-    '"amount": int, "keys": str, "say": str}\n'
+    '"amount": int, "keys": str, "success": bool, "say": str}\n'
     "x/y are the cursor target as coordinates on THIS image, normalized to "
     "0-1000 (x left→right, y top→bottom). Include x/y for click and "
     "double_click. text is what to type. amount is scroll distance (positive "
-    "= down). keys is a key or chord like \"enter\" or \"ctrl a\". When the "
-    "task is finished (or impossible), use action \"done\" and put a short "
-    "spoken result in say."
+    "= down). keys is a key or chord like \"enter\" or \"ctrl a\". When you have "
+    "actually COMPLETED the task, use action \"done\" with success true and a "
+    "short spoken result in say. If the task is impossible or you cannot make "
+    "progress, use action \"done\" with success FALSE and say why — never claim "
+    "success for something you did not finish."
 )
 
 
@@ -52,6 +54,35 @@ def scale_point(x_norm: float, y_norm: float, w: int, h: int) -> tuple[int, int]
     x = round(max(0.0, min(1000.0, x_norm)) / 1000.0 * w)
     y = round(max(0.0, min(1000.0, y_norm)) / 1000.0 * h)
     return max(0, min(w - 1, x)), max(0, min(h - 1, y))
+
+
+#: A "done" whose `say` reads like the AGENT giving up. Deliberately narrow —
+#: it must not fire on a successful report that merely mentions a failure
+#: ("Removed the failed login row"), so it keys on first-person inability and
+#: fixed give-up phrases, not on the bare word "failed".
+_GAVE_UP_RE = re.compile(
+    r"\b(?:i\s+(?:can'?t|cannot|couldn'?t|could not|was\s+unable|am\s+unable|"
+    r"failed|gave\s+up)"
+    r"|unable\s+to|failed\s+to|gave\s+up|didn'?t\s+work|doesn'?t\s+work|"
+    r"not\s+possible|impossible|no\s+way\s+to)\b", re.IGNORECASE)
+
+
+def done_succeeded(action: dict) -> bool:
+    """Whether a model's ``done`` action really means COMPLETED.
+
+    An explicit ``success`` flag always wins — including a falsy non-bool
+    (``0``, ``null``, ``""``), which is the model saying "no". Only when the key
+    is ABSENT does a give-up phrasing in ``say`` decide. Pure, so both
+    directions are unit-tested.
+    """
+    if "success" in action:
+        flag = action["success"]
+        if isinstance(flag, bool):
+            return flag
+        if isinstance(flag, str):
+            return flag.strip().lower() in ("true", "yes", "y", "1", "ok")
+        return bool(flag)              # 0 / None -> failure, as the model meant
+    return not _GAVE_UP_RE.search(str(action.get("say") or ""))
 
 
 def parse_action(raw: str) -> dict | None:
@@ -122,16 +153,27 @@ class ScreenAgentSkill(Skill):
 
     # -- the agent loop -------------------------------------------------------
 
-    async def execute(self, request: SkillRequest) -> SkillResult:
+    async def preflight(self, request: SkillRequest) -> SkillResult | None:
+        """Answer now rather than asking to confirm a task that can't run."""
         if not self._settings.vision.agent_enabled:
             return SkillResult("The screen agent is disabled in config.", success=False)
-        task = self._task_from(request)
-        if not task:
+        if not self._task_from(request):
             return SkillResult("What would you like me to do on screen?", success=False)
+        return None
+
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return (f"I'll take control of the screen to: {self._task_from(request)}. "
+                f"Shall I go ahead?")
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        early = await self.preflight(request)
+        if early is not None:
+            return early
+        task = self._task_from(request)
         if not request.context.get("confirmed"):
-            return SkillResult(
-                f"I'll take control of the screen to: {task}. Shall I go ahead?",
-                needs_confirmation=True)
+            # Belt to the router's braces — see QuitSkill.execute.
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
 
         history: list[str] = []
         max_steps = self._settings.vision.agent_max_steps
@@ -156,8 +198,13 @@ class ScreenAgentSkill(Skill):
                     "I couldn't work out the next step, so I stopped.", success=False)
             kind = str(action.get("action", "")).lower()
             if kind == "done":
-                return SkillResult(action.get("say")
-                                   or f"Done: {task}.", data={"steps": step})
+                # 'done' means finished OR impossible — honour the success flag
+                # (and a give-up `say` when the flag is missing) so a gave-up run
+                # isn't reported as a completed one.
+                ok = done_succeeded(action)
+                say = action.get("say") or (
+                    "Done." if ok else "I couldn't finish that on screen.")
+                return SkillResult(say, success=ok, data={"steps": step})
             try:
                 desc = await asyncio.to_thread(self._act, action, w, h)
             except Exception:

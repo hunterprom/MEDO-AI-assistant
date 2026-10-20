@@ -21,7 +21,7 @@ It still resets to off on restart, because it is a mode you enter for a task.
 
 (This replaced an earlier "stop asking me" bypass. An unrestricted mode is a
 liability; a defensive-security profile is a real, hireable specialty. See
-docs/Decisions.md.)
+docs/decisions.md.)
 """
 
 from __future__ import annotations
@@ -67,8 +67,8 @@ class LionModeSkill(Skill):
     patterns = [
         re.compile(rf"\b(?:medo\s+)?lion\s+mode\s+(?P<on>{_ON})\b", re.IGNORECASE),
         re.compile(rf"\b(?:medo\s+)?lion\s+mode\s+(?P<off>{_OFF})\b", re.IGNORECASE),
-        re.compile(rf"\b(?:{_ON})\s+(?:medo\s+)?lion\s+mode\b", re.IGNORECASE),
-        re.compile(rf"\b(?:{_OFF})\s+(?:medo\s+)?lion\s+mode\b", re.IGNORECASE),
+        re.compile(rf"\b(?P<on2>{_ON})\s+(?:medo\s+)?lion\s+mode\b", re.IGNORECASE),
+        re.compile(rf"\b(?P<off2>{_OFF})\s+(?:medo\s+)?lion\s+mode\b", re.IGNORECASE),
         re.compile(r"\b(?:medo\s+)?lion\s+mode\b\s*[.!?]*$", re.IGNORECASE),
         # MK: "лав мод вклучи" / "исклучи лав мод"
         re.compile(r"\bлав\s+мод\s+(?P<on_mk>вклучи|активирај)\b", re.IGNORECASE),
@@ -82,13 +82,13 @@ class LionModeSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         arg = request.args.get("state")
         if arg is not None:
             want_on = str(arg).lower() in ("on", "true", "enable", "1")
-        elif gd.get("off") or gd.get("off_mk") or gd.get("off_mk2"):
+        elif gd.get("off") or gd.get("off2") or gd.get("off_mk") or gd.get("off_mk2"):
             want_on = False
-        elif gd.get("on") or gd.get("on_mk") or gd.get("on_mk2"):
+        elif gd.get("on") or gd.get("on2") or gd.get("on_mk") or gd.get("on_mk2"):
             want_on = True
         else:
             # Bare "lion mode" toggles, which is what people mean when they

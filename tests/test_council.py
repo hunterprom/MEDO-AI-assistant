@@ -93,6 +93,15 @@ def test_rank_specialists_picks_the_relevant_fields():
         "what torque does the servo need")]
 
 
+def test_electrical_covers_house_wiring_words():
+    # "wiring"/"wire"/"electrician"/"mains" now route to the electrical engineer,
+    # so a smart-home wiring answer no longer falls through to a default.
+    for q in ("run new wiring for the outlets",
+              "call an electrician about the mains panel",
+              "wire the sensor to the low-voltage bus"):
+        assert "electrical" in [s.key for s in rank_specialists(q)], q
+
+
 def test_rank_specialists_is_empty_off_topic():
     assert rank_specialists("what is the weather in Skopje") == []
 
@@ -342,6 +351,28 @@ async def test_lion_mode_macedonian(settings):
     r = await skill.execute(SkillRequest(text="исклучи лав мод",
                                          match=skill.match("исклучи лав мод")))
     assert settings.mode.lion is False and "Лав" in r.speech
+
+
+@pytest.mark.asyncio
+async def test_reversed_order_enable_honours_direction_not_toggle(settings):
+    # "activate lion mode" must turn it ON even when it is already on, not
+    # toggle it off.
+    settings.mode.lion = True
+    skill = LionModeSkill(settings)
+    r = await skill.execute(SkillRequest(text="activate lion mode",
+                                         match=skill.match("activate lion mode")))
+    assert settings.mode.lion is True and r.data["lion_mode"] is True
+
+
+@pytest.mark.asyncio
+async def test_reversed_order_disable_honours_direction_not_toggle(settings):
+    # "disable lion mode" must turn it OFF even when it is already off, not
+    # toggle it on.
+    settings.mode.lion = False
+    skill = LionModeSkill(settings)
+    r = await skill.execute(SkillRequest(text="disable lion mode",
+                                         match=skill.match("disable lion mode")))
+    assert settings.mode.lion is False and r.data["lion_mode"] is False
 
 
 def test_lion_mode_defaults_off_every_start():

@@ -69,6 +69,9 @@ async def test_unsupported_claim_is_flagged_and_offers_breakdown():
     r = await _run(skill, ctx=_ctx("Around 2.5 newton-metres per hip at a 2 hertz gait."))
     assert r.success and r.data["second_opinion"] == "shaky"
     assert r.await_reply is True
+    # The "want the breakdown?" tail is a yes/no OFFER: a reply that is neither is
+    # a fresh command the router re-routes, not a bland "okay" that drops it.
+    assert r.reply_is_offer is True
     assert "unsupported" in r.speech.lower()
     assert "2.5 newton-metre" in r.speech
 
@@ -102,6 +105,7 @@ async def test_all_cannot_verify_does_not_arm_reply_capture():
     r = await _run(skill, ctx=_ctx("The alloy melts at 1400 C."))
     assert r.data["second_opinion"] == "unverified"
     assert r.await_reply is False
+    assert r.reply_is_offer is False           # no offer armed -> nothing to swallow
     assert "breakdown" not in r.speech.lower()
 
 
@@ -117,6 +121,29 @@ async def test_all_supported_reads_as_solid():
     skill = _skill("CLAIM: x | SUPPORTED | checks out\nCLAIM: y | SUPPORTED | correct")
     r = await _run(skill, ctx=_ctx("some answer"))
     assert r.data["second_opinion"] == "solid" and "rely on it" in r.speech.lower()
+
+
+@pytest.mark.asyncio
+async def test_specialist_is_chosen_by_the_answers_field_not_the_question():
+    # The complaint this fixes: "are you sure?" audited an electrical wiring answer
+    # with the SOFTWARE engineer because the generic question named no field. Now
+    # the ANSWER drives the choice — an electrical answer gets the electrical
+    # engineer.
+    skill = _skill("CLAIM: the low-voltage run | SUPPORTED | fine", max_members=1)
+    r = await _run(skill, ctx=_ctx(
+        "Run low-voltage wiring on a separate path from the mains, and keep a "
+        "solid ground at every box.",
+        question="is this a good idea"))
+    assert r.data["members"] == ["electrical"]
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_the_question_field_when_the_answer_is_generic():
+    # If the answer names no field but the question does, use the question's.
+    skill = _skill("CLAIM: it | SUPPORTED | fine", max_members=1)
+    r = await _run(skill, ctx=_ctx("Yes, that should be fine.",
+                                   question="what resistor do I need for the led"))
+    assert r.data["members"] == ["electrical"]
 
 
 @pytest.mark.asyncio
@@ -192,6 +219,16 @@ def test_matches_expected_phrasings_and_declines_unrelated():
         assert s.match(text) is not None, text
     for text in ("check the time", "are you there", "double-check the address"):
         assert s.match(text) is None, text
+
+
+def test_verdict_is_not_solid_when_most_claims_went_unverified():
+    """1 SUPPORTED among 4 CANNOT_VERIFY must NOT read 'you can rely on it'."""
+    from skills.second_opinion import _verdict
+    assert _verdict([{"tag": "SUPPORTED"}] + [{"tag": "CANNOT_VERIFY"}] * 4) == "mixed"
+    # a verified majority still reads solid; a wrong/unsupported claim dominates.
+    assert _verdict([{"tag": "SUPPORTED"}, {"tag": "SUPPORTED"},
+                     {"tag": "CANNOT_VERIFY"}]) == "solid"
+    assert _verdict([{"tag": "SUPPORTED"}, {"tag": "WRONG"}]) == "wrong"
 
 
 if __name__ == "__main__":  # pragma: no cover

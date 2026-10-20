@@ -29,9 +29,10 @@ Model/provider endpoints let clients switch the LLM at runtime.
     POST /pair/approve {"request_id": …} -> {"ok", "name"}   (approve at the PC)
     POST /pair/deny {"request_id": …}    -> {"ok"}          (dismiss at the PC)
 
-A UDP responder on the same port answers ``MEDO_DISCOVER_V1`` broadcasts with
-``{"service": "medo", "name", "port"}`` so the watch finds this machine
-without anyone typing an IP (``remote.discovery_enabled``).
+A UDP responder on a fixed discovery port (``DISCOVERY_PORT``, independent of the
+API port) answers ``MEDO_DISCOVER_V1`` broadcasts with ``{"service": "medo",
+"name", "port"}`` — the reply advertises the real API port — so the watch finds
+this machine without anyone typing an IP (``remote.discovery_enabled``).
 
 Every response carries permissive CORS headers because the HUD (served on its
 own port) calls this API cross-origin from the browser. The API key accepted by
@@ -63,9 +64,10 @@ import psutil
 from aiohttp import web
 
 from core import dirs
-from core.config import Settings, save_llm_secrets
+from core.config import PROJECT_ROOT, Settings, save_llm_secrets
 from core.events import AssistantState, StateMachine
 from core.router import Router
+from remote.ratelimit import RateLimiter, caller_key
 
 logger = logging.getLogger(__name__)
 
@@ -127,12 +129,21 @@ PAIR_MAX_ATTEMPTS = 5
 #: Approve-on-PC pairing: how long an un-approved request lingers, and a cap so
 #: a LAN peer can't flood the pending list. The request_id is a 192-bit secret,
 #: so the token is delivered only to the device that made the request and only
-#: after a human clicks Approve in the HUD.
+#: after a human clicks Approve in the HUD. The per-peer cap is the smaller gate
+#: so one LAN peer can't occupy every global slot and deny pairing to everyone
+#: else (loopback — the HUD/local flows — is trusted and exempt from it).
 PAIR_REQUEST_TTL_S = 300.0
 PAIR_MAX_PENDING = 12
+PAIR_MAX_PENDING_PER_PEER = 3
 
 #: UDP discovery probe the watch broadcasts; anything else is ignored.
 DISCOVERY_PROBE = b"MEDO_DISCOVER_V1"
+
+#: Fixed, well-known UDP port the discovery responder listens on. It must NOT
+#: track the configurable ``remote.port`` — a client can't know a custom API
+#: port before discovery, so the probe port has to be constant. The reply still
+#: advertises the real API port, which is how the client learns where to talk.
+DISCOVERY_PORT = 8710
 
 
 class _DiscoveryProtocol(asyncio.DatagramProtocol):
@@ -143,9 +154,14 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
     display name) — never the token.
     """
 
-    def __init__(self, name: str, port: int) -> None:
+    def __init__(self, name: str, port: int, scheme: str = "http") -> None:
         self._name = name
         self._port = port
+        # Which URL scheme to build. A discovering client that guessed http
+        # against a TLS listener gets a connection reset and no hint why, so
+        # the answer says which one it is. Not sensitive: a TLS handshake on
+        # the port reveals the same thing to anyone who tries it.
+        self._scheme = scheme
         self._transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport) -> None:  # type: ignore[override]
@@ -155,7 +171,8 @@ class _DiscoveryProtocol(asyncio.DatagramProtocol):
         if data.strip() != DISCOVERY_PROBE or self._transport is None:
             return
         payload = json.dumps(
-            {"service": "medo", "name": self._name, "port": self._port}
+            {"service": "medo", "name": self._name, "port": self._port,
+             "scheme": self._scheme}
         ).encode()
         self._transport.sendto(payload, addr)
         logger.info("discovery probe answered for %s", addr[0])
@@ -211,11 +228,22 @@ class RemoteServer:
         # polls; a human approves in the HUD. Pruned on every touch by TTL.
         self._pair_requests: dict[str, dict] = {}
         self._udp_transport: asyncio.DatagramTransport | None = None
+        # Lazily-built Mechanisms for the SOFTWARE CONTROL panel's live status.
+        self._software_mech = None
         # /sys cache — refreshed by a background task so a 2 s HUD poll costs
         # a dict lookup, not a psutil/nvidia-smi round-trip per request.
         self._sys: dict = {"cpu": None, "ram": None, "gpu": None}
         self._sys_task: asyncio.Task | None = None
         self._no_nvidia = False
+        # Per-caller throttle. Built from config here (not per request) so the
+        # buckets persist across requests — that IS the state that limits.
+        self._limiter = RateLimiter(
+            per_minute=settings.remote.rate_limit_per_minute,
+            burst=settings.remote.rate_limit_burst,
+        )
+        # Where TLS ended up, once start() has run: {"certfile", "keyfile",
+        # "fingerprint"}. None when serving plain HTTP.
+        self._tls: dict[str, str] | None = None
 
     def build_app(self) -> web.Application:
         """Create the aiohttp application (separated out for tests)."""
@@ -244,14 +272,30 @@ class RemoteServer:
             # them (a native client using a hostname must list it in
             # remote.allowed_origins, same as a hostname HUD).
             if request.method != "OPTIONS" and not self._origin_allowed(request):
+                self._log_refusal(request, "cross_origin")
                 return _error(403, "cross-origin request refused")
-            if self._authorized(request):
+            authorized = self._authorized(request)
+            # Throttle BEFORE answering, and key an UNAUTHORIZED caller by
+            # address rather than by the token they offered. Keying a bad token
+            # by its own hash would hand a brute-forcer a fresh full bucket for
+            # every guess — the one attack the throttle exists to slow down.
+            limited = self._rate_limited(request, authorized=authorized)
+            if limited is not None:
+                return limited
+            if authorized:
                 return await handler(request)
+            self._log_refusal(
+                request, "no_token" if not self._supplied_token(request) else "bad_token")
             return _error(401, "missing or invalid token")
 
         # cors first so even 401/403s carry the headers the browser HUD needs.
         app = web.Application(middlewares=[cors_middleware, auth_middleware])
         app.router.add_get("/ping", self._handle_ping)
+        app.router.add_get("/tls", self._handle_tls)
+        # Local dashboard: a searchable history of what was asked and answered.
+        # Read-only, and behind the SAME token gate as everything else here.
+        app.router.add_get("/dashboard", self._handle_dashboard)
+        app.router.add_get("/history", self._handle_history)
         app.router.add_post("/ask", self._handle_ask)
         app.router.add_get("/status", self._handle_status)
         app.router.add_get("/sys", self._handle_sys)
@@ -272,6 +316,12 @@ class RemoteServer:
         app.router.add_get("/mcp", self._handle_mcp_status)
         app.router.add_post("/control/mcp", self._handle_mcp_add)
         app.router.add_post("/control/mcp/remove", self._handle_mcp_remove)
+        app.router.add_get("/software", self._handle_software_status)
+        app.router.add_post("/control/software", self._handle_software_control)
+        app.router.add_post("/software/action", self._handle_software_action)
+        app.router.add_post("/software/learn", self._handle_software_learn)
+        app.router.add_post("/software/forget", self._handle_software_forget)
+        app.router.add_get("/studio", self._handle_studio_projects)
         app.router.add_get("/routines", self._handle_routines_status)
         app.router.add_post("/control/routines", self._handle_routines_set)
         app.router.add_get("/webhooks", self._handle_webhooks_status)
@@ -281,6 +331,7 @@ class RemoteServer:
         app.router.add_post("/control/selfdev/apply", self._handle_selfdev_apply)
         app.router.add_post("/control/selfdev/discard", self._handle_selfdev_discard)
         app.router.add_post("/control/pc", self._handle_pc_control)
+        app.router.add_post("/control/dev-mode", self._handle_dev_mode)
         app.router.add_post("/control/semantic", self._handle_semantic)
         app.router.add_post("/control/browser", self._handle_browser)
         app.router.add_post("/control/modes", self._handle_modes)
@@ -348,6 +399,62 @@ class RemoteServer:
             return False                        # domain Host header → rebinding
         return bool(ohost) and ohost == rhost
 
+    @staticmethod
+    def _supplied_token(request: web.Request) -> str:
+        """The bearer token on this request, header or ``?token=``, else ""."""
+        header = request.headers.get("Authorization", "")
+        if header.startswith("Bearer "):
+            return header[7:]
+        return request.query.get("token", "")
+
+    def _caller_key(self, request: web.Request, *, authorized: bool) -> str:
+        """Throttling identity: the token only when it actually authenticated."""
+        token = self._supplied_token(request) if authorized else ""
+        return caller_key(token or None, request.remote)
+
+    def _metrics(self):
+        """The metrics store, if routing telemetry is configured. May be None."""
+        return getattr(self._router, "metrics", None)
+
+    def _log_refusal(self, request: web.Request, reason: str, *,
+                     authorized: bool = False) -> None:
+        """Persist a refused request so repeated attempts are visible.
+
+        Best-effort and never in the request's way: a locked metrics DB must
+        not turn a clean 401 into a 500.
+        """
+        logger.warning("companion API refused %s %s from %s (%s)",
+                       request.method, request.path, request.remote, reason)
+        store = self._metrics()
+        if store is None:
+            return
+        with contextlib.suppress(Exception):
+            store.record_auth_event(
+                reason, peer=request.remote, path=request.path,
+                method=request.method,
+                caller=self._caller_key(request, authorized=authorized))
+
+    def _rate_limited(self, request: web.Request, *,
+                      authorized: bool) -> web.Response | None:
+        """A 429 when this caller is over its quota, else None.
+
+        OPTIONS is exempt: a browser fires one before every real cross-origin
+        request, so charging for both would halve the effective limit for the
+        HUD while doing nothing to slow an attacker (who sends neither).
+        """
+        cfg = self._settings.remote
+        if request.method == "OPTIONS" or not self._limiter.enabled:
+            return None
+        if cfg.rate_limit_local_exempt and self._is_local(request):
+            return None
+        key = self._caller_key(request, authorized=authorized)
+        if self._limiter.allow(key):
+            return None
+        retry = self._limiter.retry_after(key)
+        self._log_refusal(request, "rate_limited", authorized=authorized)
+        return _error(429, "too many requests — slow down",
+                      headers={"Retry-After": str(retry)})
+
     def _authorized(self, request: web.Request) -> bool:
         """Token gate for LAN clients.
 
@@ -366,8 +473,7 @@ class RemoteServer:
         expected = remote_cfg.token
         if not expected:
             return False
-        header = request.headers.get("Authorization", "")
-        supplied = header[7:] if header.startswith("Bearer ") else request.query.get("token", "")
+        supplied = self._supplied_token(request)
         if not supplied:
             return False
         try:
@@ -377,25 +483,68 @@ class RemoteServer:
             # non-ASCII char in it simply can't match ours — refuse, don't 500.
             return False
 
+    def _ssl_context(self):
+        """The TLS context to bind with, or None for plain HTTP.
+
+        Certificate generation happens here, on the first serve, rather than at
+        install time: the certificate has to cover the addresses this machine
+        actually has, and those aren't known until it is running on the network
+        it will be used on. A failure downgrades to HTTP with a loud warning
+        rather than refusing to start — a MEDO that won't boot is worse than one
+        that boots unencrypted and says so.
+        """
+        cfg = self._settings.remote
+        if not cfg.tls_enabled:
+            return None
+        try:
+            from remote import tls
+
+            cert, key = tls.ensure_certificate(
+                PROJECT_ROOT / "data" / "tls",
+                certfile=cfg.tls_certfile or None,
+                keyfile=cfg.tls_keyfile or None)
+            context = tls.ssl_context(cert, key)
+            self._tls = {"certfile": str(cert), "keyfile": str(key),
+                         "fingerprint": tls.fingerprint(cert)}
+            logger.info("TLS enabled — certificate SHA-256 %s",
+                        self._tls["fingerprint"])
+            return context
+        except Exception:
+            logger.exception(
+                "TLS was requested but could not be set up; serving PLAIN HTTP. "
+                "The bearer token will cross the network in the clear.")
+            self._tls = None
+            return None
+
+    @property
+    def scheme(self) -> str:
+        """``https`` once TLS is actually in effect, else ``http``."""
+        return "https" if self._tls else "http"
+
     async def start(self) -> None:
         """Bind and start serving; returns once the socket is listening."""
         host = self._settings.remote.host
         port = self._settings.remote.port
+        ssl_context = self._ssl_context()
         self._runner = web.AppRunner(self.build_app())
         await self._runner.setup()
-        await web.TCPSite(self._runner, host, port).start()
+        await web.TCPSite(self._runner, host, port, ssl_context=ssl_context).start()
         self._sys_task = asyncio.create_task(self._collect_sys_forever())
-        logger.info("remote API listening on http://%s:%d", host, port)
+        logger.info("remote API listening on %s://%s:%d", self.scheme, host, port)
         if self._settings.remote.discovery_enabled:
-            # Same port number over UDP; bind 0.0.0.0 so broadcasts arrive.
+            # Fixed discovery port (NOT the API port) so a client probe is always
+            # correct even when remote.port is customised; the reply advertises
+            # the real API `port`. Bind 0.0.0.0 so broadcasts arrive.
             # Best-effort: discovery failing must never take the API down.
             try:
                 loop = asyncio.get_running_loop()
                 self._udp_transport, _ = await loop.create_datagram_endpoint(
-                    lambda: _DiscoveryProtocol(self._settings.personality.name, port),
-                    local_addr=("0.0.0.0", port),
+                    lambda: _DiscoveryProtocol(self._settings.personality.name, port,
+                                               self.scheme),
+                    local_addr=("0.0.0.0", DISCOVERY_PORT),
                 )
-                logger.info("watch discovery answering on udp/%d", port)
+                logger.info("watch discovery answering on udp/%d (advertising api port %d)",
+                            DISCOVERY_PORT, port)
             except Exception:
                 logger.warning("discovery responder unavailable", exc_info=True)
 
@@ -504,6 +653,52 @@ class RemoteServer:
             }
         )
 
+    async def _handle_tls(self, request: web.Request) -> web.Response:
+        """The certificate fingerprint, so a client can pin this machine.
+
+        A self-signed certificate encrypts but does not identify; pinning this
+        value is what closes that gap. Authenticated (it sits behind the normal
+        token gate) because knowing the fingerprint is only useful to someone
+        already entitled to talk to MEDO, and there is no reason to hand a
+        stranger a stable identifier for this machine.
+        """
+        return web.json_response({
+            "ok": True,
+            "tls": self._tls is not None,
+            "scheme": self.scheme,
+            "fingerprint_sha256": (self._tls or {}).get("fingerprint"),
+        })
+
+    async def _handle_dashboard(self, request: web.Request) -> web.Response:
+        """The history page itself — one self-contained HTML file.
+
+        Served from the companion API rather than the HUD so it inherits the
+        token gate, the origin check and the throttle without a second auth
+        model to keep in step with this one.
+        """
+        page = PROJECT_ROOT / "remote" / "web" / "dashboard.html"
+        try:
+            return web.Response(text=page.read_text(encoding="utf-8"),
+                                content_type="text/html")
+        except OSError:
+            return _error(500, "the dashboard page is missing from this install")
+
+    async def _handle_history(self, request: web.Request) -> web.Response:
+        """Past turns, searchable and filterable by routing tier. Read-only."""
+        store = self._metrics()
+        if store is None:
+            return web.json_response({"ok": True, "turns": [], "tiers": [],
+                                      "note": "routing telemetry is off"})
+        query = request.query.get("q", "")[:200]
+        tier = request.query.get("tier", "")[:20]
+        try:
+            limit = max(1, min(500, int(request.query.get("limit", 100))))
+        except ValueError:
+            limit = 100
+        turns = await asyncio.to_thread(store.history, query, tier, limit)
+        tiers = await asyncio.to_thread(store.history_tiers)
+        return web.json_response({"ok": True, "turns": turns, "tiers": tiers})
+
     async def _handle_status(self, request: web.Request) -> web.Response:
         """Full picture for UIs: provider, active model, choices, state."""
         models = await asyncio.to_thread(self._router.llm.list_models)
@@ -523,6 +718,8 @@ class RemoteServer:
                 "has_anthropic_key": bool(self._settings.llm.anthropic_api_key),
                 # The PC CONTROL switch (may MEDO act on this computer?).
                 "pc_control": self._settings.safety.pc_control_enabled,
+                # DEVELOPER MODE — the whole security layer off (session-only).
+                "dev_mode": bool(getattr(self._settings.security, "yolo", False)),
                 # The Tier-2 semantic router: off | shadow | live.
                 "semantic": self._settings.router.semantic_mode(),
                 # The controlled browser MEDO drives (chrome/msedge/chromium/opera).
@@ -648,11 +845,18 @@ class RemoteServer:
         pending = [r for r in self._pair_requests.values() if r["status"] == "pending"]
         if len(pending) >= PAIR_MAX_PENDING:
             return _error(429, "too many pending connection requests — approve or wait")
+        # Per-peer cap: one flooding LAN peer must not fill the shared queue and
+        # lock out every legitimate device. Loopback (HUD/local flows) is trusted
+        # and only bounded by the global cap above.
+        peer = request.remote or "?"
+        if not self._is_local(request) and sum(
+                1 for r in pending if r["peer"] == peer) >= PAIR_MAX_PENDING_PER_PEER:
+            return _error(429, "too many pending requests from this device — approve or wait")
         request_id = secrets_mod.token_urlsafe(24)
         self._pair_requests[request_id] = {
             "name": name,
             "kind": kind,
-            "peer": request.remote or "?",
+            "peer": peer,
             "created": time.monotonic(),
             "status": "pending",
             "token": None,
@@ -713,6 +917,11 @@ class RemoteServer:
             token = ensure_remote_token(self._settings)
         req["status"] = "approved"
         req["token"] = token
+        # Refresh the lifetime so a human who approves near the TTL still leaves
+        # the device a full window to poll and claim the token — otherwise the
+        # entry is pruned on its ORIGINAL creation time and the minted token is
+        # silently discarded (/pair/poll then wrongly reports "expired").
+        req["created"] = time.monotonic()
         logger.info("pair request %r approved (%s)", req["name"], req["peer"])
         return web.json_response({"ok": True, "name": req["name"]})
 
@@ -739,6 +948,212 @@ class RemoteServer:
             {"ok": True, "enabled": self._settings.mcp.enabled,
              "configured": configured, "servers": servers}
         )
+
+    def _software_mechanisms(self):
+        """A Mechanisms for connector detect() (installed/running), built lazily
+        and cached. Windows-only (Win32Backend); returns None anywhere it can't
+        be built, so the panel degrades to metadata-only rather than erroring."""
+        if getattr(self, "_software_mech", None) is not None:
+            return self._software_mech
+        try:
+            from core.safety import PathWhitelist
+            from security.policy import PolicyEngine
+            from software.mechanisms import Mechanisms
+            from software.win32_backend import Win32Backend
+
+            policy = PolicyEngine(self._settings.security, self._settings.safety,
+                                  PathWhitelist(self._settings.safety.whitelist_dirs))
+            self._software_mech = Mechanisms(
+                Win32Backend(), policy,
+                exe_paths=self._settings.software.exe_paths)
+        except Exception:
+            logger.debug("software mechanisms unavailable", exc_info=True)
+            self._software_mech = None
+        return self._software_mech
+
+    async def _handle_software_status(self, request: web.Request) -> web.Response:
+        """Software connectors (control local apps by command) for the HUD panel:
+        the master switch, and each connector's on/off, live availability, and
+        the kinds of commands it understands."""
+        from software.connectors import CONNECTOR_CLASSES
+
+        sw = self._settings.software
+        mech = await asyncio.to_thread(self._software_mechanisms)
+        connectors = []
+        for cls in CONNECTOR_CLASSES:
+            app_id = getattr(cls, "app_id", "") or cls.__name__
+            entry = {
+                "app_id": app_id,
+                "display_name": getattr(cls, "display_name", app_id) or app_id,
+                "enabled": sw.connectors.get(app_id, True) is not False,
+                "actions": [], "installed": None, "running": None,
+            }
+            try:
+                conn = cls(mech)
+                entry["actions"] = [
+                    {"name": a.name, "label": a.name.replace("_", " "),
+                     "confirm": bool(a.requires_confirmation)}
+                    for a in conn.actions()]
+                if mech is not None:
+                    det = await asyncio.to_thread(conn.detect)
+                    entry["installed"] = bool(det.installed)
+                    entry["running"] = bool(det.running)
+            except Exception:
+                logger.debug("connector %s introspect failed", app_id,
+                             exc_info=True)
+            connectors.append(entry)
+        from software.knowledge import list_maps
+
+        learned = await asyncio.to_thread(list_maps)
+        return web.json_response(
+            {"ok": True, "enabled": bool(sw.enabled), "connectors": connectors,
+             "learned": learned})
+
+    async def _handle_software_control(self, request: web.Request) -> web.Response:
+        """The HUD's SOFTWARE CONTROL panel: master ``{"on": bool}`` and/or a
+        per-connector ``{"app_id":..., "app_on": bool}``. Connectors register at
+        startup, so a change takes effect on the next restart (``restart: true``);
+        it's persisted per machine so the choice survives."""
+        from core.config import save_software
+
+        body = await _json_dict(request)
+        sw = self._settings.software
+        changed: dict = {}
+        if "on" in body:
+            sw.enabled = bool(body["on"])
+            changed["enabled"] = sw.enabled
+        app_id = body.get("app_id")
+        if app_id is not None:
+            if "app_on" not in body:
+                return _error(400, "per-connector toggle needs "
+                                   "{\"app_id\":..., \"app_on\": true|false}")
+            val = bool(body["app_on"])
+            sw.connectors[str(app_id)] = val
+            changed.setdefault("connectors", {})[str(app_id)] = val
+        if not changed:
+            return _error(400, "body must set {\"on\": bool} and/or "
+                               "{\"app_id\":..., \"app_on\": bool}")
+        if self._persist_secrets:
+            save_software(enabled=changed.get("enabled"),
+                          connectors=changed.get("connectors"))
+        logger.info("software control updated via HUD: %s", changed)
+        return web.json_response({"ok": True, "enabled": bool(sw.enabled),
+                                  "connectors": dict(sw.connectors),
+                                  "restart": True})
+
+    @staticmethod
+    async def _run_skill_blocking(skill, req):
+        """Run a skill whose ``execute`` does blocking OS work, off the loop."""
+        return await asyncio.to_thread(lambda: asyncio.run(skill.execute(req)))
+
+    async def _handle_software_action(self, request: web.Request) -> web.Response:
+        """Run ONE connector action from a HUD button
+        (``{app_id, action, confirmed?}``). Goes through the same
+        ConnectorActionSkill as voice, and honours the master + PC-control
+        switches (calling the skill directly would otherwise skip the router's
+        gate)."""
+        from skills.base import SkillRequest
+        from software.connectors import CONNECTOR_CLASSES
+        from software.registry import ConnectorActionSkill
+
+        body = await _json_dict(request)
+        app_id = str(body.get("app_id") or "").strip()
+        action_name = str(body.get("action") or "").strip()
+        if not app_id or not action_name:
+            return _error(400, "need {\"app_id\":..., \"action\":...}")
+        if not self._settings.software.enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "Turn App control on first."})
+        mech = await asyncio.to_thread(self._software_mechanisms)
+        if mech is None:
+            return _error(503, "software control isn't available here")
+        cls = next((c for c in CONNECTOR_CLASSES
+                    if getattr(c, "app_id", "") == app_id), None)
+        if cls is None:
+            return _error(404, f"no connector {app_id!r}")
+        try:
+            conn = cls(mech)
+            action = next((a for a in conn.actions()
+                           if a.name == action_name), None)
+        except Exception:
+            action = None
+        if action is None:
+            return _error(404, f"no action {action_name!r} on {app_id}")
+        skill = ConnectorActionSkill(conn, action)
+        if skill.controls_pc and not self._settings.safety.pc_control_enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "PC control is off — turn it on to let me do that."})
+        req = SkillRequest(text="", args=dict(body.get("args") or {}),
+                           context={"confirmed": bool(body.get("confirmed"))})
+        try:
+            result = await self._run_skill_blocking(skill, req)
+        except Exception:
+            logger.warning("software action %s/%s failed", app_id, action_name,
+                           exc_info=True)
+            return web.json_response({"ok": True, "success": False,
+                "speech": "That action failed on this machine."})
+        return web.json_response(
+            {"ok": True, "success": bool(result.success), "speech": result.speech,
+             "needs_confirmation": bool(result.needs_confirmation),
+             "verified": bool(result.data.get("verified", True))})
+
+    async def _handle_software_learn(self, request: web.Request) -> web.Response:
+        """Learn an app's UI from the HUD (``{app}``) — focus, safely scan
+        (reveal menus, back out), and remember it. Gated by PC control."""
+        from skills.base import SkillRequest
+        from skills.software_learn import LearnAppSkill
+        from software.ui_scan import UiaWalker
+
+        body = await _json_dict(request)
+        app = str(body.get("app") or "").strip()
+        if not app:
+            return _error(400, "need {\"app\": \"CapCut\"}")
+        if not self._settings.software.enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "Turn App control on first."})
+        if not self._settings.safety.pc_control_enabled:
+            return web.json_response({"ok": True, "success": False,
+                "speech": "PC control is off — turn it on so I can scan an app."})
+        mech = await asyncio.to_thread(self._software_mechanisms)
+        if mech is None:
+            return _error(503, "software control isn't available here")
+        vision = None
+        if self._settings.software.vision_scan:
+            from software.vision_probe import VisionProbe
+
+            vision = VisionProbe(self._settings, mechanisms=mech)
+        skill = LearnAppSkill(mech, UiaWalker(), vision=vision)
+        try:
+            result = await self._run_skill_blocking(
+                skill, SkillRequest(text="", args={"app": app}))
+        except Exception:
+            logger.warning("software learn of %r failed", app, exc_info=True)
+            return web.json_response({"ok": True, "success": False,
+                "speech": "I couldn't scan that app just now."})
+        return web.json_response(
+            {"ok": True, "success": bool(result.success),
+             "speech": result.speech, "data": result.data})
+
+    async def _handle_studio_projects(self, request: web.Request) -> web.Response:
+        """Maker Studio projects for the HUD panel (newest first)."""
+        from studio.projects import list_projects
+
+        projects = await asyncio.to_thread(
+            list_projects, self._settings.studio.projects_dir)
+        return web.json_response(
+            {"ok": True, "enabled": bool(self._settings.studio.enabled),
+             "projects": projects})
+
+    async def _handle_software_forget(self, request: web.Request) -> web.Response:
+        """Forget a learned app (``{app}``) — deletes its map."""
+        from software.knowledge import forget_map
+
+        body = await _json_dict(request)
+        app = str(body.get("app") or "").strip()
+        if not app:
+            return _error(400, "need {\"app\": ...}")
+        forgot = await asyncio.to_thread(forget_map, app)
+        return web.json_response({"ok": True, "forgot": bool(forgot)})
 
     async def _handle_mcp_add(self, request: web.Request) -> web.Response:
         """Add/update an MCP server from the HUD: name + URL (+ optional bearer
@@ -941,16 +1356,12 @@ class RemoteServer:
             return _error(400, "'provider' must be one of: " + ", ".join(VALID_PROVIDERS))
 
         llm_cfg = self._settings.llm
-        llm_cfg.provider = provider
-        # The key/base URL land in the field belonging to the chosen provider,
-        # so GPT and Claude credentials are remembered independently.
         api_key = payload.get("api_key")
-        if api_key is not None:
-            if provider == "anthropic":
-                llm_cfg.anthropic_api_key = str(api_key)
-            else:
-                llm_cfg.api_key = str(api_key)
         base_url = str(payload.get("base_url") or "").strip()
+        # VALIDATE BEFORE MUTATING. This check can reject the request, and the
+        # provider used to be switched first — so a rejected call still left the
+        # brain pointing at the new provider with the OLD provider's model name,
+        # breaking every later question with no sign of why.
         if base_url:
             current = {"openai": llm_cfg.openai_base_url,
                        "anthropic": llm_cfg.anthropic_base_url,
@@ -962,6 +1373,16 @@ class RemoteServer:
             if (base_url != current and api_key is None
                     and provider in ("openai", "anthropic")):
                 return _error(400, "changing base_url requires api_key to be re-supplied")
+
+        llm_cfg.provider = provider
+        # The key/base URL land in the field belonging to the chosen provider,
+        # so GPT and Claude credentials are remembered independently.
+        if api_key is not None:
+            if provider == "anthropic":
+                llm_cfg.anthropic_api_key = str(api_key)
+            else:
+                llm_cfg.api_key = str(api_key)
+        if base_url:
             if provider == "openai":
                 llm_cfg.openai_base_url = base_url
             elif provider == "anthropic":
@@ -1171,6 +1592,28 @@ class RemoteServer:
                     "ON" if enabled else "OFF")
         return web.json_response({"ok": True, "on": enabled})
 
+    async def _handle_dev_mode(self, request: web.Request) -> web.Response:
+        """The HUD's DEVELOPER MODE switch: turn the WHOLE security layer off.
+
+        When on, the policy engine allows every action and confirmations
+        auto-accept — for constraint-free local dev only. Deliberately
+        SESSION-ONLY (never persisted): a restart always returns to secure, so a
+        forgotten toggle can't leave the machine defenceless. The HUD shows a
+        loud red banner the whole time it's on.
+        """
+        body = await _json_dict(request)
+        if "on" not in body:
+            return _error(400, "body must be JSON like {\"on\": true}")
+        enabled = bool(body.get("on"))
+        self._settings.security.yolo = enabled     # live; NOT persisted
+        if enabled:
+            logger.warning("⚠ DEVELOPER MODE ON via HUD — security layer OFF, "
+                           "every action allowed, confirmations auto-accepted. "
+                           "Resets to secure on restart.")
+        else:
+            logger.info("developer mode OFF via HUD — security layer restored")
+        return web.json_response({"ok": True, "on": enabled})
+
     async def _handle_semantic(self, request: web.Request) -> web.Response:
         """The HUD's SEMANTIC TIER selector: off | shadow | live.
 
@@ -1223,7 +1666,7 @@ class RemoteServer:
 
         Runtime-only on purpose — it resets on restart, because a profile is a
         thing you enter for a task. It changes presentation and which skills
-        are surfaced; it does NOT touch any safety rule (see docs/Decisions.md).
+        are surfaced; it does NOT touch any safety rule (see docs/decisions.md).
         """
         body = await _json_dict(request)
         if "on" not in body:
@@ -1508,8 +1951,9 @@ def _browser_label(browser) -> str:
     return browser_choice(browser)
 
 
-def _error(status: int, message: str) -> web.Response:
-    return web.json_response({"ok": False, "error": message}, status=status)
+def _error(status: int, message: str, headers: dict | None = None) -> web.Response:
+    return web.json_response({"ok": False, "error": message}, status=status,
+                             headers=headers)
 
 
 async def _json_dict(request: web.Request) -> dict:

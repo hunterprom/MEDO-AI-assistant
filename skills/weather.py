@@ -8,11 +8,32 @@ Supports "today" and "tomorrow" so M4 follow-ups ("and tomorrow?") work.
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any
 
 from core import mk
 from core.config import WeatherConfig
 from skills.base import Skill, SkillRequest, SkillResult
+
+def _fold(text: str) -> str:
+    """Casefold and strip accents, so "Macedônia" and "Macedonia" compare equal."""
+    stripped = "".join(c for c in unicodedata.normalize("NFD", text or "")
+                       if not unicodedata.combining(c))
+    return stripped.casefold().strip()
+
+
+#: Spoken place names the geocoder doesn't index under the form people say.
+#: "Macedonia" is the name locals use for the country the gazetteer files only
+#: as "North Macedonia" (renamed 2019), so the query otherwise lands on one of
+#: the several US villages of that name.
+_PLACE_ALIASES = {
+    "macedonia": "North Macedonia",
+    "македонија": "North Macedonia",
+    "makedonija": "North Macedonia",
+    "holland": "Netherlands",
+    "britain": "United Kingdom",
+    "great britain": "United Kingdom",
+}
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -57,10 +78,79 @@ def _strip_time_words(city: str) -> str:
     return _TRAILING_TIME.sub("", city).strip()
 
 
+#: A conjunction that may start a NEW CLAUSE inside the greedy city capture.
+#: ``_CITY`` runs to end-of-line over ``[\w .'-]``, so a compound question —
+#: "the weather in skopje AND while telling me what should i do" — captured the
+#: entire rest of the sentence as the place name and answered "I couldn't find a
+#: place called skopje and while telling me…". Reported from a live session.
+_CLAUSE_BREAK = re.compile(
+    r"\s+\b(?:and|but|or|while|because|since|so|then|also|plus|if|when|"
+    r"и|но|или|додека|затоа|бидејќи|па|ако|кога)\b\s+(?P<rest>.+)$",
+    re.IGNORECASE)
+
+#: What proves the remainder really is a new clause rather than more of the
+#: place name. Without this check "bosnia AND herzegovina" and "trinidad AND
+#: tobago" would be cut in half — both are places people ask about. A pronoun,
+#: a modal or a question word is not part of any city's name.
+_NEW_CLAUSE = re.compile(
+    r"\b(?:i|i'?m|you|your|me|my|we|us|can|could|would|should|shall|will|"
+    r"what|how|why|who|where|tell|give|show|do|does|did|is|are|am|please|"
+    r"јас|ти|ми|ме|мене|ние|нас|дали|што|како|зошто|кој|каде|кажи|дај|"
+    r"покажи|можеш|треба|сум)\b", re.IGNORECASE)
+
+
+def _cut_at_clause(city: str) -> str:
+    """Trim a captured city at the point a second request begins.
+
+    Conservative on purpose: it cuts only when a conjunction is followed by
+    something no place name contains. A two-word place joined by "and" is left
+    whole, and so is a plain list ("skopje and london") — that one is a
+    different question, but answering the first city beats answering neither.
+    """
+    match = _CLAUSE_BREAK.search(city)
+    if match and _NEW_CLAUSE.search(match.group("rest")):
+        return city[: match.start()].strip()
+    return city
+
+
 #: A trailing "in/for/at <X>" that is plainly not a place, so the city fallback
 #: doesn't geocode "the moment" and report it can't find it.
 _NOT_A_CITY = {"the moment", "the minute", "now", "home", "work",
-               "the weekend", "the week", "the day", "school"}
+               "the weekend", "the week", "the day", "school",
+               # common "my current location" nouns — a leading article is
+               # stripped before this check, so "the office" is caught too.
+               "office", "house", "gym", "room", "building", "apartment",
+               "flat", "garden", "backyard", "kitchen", "bedroom", "bathroom",
+               "hotel", "hospital"}
+
+
+#: Determiners that mean "the default location", never a real place to geocode
+#: ("my house", "this area", "next quarter"). Articles (the/a/an) are NOT here:
+#: real cities lead with them ("The Hague", "the Netherlands").
+_NON_CITY_LEAD = re.compile(
+    r"(?:my|your|our|his|her|their|this|that|next|last)\b", re.IGNORECASE)
+
+
+def _looks_like_city(candidate: str, *, allow_article: bool = False) -> bool:
+    """A captured place is a real city only when it isn't a common non-place
+    ('work', 'home', 'next quarter') and carries no possessive/deictic
+    determiner. ``allow_article`` keeps a leading the/a/an — the pattern's own
+    'in/for/at <city>' group frames a proper name like 'The Hague', whereas a
+    bare trailing tail ('in the office') should still reject the article."""
+    candidate = candidate.strip(" ?.!")
+    if not candidate:
+        return False
+    # Ignore a leading article for the non-place check, so "the office" is
+    # rejected the same as "office" — while a real "The Hague" survives, its
+    # core word not being a non-place.
+    core = re.sub(r"^(?:the|a|an)\s+", "", candidate, flags=re.IGNORECASE)
+    if candidate.lower() in _NOT_A_CITY or core.lower() in _NOT_A_CITY:
+        return False
+    if _NON_CITY_LEAD.match(candidate):
+        return False
+    if not allow_article and re.match(r"(?:the|a|an)\b", candidate, re.IGNORECASE):
+        return False
+    return True
 
 
 def _city_from_tail(text: str) -> str | None:
@@ -73,12 +163,7 @@ def _city_from_tail(text: str) -> str | None:
     if not tail:
         return None
     candidate = tail.group("c").strip(" ?.!")
-    if not candidate or candidate.lower() in _NOT_A_CITY:
-        return None
-    if re.match(r"(?:the|this|that|a|an|my|your|our|his|her|their)\b",
-                candidate, re.IGNORECASE):
-        return None
-    return candidate
+    return candidate if _looks_like_city(candidate) else None
 
 
 class WeatherSkill(Skill):
@@ -137,17 +222,56 @@ class WeatherSkill(Skill):
         re.compile(r"\bќе\s+врне\b|\bдали\s+ќе\s+врне\b", re.IGNORECASE),
     ]
 
+    #: "направи апликација за прогноза" asks MEDO to BUILD something; the bare
+    #: "прогноза" pattern above claimed it and read out today's temperature
+    #: instead — a live transcript showed exactly that, three times running.
+    #: Weather words name the SUBJECT of the build here, not the question.
+    _BUILD_REQUEST = re.compile(
+        rf"\b(?:{mk.MAKE}){mk.CLITICS}\s+(?:ед[нeaо]\w*\s+)?"
+        r"(?:апликациј\w*|аплкациј\w*|програм\w*|алатк\w*|скрипт\w*|сајт\w*|"
+        r"веб\s*стран\w*|игр[аи]\w*|модел\w*)"
+        r"|\b(?:make|build|create|write|code|scaffold|design)\s+(?:me\s+)?"
+        r"(?:a|an)\s+(?:\w+\s+){0,2}?"
+        r"(?:app|application|program|tool|script|website|web\s*app|widget|"
+        r"dashboard|game)\b",
+        re.IGNORECASE)
+
+    def match(self, text: str):
+        if self._BUILD_REQUEST.search(text or ""):
+            return None
+        return super().match(text)
+
     def __init__(self, config: WeatherConfig) -> None:
         self._config = config
 
     async def _lookup(self, client: Any, name: str) -> tuple[float, float, str] | None:
-        resp = await client.get(_GEOCODE_URL, params={"name": name, "count": 1})
+        """Geocode ``name``, choosing the place a person would have meant.
+
+        Open-Meteo's first result is NOT the best one: it fuzzy-matches
+        alternate names, so "Macedonia" led with Jonesboro, Louisiana (pop.
+        4587) and MEDO cheerfully reported Louisiana weather for the user's own
+        country. Ask for several and rank them ourselves — an exact name match
+        first, then a capital, then population.
+        """
+        resp = await client.get(_GEOCODE_URL, params={"name": name, "count": 8})
         resp.raise_for_status()
         results = resp.json().get("results") or []
         if not results:
             return None
-        r = results[0]
+        r = max(results, key=lambda x: self._geo_rank(x, name))
         return r["latitude"], r["longitude"], r["name"]
+
+    @staticmethod
+    def _geo_rank(result: dict, query: str) -> tuple[int, int, int]:
+        """Sort key for a geocoder hit: (exact name, is a capital, population)."""
+        name = str(result.get("name") or "")
+        exact = int(_fold(name) == _fold(query))
+        capital = int(str(result.get("feature_code") or "") == "PPLC")
+        try:
+            population = int(result.get("population") or 0)
+        except (TypeError, ValueError):
+            population = 0
+        return exact, capital, population
 
     async def _geocode(self, client: Any, city: str) -> tuple[float, float, str] | None:
         """Find a city, retrying romanised when it was spoken in Cyrillic.
@@ -156,6 +280,7 @@ class WeatherSkill(Skill):
         while "Skopje" resolves, so a Macedonian weather question would fail on
         its own capital without this fallback.
         """
+        city = _PLACE_ALIASES.get(_fold(city), city)
         found = await self._lookup(client, city)
         if found is None and mk.is_cyrillic(city):
             found = await self._lookup(client, mk.to_latin(city))
@@ -165,11 +290,17 @@ class WeatherSkill(Skill):
         import httpx
 
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
-        city = _strip_time_words(
+        speak_mk = mk.is_cyrillic(request.utterance)
+        city = _strip_time_words(_cut_at_clause(
             (request.args.get("city") or gd.get("city") or gd.get("cityb")
              or gd.get("city2") or gd.get("city3") or gd.get("city4")
-             or gd.get("city5") or "").strip(" ?.!"))
+             or gd.get("city5") or "").strip(" ?.!")))
+        if city and not _looks_like_city(city, allow_article=True):
+            # A pattern's greedy city group can capture a non-place ("weather at
+            # work", "forecast for next quarter"); treat it as the default
+            # location instead of geocoding it as a foreign city. Articles are
+            # kept so a real "The Hague" / "the Netherlands" still geocodes.
+            city = ""
         if not city:
             # Several patterns ("how hot is it in Dubai", "is it raining in
             # Paris", "do I need a jacket in London") carry no city GROUP, so
@@ -189,8 +320,16 @@ class WeatherSkill(Skill):
                             else f"I couldn't find a place called {city}.",
                             success=False)
                     lat, lon, place = geo
+                    # The geocoder only speaks Latin, so it hands back "Skopje"
+                    # for a city the user pronounced "Скопје". Say back what
+                    # they said rather than dropping a Latin island into a
+                    # Cyrillic sentence.
+                    if speak_mk and mk.is_cyrillic(city):
+                        place = city
                 else:
                     lat, lon, place = self._config.latitude, self._config.longitude, self._config.default_city
+                if speak_mk and not mk.is_cyrillic(place):
+                    place = mk.to_cyrillic(place) or place
 
                 resp = await client.get(_FORECAST_URL, params={
                     "latitude": lat, "longitude": lon,

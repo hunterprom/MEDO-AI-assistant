@@ -9,7 +9,8 @@ degrade with a clear message where an OS isn't wired up yet.
 from __future__ import annotations
 
 import asyncio
-
+import contextlib
+import logging
 import re
 import subprocess
 import sys
@@ -20,7 +21,10 @@ from typing import Any
 import psutil
 
 from core.platform import IS_MACOS, IS_WINDOWS, current_os
+from security.capabilities import Capability
 from skills.base import Skill, SkillRequest, SkillResult
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
@@ -165,8 +169,13 @@ class VolumeSkill(Skill):
             return f"Volume set to {level} percent."
         if IS_WINDOWS and _win_set_volume(level):
             return f"Volume set to {level} percent."
-        # No absolute control here — nudge toward the target as best we can.
-        return _nudge_media_key(level >= (_current_volume() or 0))
+        # No absolute control here. We reach this ONLY when the endpoint is
+        # unavailable — the same endpoint _current_volume() needs — so the
+        # current level is unknowable and any "nudge" is a coin flip. (It used to
+        # compare against `or 0`, which made every request turn the volume UP,
+        # including "set volume to 10".) Say so instead of guessing wrong.
+        return ("I can't set an exact volume level on this system — tell me "
+                "'louder' or 'quieter' and I'll nudge it.")
 
     def _set_muted(self, muted: bool) -> str:
         if IS_MACOS:
@@ -279,13 +288,19 @@ class SystemInfoSkill(Skill):
         re.compile(r"\bsystem\s+(?:status|stats|info)\b", re.IGNORECASE),
         # Disk / storage. Deliberately broad on the words people actually use
         # for it ("how much space do I have", "free space", "storage left").
-        re.compile(r"\b(?:disk|drive|storage)\s*(?:space|usage)?\b", re.IGNORECASE),
+        # "drive" needs a storage frame ("drive space", "hard drive"): bare
+        # "drive" usually means Google Drive (see files.py), not the local disk.
+        re.compile(r"\b(?:disk|storage)\s*(?:space|usage)?\b|"
+                   r"\b(?:hard\s+drive|drive\s+(?:space|usage))\b", re.IGNORECASE),
         re.compile(r"\b(?:free|available|much|enough)\s+(?:space|storage|room)\b",
                    re.IGNORECASE),
         re.compile(r"\bspace\s+(?:left|remaining|free|do\s+i\s+have|on\s+(?:my|the)"
                    r"\s+(?:pc|computer|drive|disk|machine))\b", re.IGNORECASE),
-        # MK: "колку простор/место имам", "слободен простор"
-        re.compile(r"\b(?:простор|место)\b", re.IGNORECASE),
+        # MK: "колку простор/место имам", "слободен простор" — framed like the
+        # English disk patterns above, so the very common bare word "место"
+        # (place/spot) doesn't hijack unrelated speech to a disk report.
+        re.compile(r"\b(?:колку|слободен|слободно|диск\w*)\b.*\b(?:простор|место)\b",
+                   re.IGNORECASE),
     ]
 
     async def execute(self, request: SkillRequest) -> SkillResult:
@@ -406,6 +421,7 @@ _POWER_ACTIONS = ("lock", "sleep", "shutdown", "restart")
 class PowerSkill(Skill):
     name = "power"
     controls_pc = True
+    capabilities = frozenset({Capability.POWER_CONTROL})
     description = "Lock, sleep, shut down, or restart the machine."
 
     #: A power skill is destructive (it arms a confirmation gate), so its verbs
@@ -444,6 +460,37 @@ class PowerSkill(Skill):
             return "sleep"
         return None
 
+    #: Words that ask for each power action, in both of MEDO's languages.
+    #: Matched against what the USER said, never against the model's chosen
+    #: argument — the model choosing "shutdown" is the claim being checked.
+    _POWER_WORDS = {
+        "lock": re.compile(r"\block(?:s|ed|ing)?\b|\bзаклучи|\bзаклучува|"
+                           r"\bзаклучување", re.IGNORECASE),
+        "sleep": re.compile(r"\bsleep\b|\bsuspend\b|\bhibernate\b|"
+                            r"\bспиј|\bспиење|\bмирување", re.IGNORECASE),
+        "shutdown": re.compile(r"\bshut\s*(?:down|off)\b|\bpower\s*(?:off|down)\b|"
+                               r"\bturn\s+(?:it|the\s+\w+|my\s+\w+)?\s*off\b|"
+                               r"\bисклучи|\bугаси|\bисклучување", re.IGNORECASE),
+        "restart": re.compile(r"\brestart\b|\breboot\b|\bрестарт", re.IGNORECASE),
+    }
+
+    def _asked_for(self, request: SkillRequest, action: str) -> bool:
+        """True when this power action is what the user actually asked for.
+
+        Already-confirmed re-runs pass, as does a fast-path match (the pattern
+        that got here named the machine and the action). Everything else has to
+        show the words, because the alternative is arming a destructive
+        confirmation on the model's say-so: "Позе." — one garbled syllable —
+        armed "Are you sure you want to shut down?", leaving the user a single
+        misheard "да" away from a real shutdown. "Паузирај а музиката, не да
+        гузга сис компјутерот" ("pause the music, NOT the computer") armed a
+        sleep, having been told in the same breath not to.
+        """
+        if request.context.get("confirmed") or request.match is not None:
+            return True
+        pattern = self._POWER_WORDS.get(action)
+        return bool(pattern and pattern.search(request.utterance))
+
     def _run(self, action: str) -> str:
         os_name = current_os()
         cmds = {
@@ -471,8 +518,34 @@ class PowerSkill(Skill):
         cmd = cmds[action].get(os_name)
         if cmd is None:
             return f"I can't {action} on this system."
-        subprocess.Popen(cmd)
-        verbs = {"lock": "Locking", "sleep": "Sleeping", "shutdown": "Shutting down", "restart": "Restarting"}
+        verbs = {"lock": "Locking", "sleep": "Sleeping", "shutdown": "Shutting down",
+                 "restart": "Restarting"}
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE)
+        except Exception as exc:
+            logger.warning("power command failed to start: %s", cmd, exc_info=True)
+            return f"I couldn't {action} this computer: {exc}"
+        # Popen only raises when the binary can't be SPAWNED. A refused command
+        # ("Access is denied", no systemd session) exits non-zero immediately —
+        # catch that instead of announcing a shutdown that never happens. A
+        # still-running process (TimeoutExpired) means the request was accepted.
+        rc = None
+        try:
+            if hasattr(proc, "wait"):
+                rc = proc.wait(timeout=1.5)
+        except subprocess.TimeoutExpired:
+            rc = None
+        except Exception:                       # a test double / odd platform
+            rc = None
+        if rc not in (None, 0):
+            detail = ""
+            with contextlib.suppress(Exception):
+                err = (proc.stderr.read() or b"").decode(errors="replace")
+                if err.strip():
+                    detail = f" — {err.strip().splitlines()[-1][:120]}"
+            return (f"I couldn't {action} this computer{detail}. It may need "
+                    f"permission I don't have.")
         return f"{verbs[action]} now."
 
     async def execute(self, request: SkillRequest) -> SkillResult:
@@ -489,6 +562,20 @@ class PowerSkill(Skill):
         # Everything except locking the screen interrupts what you were doing,
         # so everything except locking asks first. Sleep used to be silent —
         # and a stray sleep costs you your session just as surely as a reboot.
+        #
+        # Before any of that: did the user ask for a power action AT ALL? The
+        # model picks this tool out of garbled speech, and a confirmation is not
+        # the backstop it looks like — arming one leaves the user a single
+        # misheard "yes"/"да" from a real shutdown, and locking does not even
+        # ask. So an action the words never named is refused outright rather
+        # than confirmed. Declining (success=False) makes the router ask the
+        # model to answer what was actually said.
+        if not self._asked_for(request, action):
+            logger.info("power: %r proposed %s but the utterance never asked "
+                        "for it; refusing", request.utterance, action)
+            return SkillResult(
+                "I don't think you asked me to do that to the computer. Say it "
+                "again if you did.", success=False)
         if action != "lock" and not request.context.get("confirmed"):
             phrase = {"shutdown": "shut down", "restart": "restart",
                       "sleep": "put the machine to sleep"}[action]
@@ -511,6 +598,85 @@ class PowerSkill(Skill):
                     },
                     "required": ["action"],
                 },
+            },
+        }
+
+
+# --------------------------------------------------------------------------- #
+# Quit — close MEDO itself (the assistant session), never the machine.
+# --------------------------------------------------------------------------- #
+class QuitSkill(Skill):
+    """Close MEDO itself on command — and actually do it.
+
+    "Close yourself", "shut yourself down", "quit MEDO" used to miss every fast
+    pattern and land on the LLM, which NARRATED a shutdown ("Shutting down —
+    good day, sir.") while nothing closed: MEDO claimed an action it never took.
+    This makes the words true. It fast-matches only SELF-directed close phrases
+    (yourself / MEDO / the assistant), so "close notepad" (a window) and a bare
+    "shut down" (PowerSkill -> the computer) are left alone.
+
+    It is NOT a PC-control action — it ends the assistant, not the machine — so
+    the PC-control switch never hides the one command that turns MEDO off. But
+    ending the session on a single, possibly-misheard phrase is disruptive, so —
+    like every non-lock power action — it asks for a spoken "yes" first.
+    ``requires_confirmation`` doubles as the guard that keeps this session-ender
+    off the semantic/learn tiers: only an explicit phrase, never a fuzzy meaning
+    match, can reach it.
+
+    On the confirmed run it hands the voice loop ``data['exit']``; the loop
+    speaks the farewell, THEN tears down exactly as Ctrl-C would.
+    """
+
+    name = "quit"
+    controls_pc = False
+    requires_confirmation = True
+    capabilities = frozenset({Capability.SESSION_CONTROL})
+    description = "Close MEDO itself — end the assistant session (not the computer)."
+
+    # "medo" and its frequent STT mishearings: the name is short and often quiet,
+    # so Whisper spells it "medal", "meadow", "meddo", "medoh"... "Close medal"
+    # (a misheard "close MEDO") used to miss the fast path and reach the LLM,
+    # which then NARRATED a shutdown. The tight `verb + name` shape plus the
+    # confirmation gate make a rare false hit ("close meadow") cost one "no".
+    # "middle" added from a live transcript: Whisper rendered "Hey, MEDO" as
+    # "Hey, Middle". It is a real English word, so it rides on the tight
+    # `verb + name` shape and the confirmation gate like the rest — "close
+    # middle" is not something anyone says by accident, and if they did it
+    # costs one "no".
+    _MEDO = r"(?:medo|medoh|meddo|medal|meadow|middle)"
+    _SELF = rf"(?:your\s*self|{_MEDO}|the\s+assistant)"
+    patterns = [
+        re.compile(rf"\b(?:close|quit|exit)\s+{_SELF}\b", re.IGNORECASE),
+        re.compile(r"\b(?:shut|turn|power)\s+your\s*self\s+(?:down|off)\b",
+                   re.IGNORECASE),
+        re.compile(rf"\b(?:shut\s*down|shut\s+off|turn\s+off|power\s+off)\s+{_SELF}\b",
+                   re.IGNORECASE),
+        re.compile(rf"\bgoodbye,?\s+{_MEDO}\b", re.IGNORECASE),
+    ]
+
+    def confirmation_prompt(self, request: SkillRequest) -> str:
+        return "Do you want me to close down? Say yes to confirm."
+
+    async def execute(self, request: SkillRequest) -> SkillResult:
+        if not request.context.get("confirmed"):
+            # Unreachable through the router (it holds this skill at
+            # _preconfirm), and kept precisely for the callers that aren't the
+            # router: a direct execute() from a test or future code.
+            return SkillResult(self.confirmation_prompt(request),
+                               needs_confirmation=True)
+        # The voice loop reads data['exit'] and ends the session AFTER speaking.
+        return SkillResult("Shutting down — goodbye.", data={"exit": True})
+
+    def tool_schema(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": (
+                    "Close MEDO itself and end the assistant session. Use ONLY "
+                    "when the user explicitly asks to close/quit/shut down MEDO "
+                    "(the assistant) — never the computer."),
+                "parameters": {"type": "object", "properties": {}, "required": []},
             },
         }
 

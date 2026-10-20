@@ -30,6 +30,7 @@ from typing import Any
 from core import mk
 from core.platform import pick_for_os, run_detached
 from core.safety import PathWhitelist
+from security.capabilities import Capability
 from skills.base import Skill, SkillRequest, SkillResult
 from skills.files import search_files
 
@@ -117,6 +118,7 @@ class FileEditSkill(Skill):
 
     name = "edit_file"
     controls_pc = True
+    capabilities = frozenset({Capability.WRITE_FILES})
     description = (
         "Edit a text file in the user's whitelisted folders: append dictated "
         "text to it, or replace one string with another. Use when the user "
@@ -126,12 +128,12 @@ class FileEditSkill(Skill):
     patterns = [
         # --- replace (destructive; asks first) ---------------------------
         # "in config.yaml replace 8710 with 9000"
-        re.compile(rf"\bin\s+(?:the\s+)?(?:file\s+)?(?P<rfile>{_NAME}?)[,\s]+"
+        re.compile(rf"\bin\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<rfile>{_NAME}?)[,\s]+"
                    r"(?:replace|change|swap)\s+(?P<old>.+?)\s+(?:with|to|for)\s+"
                    r"(?P<new>.+?)\s*$", re.IGNORECASE),
         # "replace 8710 with 9000 in config.yaml"
         re.compile(rf"\b(?:replace|change|swap)\s+(?P<old>.+?)\s+(?:with|to|for)\s+"
-                   rf"(?P<new>.+?)\s+in\s+(?:the\s+)?(?:file\s+)?(?P<rfile>{_NAME})\s*$",
+                   rf"(?P<new>.+?)\s+in\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<rfile>{_NAME})\s*$",
                    re.IGNORECASE),
         # MK: "во config.yaml замени 8710 со 9000"
         re.compile(rf"\bво\s+(?:датотеката\s+|фајлот\s+)?(?P<rfile>{_NAME}?)[,\s]+"
@@ -139,16 +141,16 @@ class FileEditSkill(Skill):
 
         # --- dictate to the top ------------------------------------------
         re.compile(rf"\b(?:prepend|add)\s+(?P<text>.+?)\s+to\s+the\s+"
-                   rf"(?:top|start|beginning)\s+of\s+(?:the\s+)?(?:file\s+)?"
+                   rf"(?:top|start|beginning)\s+of\s+(?:the\s+|my\s+)?(?:file\s+)?"
                    rf"(?P<pfile>{_NAME})\s*$", re.IGNORECASE),
 
         # --- dictate (append) --------------------------------------------
         # "add to shopping.txt: milk" — colon form, the natural dictation shape
-        re.compile(rf"\b(?:add|append|write|save)\s+to\s+(?:the\s+)?(?:file\s+)?"
+        re.compile(rf"\b(?:add|append|write|save)\s+to\s+(?:the\s+|my\s+)?(?:file\s+)?"
                    rf"(?P<afile>{_NAME}?)\s*[:,]\s*(?P<text>.+)$", re.IGNORECASE),
         # "append milk to shopping.txt"
         re.compile(rf"\b(?:add|append|write|save)\s+(?P<text>.+?)\s+to\s+"
-                   rf"(?:the\s+(?:end\s+of\s+)?)?(?:file\s+)?(?P<afile>{_NAME})\s*$",
+                   rf"(?:the\s+(?:end\s+of\s+)?|my\s+)?(?:file\s+)?(?P<afile>{_NAME})\s*$",
                    re.IGNORECASE),
         # MK: "додај во листа.txt: млеко" / "запиши млеко во листа.txt"
         re.compile(rf"\b(?:додај|запиши|напиши)\s+во\s+(?:датотеката\s+|фајлот\s+)?"
@@ -206,7 +208,7 @@ class FileEditSkill(Skill):
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
         args = request.args
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
 
         action = (args.get("action") or "").lower()
         name = (args.get("file") or gd.get("rfile") or gd.get("afile")
@@ -394,7 +396,7 @@ class WriteInAppSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         app = (request.args.get("app") or gd.get("app") or "").strip()
         text = (request.args.get("text") or gd.get("text") or "").strip()
         key = self._resolve(app)
@@ -477,9 +479,9 @@ class OpenInEditorSkill(Skill):
     )
 
     patterns = [
-        re.compile(rf"\bedit\s+(?:the\s+)?(?:file\s+)?(?P<file>{_NAME})\s*$",
+        re.compile(rf"\bedit\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<file>{_NAME})\s*$",
                    re.IGNORECASE),
-        re.compile(rf"\bopen\s+(?:the\s+)?(?:file\s+)?(?P<file>{_NAME}?)\s+in\s+"
+        re.compile(rf"\bopen\s+(?:the\s+|my\s+)?(?:file\s+)?(?P<file>{_NAME}?)\s+in\s+"
                    r"(?:the\s+|my\s+)?(?:editor|text\s+editor|vs\s?code|notepad)\b",
                    re.IGNORECASE),
         # MK: "уреди белешки.md", "отвори белешки.md во уредувач"
@@ -496,7 +498,7 @@ class OpenInEditorSkill(Skill):
 
     async def execute(self, request: SkillRequest) -> SkillResult:
         gd = request.match.groupdict() if request.match else {}
-        speak_mk = mk.is_cyrillic(request.text)
+        speak_mk = mk.is_cyrillic(request.utterance)
         name = _drop_file_noun(
             (request.args.get("file") or gd.get("file") or "").strip(" .,:;\"'"))
         if not name:
